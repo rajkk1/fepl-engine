@@ -48,9 +48,15 @@
     <script>
         // Javascript redirect for instant deep linking
         window.onload = function() {
+            // Attempt to open the Android App
             setTimeout(function() {
                 window.location.replace("feplapp://");
             }, 50);
+
+            // Fallback for PC users: If the app doesn't open within 1.5 seconds, redirect to the Web Viewer
+            setTimeout(function() {
+                window.location.replace("https://rajkk1.github.io/fepl-engine");
+            }, 1500);
         };
     </script>
 </body>
