@@ -80,7 +80,7 @@ def send_discord_alert(gw_name, hours_until):
             },
             {
                 "name": "App Link",
-                "value": "[Open FPL Viewer](https://rajkk1.github.io/fepl-engine)",
+                "value": "[Open FPL App](https://rajkk1.github.io/fepl-engine/app.html)",
                 "inline": True
             }
         ],
