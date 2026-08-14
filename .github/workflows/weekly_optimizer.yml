@@ -29,6 +29,11 @@ jobs:
           FPL_TEAM_ID: ${{ secrets.FPL_TEAM_ID }}
         run: uv run python weekly_manager.py --export-json public/weekly_plan.json
 
+      - name: Send Push Notifications (if deadline is near)
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: uv run python notify.py
+
       - name: Deploy JSON to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:
