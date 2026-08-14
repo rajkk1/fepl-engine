@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Opening FEPL Assistant...</title>
+    <!-- Fallback meta refresh redirect -->
+    <meta http-equiv="refresh" content="0; url=feplapp://" />
+    <style>
+        body {
+            background-color: #0f172a;
+            color: white;
+            font-family: system-ui, -apple-system, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            text-align: center;
+        }
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            border-left-color: #3b82f6;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+        a {
+            color: #3b82f6;
+            text-decoration: none;
+            margin-top: 20px;
+            padding: 10px 20px;
+            border: 1px solid #3b82f6;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="spinner"></div>
+    <h2>Launching FEPL Assistant...</h2>
+    <p>You should be redirected to the app automatically.</p>
+    <a href="feplapp://">Click here if nothing happens</a>
+
+    <script>
+        // Javascript redirect for instant deep linking
+        window.onload = function() {
+            // Attempt to open the Android App
+            setTimeout(function() {
+                window.location.replace("feplapp://");
+            }, 50);
+
+            // Fallback for PC users: If the app doesn't open within 1.5 seconds, redirect to the Web Viewer
+            setTimeout(function() {
+                window.location.replace("https://rajkk1.github.io/fepl-engine");
+            }, 1500);
+        };
+    </script>
+</body>
+</html>
