@@ -1,71 +1,106 @@
 import os
-import time
+import json
 import requests
-import logging
-import fpl_api
+import datetime
+from fpl_api import get_bootstrap_static
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
-def send_expo_push_notification(token: str, gameweek: int, deadline_str: str):
-    """Send a push notification via Expo's Push API."""
-    url = "https://exp.host/--/api/v2/push/send"
-    headers = {
-        "Accept": "application/json",
-        "Accept-encoding": "gzip, deflate",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "to": token,
-        "title": "🚨 FPL Deadline Approaching!",
-        "body": f"The Gameweek {gameweek} deadline is coming up! Open your FEPL Manager app to view your optimal Weekly Action Plan.",
-        "sound": "default",
-        "badge": 1,
-        "data": {"gameweek": gameweek, "deadline": deadline_str}
-    }
-    
-    logging.info(f"Sending Push Notification to {token}...")
-    response = requests.post(url, headers=headers, json=payload)
-    if response.status_code == 200:
-        logging.info("Push notification sent successfully.")
-    else:
-        logging.error(f"Failed to send notification: {response.text}")
-
-def main():
-    expo_token = os.getenv("EXPO_TOKEN")
-    if not expo_token:
-        logging.warning("No EXPO_TOKEN found in environment variables. Skipping notifications.")
+def check_deadline_and_notify():
+    if not DISCORD_WEBHOOK_URL:
+        print("Error: DISCORD_WEBHOOK_URL not found in environment variables.")
         return
 
+    # 1. Get FPL events data
     try:
-        bootstrap = fpl_api.get_bootstrap_static()
+        bootstrap = get_bootstrap_static()
         events = bootstrap.get("events", [])
-        
-        # Find the next upcoming event
-        next_event = next((e for e in events if e.get("is_next")), None)
-        
-        if not next_event:
-            logging.info("No upcoming FPL gameweek found.")
-            return
-            
-        deadline_epoch = next_event.get("deadline_time_epoch", 0)
-        gameweek = next_event.get("id")
-        deadline_str = next_event.get("deadline_time")
-        
-        current_time = time.time()
-        hours_until_deadline = (deadline_epoch - current_time) / 3600.0
-        
-        logging.info(f"Next Gameweek: GW{gameweek}")
-        logging.info(f"Hours until deadline: {hours_until_deadline:.1f}h")
-        
-        # If the deadline is within the next 36 hours, send a notification
-        if 0 < hours_until_deadline <= 36.0:
-            logging.info("Deadline is within 36 hours. Triggering push notification!")
-            send_expo_push_notification(expo_token, gameweek, deadline_str)
-        else:
-            logging.info("Deadline is not within the notification window (36 hours).")
-            
     except Exception as e:
-        logging.error(f"Error checking deadlines: {e}")
+        print(f"Failed to fetch FPL API: {e}")
+        return
+
+    # 2. Find the next Gameweek
+    next_event = None
+    for event in events:
+        if event.get("is_next"):
+            next_event = event
+            break
+
+    if not next_event:
+        print("No upcoming gameweek found.")
+        return
+
+    gw_name = next_event.get("name", "Unknown Gameweek")
+    deadline_str = next_event.get("deadline_time", "")
+    
+    if not deadline_str:
+        print("No deadline time found for the next gameweek.")
+        return
+
+    # 3. Calculate time until deadline
+    deadline_dt = datetime.datetime.strptime(deadline_str, "%Y-%m-%dT%H:%M:%SZ")
+    now_dt = datetime.datetime.utcnow()
+    time_diff = deadline_dt - now_dt
+    hours_until = time_diff.total_seconds() / 3600
+
+    print(f"Current UTC time: {now_dt}")
+    print(f"Next Gameweek: {gw_name}, Deadline: {deadline_dt}")
+    print(f"Hours until deadline: {hours_until:.2f}")
+
+    # 4. Trigger alert if within 36 hours (but not already passed)
+    if 0 < hours_until <= 36:
+        print("Deadline is within 36 hours! Sending Discord notification...")
+        send_discord_alert(gw_name, hours_until)
+    else:
+        print("Deadline is not within the 36-hour alert window. No notification sent.")
+
+def send_discord_alert(gw_name, hours_until):
+    """Sends a rich embedded message to a Discord Webhook."""
+    
+    # Read the latest JSON to tell them who to captain!
+    captain = "Unknown"
+    try:
+        with open("public/weekly_plan.json", "r") as f:
+            plan = json.load(f)
+            captain = plan.get("captaincy", {}).get("captain", "Unknown")
+    except Exception:
+        pass
+
+    embed = {
+        "title": f"🚨 FPL Deadline Alert: {gw_name}",
+        "description": f"The deadline for **{gw_name}** is in exactly **{int(hours_until)} hours**!\n\nOpen your FEPL Assistant app to review your mathematically optimal transfers.",
+        "color": 16711680, # Red
+        "fields": [
+            {
+                "name": "Recommended Captain",
+                "value": f"👑 {captain}",
+                "inline": True
+            },
+            {
+                "name": "App Link",
+                "value": "[Open FPL Viewer](https://rajkk1.github.io/fepl-engine)",
+                "inline": True
+            }
+        ],
+        "footer": {
+            "text": "FEPL Zero-Server Engine"
+        }
+    }
+    
+    payload = {
+        "username": "FPL Assistant",
+        "avatar_url": "https://fantasy.premierleague.com/static/libs/ext/img/icon.png",
+        "embeds": [embed]
+    }
+
+    try:
+        response = requests.post(DISCORD_WEBHOOK_URL, json=payload)
+        if response.status_code in [200, 204]:
+            print("Discord notification sent successfully!")
+        else:
+            print(f"Failed to send Discord notification: {response.status_code} - {response.text}")
+    except Exception as e:
+        print(f"Exception while sending Discord notification: {e}")
 
 if __name__ == "__main__":
-    main()
+    check_deadline_and_notify()

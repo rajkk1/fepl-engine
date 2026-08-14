@@ -29,9 +29,9 @@ jobs:
           FPL_TEAM_ID: ${{ secrets.FPL_TEAM_ID }}
         run: uv run python weekly_manager.py --export-json public/weekly_plan.json
 
-      - name: Send Push Notifications (if deadline is near)
+      - name: Send Discord Notifications
         env:
-          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: uv run python notify.py
 
       - name: Deploy JSON to GitHub Pages
