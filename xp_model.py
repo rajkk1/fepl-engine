@@ -195,9 +195,9 @@ class EnsembleForecaster:
     """
     def __init__(
         self,
-        weight_dixon_coles: float = 0.35,
-        weight_kalman: float = 0.40,
-        weight_tree: float = 0.25
+        weight_dixon_coles: float = 0.0,
+        weight_kalman: float = 1.0,
+        weight_tree: float = 0.0
     ):
         self.w_dc = weight_dixon_coles
         self.w_kf = weight_kalman
