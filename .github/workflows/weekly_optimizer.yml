@@ -1,0 +1,36 @@
+name: FEPL Weekly Optimizer
+
+on:
+  schedule:
+    # Run every day at 12:00 UTC. 
+    # It will generate the latest optimization based on current prices and injuries.
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+    # Allows you to trigger it manually from the GitHub Actions tab
+
+permissions:
+  contents: write # Needed to publish the JSON to GitHub Pages (gh-pages branch)
+
+jobs:
+  optimize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python 3.10
+        run: uv python install 3.10
+
+      - name: Run FEPL Weekly Manager
+        env:
+          FPL_TEAM_ID: ${{ secrets.FPL_TEAM_ID }}
+        run: uv run python weekly_manager.py --export-json public/weekly_plan.json
+
+      - name: Deploy JSON to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./public

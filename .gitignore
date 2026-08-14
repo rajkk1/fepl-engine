@@ -1,0 +1,24 @@
+# Environment and Secrets (CRITICAL: Do not commit sensitive credentials)
+.env
+.env.local
+.env.*.local
+*.env
+
+# Python Virtual Environments & Caches
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.coverage
+
+# OS & IDE Files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Build Outputs
+public/
