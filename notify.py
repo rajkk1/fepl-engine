@@ -47,9 +47,9 @@ def check_deadline_and_notify():
     print(f"Next Gameweek: {gw_name}, Deadline: {deadline_dt}")
     print(f"Hours until deadline: {hours_until:.2f}")
 
-    # 4. Trigger alert if within 36 hours (but not already passed)
-    if 0 < hours_until <= 36:
-        print("Deadline is within 36 hours! Sending Discord notification...")
+    # 4. Trigger alert if within 200 hours (but not already passed) - TEMPORARY FOR TESTING
+    if 0 < hours_until <= 200:
+        print("Deadline is within 200 hours! Sending Discord notification...")
         send_discord_alert(gw_name, hours_until)
     else:
         print("Deadline is not within the 36-hour alert window. No notification sent.")
