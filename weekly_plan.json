@@ -48,7 +48,7 @@
             "element_type": 3,
             "team": 4,
             "cost": 6.0,
-            "xp": 4.02,
+            "xp": 4.03,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 6.0,
@@ -209,6 +209,6 @@
             "status": "a"
         }
     ],
-    "expected_score": 43.39,
+    "expected_score": 43.400000000000006,
     "remaining_bank": 12.5
 }
