@@ -13,11 +13,6 @@
             "cost": 9.5
         },
         {
-            "id": 26,
-            "web_name": "Havertz",
-            "cost": 7.5
-        },
-        {
             "id": 86,
             "web_name": "Lewis-Potter",
             "cost": 5.5
@@ -33,24 +28,19 @@
             "cost": 5.5
         },
         {
-            "id": 236,
-            "web_name": "Dewsbury-Hall",
-            "cost": 6.5
+            "id": 115,
+            "web_name": "De Cuyper",
+            "cost": 4.5
+        },
+        {
+            "id": 123,
+            "web_name": "Hinshelwood",
+            "cost": 6.0
         },
         {
             "id": 249,
             "web_name": "Barry",
             "cost": 5.5
-        },
-        {
-            "id": 277,
-            "web_name": "Egan",
-            "cost": 4.0
-        },
-        {
-            "id": 279,
-            "web_name": "Ajayi",
-            "cost": 4.0
         },
         {
             "id": 572,
@@ -68,14 +58,24 @@
             "cost": 5.0
         },
         {
-            "id": 335,
-            "web_name": "Stach",
-            "cost": 6.0
-        },
-        {
             "id": 385,
             "web_name": "Trafford",
             "cost": 5.0
+        },
+        {
+            "id": 388,
+            "web_name": "Gu\u00e9hi",
+            "cost": 6.0
+        },
+        {
+            "id": 399,
+            "web_name": "Cherki",
+            "cost": 7.5
+        },
+        {
+            "id": 464,
+            "web_name": "Wissa",
+            "cost": 6.0
         }
     ],
     "transfers_out": [
@@ -158,27 +158,27 @@
     "hits": 0,
     "active_chip": "",
     "captain": {
-        "id": 88,
-        "web_name": "Kayode",
+        "id": 115,
+        "web_name": "De Cuyper",
         "element_type": 2,
-        "team": 4,
+        "team": 5,
         "cost": 4.5,
-        "xp": 5.77,
+        "xp": 8.86,
         "is_captain": true,
         "is_vice_captain": false,
         "now_cost": 4.5,
         "status": "a"
     },
     "vice_captain": {
-        "id": 316,
-        "web_name": "Emersonn",
-        "element_type": 4,
-        "team": 12,
-        "cost": 5.5,
-        "xp": 5.4,
+        "id": 123,
+        "web_name": "Hinshelwood",
+        "element_type": 3,
+        "team": 5,
+        "cost": 6.0,
+        "xp": 8.35,
         "is_captain": false,
         "is_vice_captain": true,
-        "now_cost": 5.5,
+        "now_cost": 6.0,
         "status": "a"
     },
     "starters": [
@@ -225,7 +225,7 @@
             "team": 4,
             "cost": 4.5,
             "xp": 5.77,
-            "is_captain": true,
+            "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 4.5,
             "status": "a"
@@ -243,27 +243,27 @@
             "status": "a"
         },
         {
-            "id": 236,
-            "web_name": "Dewsbury-Hall",
-            "element_type": 3,
-            "team": 9,
-            "cost": 6.5,
-            "xp": 4.59,
-            "is_captain": false,
+            "id": 115,
+            "web_name": "De Cuyper",
+            "element_type": 2,
+            "team": 5,
+            "cost": 4.5,
+            "xp": 8.86,
+            "is_captain": true,
             "is_vice_captain": false,
-            "now_cost": 6.5,
+            "now_cost": 4.5,
             "status": "a"
         },
         {
-            "id": 249,
-            "web_name": "Barry",
-            "element_type": 4,
-            "team": 9,
-            "cost": 5.5,
-            "xp": 4.32,
+            "id": 123,
+            "web_name": "Hinshelwood",
+            "element_type": 3,
+            "team": 5,
+            "cost": 6.0,
+            "xp": 8.35,
             "is_captain": false,
-            "is_vice_captain": false,
-            "now_cost": 5.5,
+            "is_vice_captain": true,
+            "now_cost": 6.0,
             "status": "a"
         },
         {
@@ -286,7 +286,44 @@
             "cost": 5.5,
             "xp": 5.4,
             "is_captain": false,
-            "is_vice_captain": true,
+            "is_vice_captain": false,
+            "now_cost": 5.5,
+            "status": "a"
+        },
+        {
+            "id": 388,
+            "web_name": "Gu\u00e9hi",
+            "element_type": 2,
+            "team": 15,
+            "cost": 6.0,
+            "xp": 5.6,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 6.0,
+            "status": "a"
+        },
+        {
+            "id": 399,
+            "web_name": "Cherki",
+            "element_type": 3,
+            "team": 15,
+            "cost": 7.5,
+            "xp": 4.84,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 7.5,
+            "status": "a"
+        }
+    ],
+    "bench": [
+        {
+            "id": 249,
+            "web_name": "Barry",
+            "element_type": 4,
+            "team": 9,
+            "cost": 5.5,
+            "xp": 4.32,
+            "is_captain": false,
             "now_cost": 5.5,
             "status": "a"
         },
@@ -296,58 +333,10 @@
             "element_type": 2,
             "team": 13,
             "cost": 5.0,
-            "xp": 3.98,
+            "xp": 3.99,
             "is_captain": false,
-            "is_vice_captain": false,
             "now_cost": 5.0,
             "status": "a"
-        },
-        {
-            "id": 335,
-            "web_name": "Stach",
-            "element_type": 3,
-            "team": 13,
-            "cost": 6.0,
-            "xp": 4.62,
-            "is_captain": false,
-            "is_vice_captain": false,
-            "now_cost": 6.0,
-            "status": "a"
-        }
-    ],
-    "bench": [
-        {
-            "id": 26,
-            "web_name": "Havertz",
-            "element_type": 4,
-            "team": 1,
-            "cost": 7.5,
-            "xp": 3.22,
-            "is_captain": false,
-            "now_cost": 7.5,
-            "status": "a"
-        },
-        {
-            "id": 277,
-            "web_name": "Egan",
-            "element_type": 2,
-            "team": 11,
-            "cost": 4.0,
-            "xp": 3.8,
-            "is_captain": false,
-            "now_cost": 4.0,
-            "status": "a"
-        },
-        {
-            "id": 279,
-            "web_name": "Ajayi",
-            "element_type": 2,
-            "team": 11,
-            "cost": 4.0,
-            "xp": 3.85,
-            "is_captain": false,
-            "now_cost": 4.0,
-            "status": "d"
         },
         {
             "id": 385,
@@ -359,8 +348,19 @@
             "is_captain": false,
             "now_cost": 5.0,
             "status": "a"
+        },
+        {
+            "id": 464,
+            "web_name": "Wissa",
+            "element_type": 4,
+            "team": 17,
+            "cost": 6.0,
+            "xp": 4.07,
+            "is_captain": false,
+            "now_cost": 6.0,
+            "status": "a"
         }
     ],
-    "expected_score": 52.74999999999999,
-    "remaining_bank": 16.0
+    "expected_score": 62.89,
+    "remaining_bank": 14.0
 }
