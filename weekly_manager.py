@@ -38,7 +38,7 @@ def main():
     load_dotenv()
     parser = argparse.ArgumentParser(description="FEPL Weekly Action Plan CLI")
     parser.add_argument("--team", type=int, help="Your FPL Team ID", default=os.getenv("FPL_TEAM_ID", 4309239))
-    parser.add_argument("--horizon", type=int, default=3, help="Planning horizon in gameweeks (default: 3)")
+    parser.add_argument("--horizon", type=int, default=5, help="Planning horizon in gameweeks (default: 5)")
     parser.add_argument("--chip", type=str, default="", help="Chip to activate: wc, fh, tc, bb")
     parser.add_argument("--export-json", type=str, default="", help="Path to export the weekly plan as JSON (e.g., plan.json)")
     args = parser.parse_args()
