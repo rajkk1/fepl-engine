@@ -129,8 +129,12 @@ def solve_fpl_optimization(
         prob += bank[first_gw] == initial_bank + pulp.lpSum([tout[pid, first_gw] * now_cost[pid] for pid in player_ids]) - pulp.lpSum([tin[pid, first_gw] * now_cost[pid] for pid in player_ids]), f"Bank_{first_gw}"
         
         # FT Rollover math for first GW
-        num_transfers_first = pulp.lpSum([tin[pid, first_gw] for pid in player_ids])
-        prob += num_transfers_first + ft_carried[first_gw] <= initial_ft + hits[first_gw], f"FT_Math_{first_gw}"
+        if active_chip in ["wc", "fh"]:
+            # Free Hit and Wildcard allow unlimited transfers
+            prob += ft_carried[first_gw] == 0, f"No_FT_Carry_Chip"
+        else:
+            num_transfers_first = pulp.lpSum([tin[pid, first_gw] for pid in player_ids])
+            prob += num_transfers_first + ft_carried[first_gw] <= initial_ft + hits[first_gw], f"FT_Math_{first_gw}"
 
     # Constraints per Gameweek
     for idx, t in enumerate(gws):
@@ -175,26 +179,44 @@ def solve_fpl_optimization(
         # 6. Squad Transitions for subsequent GWs
         if idx > 0:
             prev_t = gws[idx - 1]
-            for pid in player_ids:
-                prob += s[pid, t] == s[pid, prev_t] + tin[pid, t] - tout[pid, t], f"Trans_{pid}_{t}"
             
-            # Bank balance continuity
-            prob += bank[t] == bank[prev_t] + pulp.lpSum([tout[pid, t] * now_cost[pid] for pid in player_ids]) - pulp.lpSum([tin[pid, t] * now_cost[pid] for pid in player_ids]), f"Bank_Cont_{t}"
-            
-            # FT Rollover math for subsequent GWs
-            num_transfers = pulp.lpSum([tin[pid, t] for pid in player_ids])
-            prob += num_transfers + ft_carried[t] <= 1 + ft_carried[prev_t] + hits[t], f"FT_Math_{t}"
+            if active_chip == "fh" and idx == 1:
+                # FREE HIT REVERT: In the week after a Free Hit, the squad reverts to the original team
+                for pid in player_ids:
+                    in_initial = 1 if pid in set(initial_squad_ids) else 0
+                    prob += s[pid, t] == in_initial + tin[pid, t] - tout[pid, t], f"Trans_{pid}_{t}"
+                
+                # Bank balance also reverts to initial
+                prob += bank[t] == initial_bank + pulp.lpSum([tout[pid, t] * now_cost[pid] for pid in player_ids]) - pulp.lpSum([tin[pid, t] * now_cost[pid] for pid in player_ids]), f"Bank_Cont_{t}"
+                
+                # FT math operates normally, assuming 1 FT carried over from the FH week
+                num_transfers = pulp.lpSum([tin[pid, t] for pid in player_ids])
+                prob += num_transfers + ft_carried[t] <= initial_ft + hits[t], f"FT_Math_{t}"
+            else:
+                for pid in player_ids:
+                    prob += s[pid, t] == s[pid, prev_t] + tin[pid, t] - tout[pid, t], f"Trans_{pid}_{t}"
+                
+                # Bank balance continuity
+                prob += bank[t] == bank[prev_t] + pulp.lpSum([tout[pid, t] * now_cost[pid] for pid in player_ids]) - pulp.lpSum([tin[pid, t] * now_cost[pid] for pid in player_ids]), f"Bank_Cont_{t}"
+                
+                # FT Rollover math for subsequent GWs
+                num_transfers = pulp.lpSum([tin[pid, t] for pid in player_ids])
+                prob += num_transfers + ft_carried[t] <= 1 + ft_carried[prev_t] + hits[t], f"FT_Math_{t}"
 
         # Max hits limit per GW
-        prob += hits[t] <= max_hits_per_gw, f"Max_Hits_{t}"
+        if idx == 0 and active_chip in ["wc", "fh"]:
+            pass # No hit limit on Wildcard or Free Hit
+        else:
+            prob += hits[t] <= max_hits_per_gw, f"Max_Hits_{t}"
 
     # Solve the model using default PuLP solver (PULP_CBC_CMD)
-    solver = pulp.PULP_CBC_CMD(msg=False)
+    solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=60, gapRel=0.01)
     status = prob.solve(solver)
     status_str = pulp.LpStatus[status]
 
     if status != pulp.LpStatusOptimal:
-        logger.warning(f"Solver completed with status: {status_str}")
+        logger.error(f"Solver failed to find optimal solution: {status_str}")
+        raise ValueError(f"Solver failed: {status_str}")
 
     # Extract Optimization Solution Output
     results = {

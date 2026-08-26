@@ -12,6 +12,8 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "scipy>=1.15.3",
     "scikit-learn>=1.7.2",
+    "beautifulsoup4>=4.15.0",
+    "understat>=0.1.4",
 ]
 
 [build-system]

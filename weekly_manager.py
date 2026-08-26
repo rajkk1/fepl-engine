@@ -40,6 +40,7 @@ def main():
     parser.add_argument("--team", type=int, help="Your FPL Team ID", default=os.getenv("FPL_TEAM_ID", 4309239))
     parser.add_argument("--horizon", type=int, default=5, help="Planning horizon in gameweeks (default: 5)")
     parser.add_argument("--chip", type=str, default="", help="Chip to activate: wc, fh, tc, bb")
+    parser.add_argument("--ft", type=int, default=None, help="Number of free transfers currently available. Defaults to 1.")
     parser.add_argument("--export-json", type=str, default="", help="Path to export the weekly plan as JSON (e.g., plan.json)")
     args = parser.parse_args()
 
@@ -66,7 +67,8 @@ def main():
     print(f"🗓️  Current Target Gameweek: GW{current_gw}")
     
     # Get Manager State
-    squad_ids, bank, ft = get_manager_team_state(team_id, current_gw)
+    squad_ids, bank, default_ft = get_manager_team_state(team_id, current_gw)
+    ft = args.ft if args.ft is not None else default_ft
     
     if squad_ids:
         print(f"💰 Current Bank: £{bank:.1f}m | Free Transfers: {ft if ft < 100 else 'Unlimited (Wildcard/Pre-season)'}")
@@ -171,20 +173,20 @@ def main():
     # Captaincy
     print("\n👑 CAPTAINCY:")
     if captain:
-        mult = 3 if args.chip == "tc" else 2
+        mult = 3 if active_chip == "tc" else 2
         print(f"  (C)  {captain['web_name']:<15} -> {captain['xp']:.2f} xP ({captain['xp'] * mult:.2f} pts expected)")
     if vice_captain:
         print(f"  (VC) {vice_captain['web_name']:<15} -> {vice_captain['xp']:.2f} xP backup")
 
     # Chips
     print("\n🃏 CHIP STRATEGY:")
-    if args.chip == "wc":
+    if active_chip == "wc":
         print("  [✓] Play Wildcard (Unlimited Free Transfers active)")
-    elif args.chip == "fh":
+    elif active_chip == "fh":
         print("  [✓] Play Free Hit (1-GW Squad active)")
-    elif args.chip == "tc":
+    elif active_chip == "tc":
         print(f"  [✓] Play Triple Captain on {captain['web_name'] if captain else 'Captain'}")
-    elif args.chip == "bb":
+    elif active_chip == "bb":
         print("  [✓] Play Bench Boost (All 15 players score points)")
     else:
         print("  [✓] Save Chips for Double Gameweeks")
@@ -197,9 +199,14 @@ def main():
         t_code = teams.get(p.get("team"), "___")
         print(f" {idx:2d}. [{p['web_name']:<16}] ({t_code}) £{p['now_cost']:.1f}m | {p['xp']:.2f} xP{cap_str}{inj_str}")
 
-    # Bench Order
+    # Bench Order - O-03: Sort bench by xP (priority 1-3) but keep GK first
+    bench_gkps = [p for p in bench if p.get("element_type") == 1]
+    bench_outfield = [p for p in bench if p.get("element_type") != 1]
+    bench_outfield.sort(key=lambda item: item.get("xp", 0.0), reverse=True)
+    sorted_bench = bench_gkps + bench_outfield
+
     print("\n🪑 BENCH (Order is strictly priority 1 to 3 after GK):")
-    for idx, p in enumerate(bench, 1):
+    for idx, p in enumerate(sorted_bench, 1):
         pos_str = "GK" if idx == 1 else f"B{idx-1}"
         inj_str = " 🏥" if p.get("status") not in ["a", None] else ""
         t_code = teams.get(p.get("team"), "___")
@@ -218,11 +225,11 @@ def main():
             "transfers_in": t_in,
             "transfers_out": t_out,
             "hits": hits,
-            "active_chip": args.chip,
+            "active_chip": active_chip,
             "captain": captain,
             "vice_captain": vice_captain,
             "starters": starters,
-            "bench": bench,
+            "bench": sorted_bench,
             "expected_score": res.get("gameweeks", {}).get(current_gw, {}).get("gw_xp", sum(p["xp"] for p in starters)),
             "remaining_bank": gw1_data.get("bank", 0.0)
         }
