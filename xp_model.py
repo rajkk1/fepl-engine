@@ -76,7 +76,7 @@ class DixonColesModel:
             self.beta[tid] = res.x[num_teams + i]
         self.gamma = res.x[2 * num_teams]
 
-    def predict_match(self, player, fixture, xMin):
+    def predict_match(self, player, fixture):
         element_type = player.get("element_type", POS_MID)
         is_home = (fixture.get("team_h") == player.get("team"))
         
@@ -91,70 +91,65 @@ class DixonColesModel:
         
         p_cs = math.exp(-opp_xg)
 
-        min_frac = xMin / 90.0
-        cs_pts = POINTS_CLEAN_SHEET.get(element_type, 0)
-        xCS_pts = (p_cs * cs_pts * min_frac) if xMin >= 60 else 0.0
-        xConc_penalty = (opp_xg / 2.0 * min_frac) if (element_type in [POS_GKP, POS_DEF] and xMin >= 60) else 0.0
-
-        # 1. Fixture-Adjusted Attacking xP (Allocate team xG to player based on historical share)
         player_xg90 = float(player.get("expected_goals_per_90", 0.0) or 0)
         player_xa90 = float(player.get("expected_assists_per_90", 0.0) or 0)
         
-        # Assuming average PL team scores ~1.5 goals per match
-        player_match_xg = (player_xg90 / 1.5) * team_xg * min_frac
-        player_match_xa = (player_xa90 / 1.5) * team_xg * min_frac
+        # M-05: Divide by the player's own team's baseline xG so strong teams aren't double-counted
+        team_baseline = self.alpha.get(player.get("team"), 1.0) * 1.4
         
-        # #6. Penalty Taker Flag: Statistically a team gets ~0.15 penalties per match. 
-        # A penalty is ~0.76 xG. So 1st choice takers get an extra ~0.11 xG per match.
+        player_match_xg = player_xg90 * (team_xg / team_baseline)
+        player_match_xa = player_xa90 * (team_xg / team_baseline)
+        
         if player.get("penalties_order") == 1:
-            player_match_xg += (0.11 * min_frac)
-        
-        xG_pts = player_match_xg * POINTS_GOAL.get(element_type, 4)
-        xA_pts = player_match_xa * POINTS_ASSIST
-        
-        # 2. Goalkeeper Saves Model (~0.7 save points per expected goal conceded)
-        xSaves = (opp_xg * 0.7 * min_frac) if element_type == POS_GKP else 0.0
-        
-        # 3. Simple Heuristic Bonus Model (Bonus highly correlated with xG, xA, and CS)
-        xBonus = (player_match_xg * 1.5) + (player_match_xa * 1.0) + (p_cs * 0.2 if xMin >= 60 else 0.0)
-
-        total_pts = xCS_pts + xG_pts + xA_pts + xSaves + xBonus - xConc_penalty
-        return round(max(0.0, total_pts), 2)
-
+            player_match_xg += 0.11
+            
+        return {
+            "xg": player_match_xg,
+            "xa": player_match_xa,
+            "p_cs": p_cs,
+            "opp_xg": opp_xg
+        }
 
 class KalmanFormFilter:
-    def __init__(self, Q=0.05, R=0.25):
-        self.Q = Q
-        self.R = R
+    def __init__(self, process_variance=0.05, measurement_variance=0.3):
+        self.q = process_variance
+        self.r = measurement_variance
 
-    def filter_series(self, obs, initial):
-        x_hat = initial
-        P = 1.0
-        for y in obs:
-            P_minus = P + self.Q
-            K = P_minus / (P_minus + self.R)
-            x_hat = x_hat + K * (y - x_hat)
-            P = (1 - K) * P_minus
-        return max(0.0, x_hat)
+    def filter_series(self, observations, fallback_prior):
+        if not observations: return fallback_prior
+        
+        estimate = fallback_prior
+        error_cov = 1.0
+        
+        for obs in observations:
+            error_cov += self.q
+            kalman_gain = error_cov / (error_cov + self.r)
+            estimate = estimate + kalman_gain * (obs - estimate)
+            error_cov = (1 - kalman_gain) * error_cov
+            
+        return estimate
 
-    def predict_match(self, player, history, xMin):
+    def predict_match(self, player, history):
         element_type = player.get("element_type", POS_MID)
-        
-        # FIX: Convert per-match expected goals into per-90 rates so it matches the initial state units!
-        xg_obs = [float(h.get("expected_goals", 0) or 0) * 90 / max(1, h.get("minutes", 0)) for h in history if h.get("minutes", 0) > 0]
-        xa_obs = [float(h.get("expected_assists", 0) or 0) * 90 / max(1, h.get("minutes", 0)) for h in history if h.get("minutes", 0) > 0]
-        
         raw_xg90 = float(player.get("expected_goals_per_90", 0.0) or 0)
         raw_xa90 = float(player.get("expected_assists_per_90", 0.0) or 0)
-
+        
+        if not history:
+            return {"xg": raw_xg90, "xa": raw_xa90}
+            
+        # Extract recent observations, converting strictly to per-90 rates
+        xg_obs = []
+        xa_obs = []
+        for h in history[-5:]:
+            mins = h.get("minutes", 0)
+            if mins >= 30:
+                xg_obs.append(float(h.get("expected_goals", 0) or 0) / (mins / 90.0))
+                xa_obs.append(float(h.get("expected_assists", 0) or 0) / (mins / 90.0))
+                
         filt_xg = self.filter_series(xg_obs, raw_xg90)
         filt_xa = self.filter_series(xa_obs, raw_xa90)
         
-        min_frac = xMin / 90.0
-        xG_pts = filt_xg * min_frac * POINTS_GOAL.get(element_type, 4)
-        xA_pts = filt_xa * min_frac * POINTS_ASSIST
-
-        return round(xG_pts + xA_pts, 2)
+        return {"xg": filt_xg, "xa": filt_xa}
 
 
 class TrueGradientBoostedTree:
@@ -200,7 +195,7 @@ class TrueGradientBoostedTree:
             self.model.fit(X, y)
             self.is_trained = True
 
-    def predict_match(self, player, fixture, history, xMin):
+    def predict_match(self, player, fixture, history):
         if not self.is_trained:
             return 0.0
             
@@ -219,7 +214,7 @@ class TrueGradientBoostedTree:
         fdr = float(self.teams_map.get(opp_id, {}).get("strength", 3))
         
         pred = self.model.predict([[avg_bps, was_home, fdr, avg_xgi, avg_xgc, avg_starts]])[0]
-        return round(max(0.0, pred * (xMin/90.0)), 2)
+        return round(max(0.0, pred), 2)
 
 class EnsembleForecaster:
     def __init__(self, weights: tuple = None):
@@ -237,13 +232,47 @@ class EnsembleForecaster:
         
     def predict(self, player, fixture, history, xMin):
         if xMin <= 0: return 0.0
-        xApp = 2.0 if xMin >= 60 else (1.0 if xMin > 0 else 0.0)
         
-        xp_dc = self.dc.predict_match(player, fixture, xMin)
-        xp_kf = self.kf.predict_match(player, history, xMin)
-        xp_gt = self.gt.predict_match(player, fixture, history, xMin)
+        # M-04: Point estimate minutes replaced with a distribution
+        # Probability of playing at least 60 minutes
+        p_60 = max(0.0, min(1.0, (xMin - 30) / 45.0))
+        p_play = min(1.0, xMin / 60.0)
         
-        ensemble_xp = xApp + (self.w_dc * xp_dc) + (self.w_kf * xp_kf) + (self.w_gt * xp_gt)
+        xApp = (p_60 * 2.0) + ((p_play - p_60) * 1.0)
+        
+        # Base components
+        dc_res = self.dc.predict_match(player, fixture)
+        kf_res = self.kf.predict_match(player, history)
+        
+        # M-01: Blend at the component level
+        xg = (self.w_dc * dc_res["xg"]) + (self.w_kf * kf_res["xg"])
+        xa = (self.w_dc * dc_res["xa"]) + (self.w_kf * kf_res["xa"])
+        p_cs = dc_res["p_cs"]
+        opp_xg = dc_res["opp_xg"]
+        
+        # Scale attacking returns by the probability of being on the pitch
+        min_frac = xMin / 90.0
+        xg *= min_frac
+        xa *= min_frac
+        
+        element_type = player.get("element_type", POS_MID)
+        
+        xG_pts = xg * POINTS_GOAL.get(element_type, 4)
+        xA_pts = xa * POINTS_ASSIST
+        
+        cs_pts = POINTS_CLEAN_SHEET.get(element_type, 0)
+        xCS_pts = p_60 * p_cs * cs_pts
+        xConc_penalty = (opp_xg / 2.0 * min_frac) if element_type in [POS_GKP, POS_DEF] else 0.0
+        
+        xSaves = (opp_xg * 0.7 * min_frac) if element_type == POS_GKP else 0.0
+        xBonus = (xg * 1.5) + (xa * 1.0) + (p_cs * 0.2 * p_60)
+        
+        math_pts = xApp + xCS_pts + xG_pts + xA_pts + xSaves + xBonus - xConc_penalty
+        
+        # GBT is a monolithic black box that predicts total points directly
+        gt_pts = self.gt.predict_match(player, fixture, history) * min_frac
+        
+        ensemble_xp = (1.0 - self.w_gt) * math_pts + (self.w_gt * gt_pts)
         return round(ensemble_xp, 2)
 
 def calculate_expected_minutes(player: Dict[str, Any], current_gw: int = 1, history: List[Dict] = None) -> float:
