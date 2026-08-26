@@ -3,31 +3,31 @@
     "team_id": 4309239,
     "transfers_in": [
         {
-            "id": 88,
-            "web_name": "Kayode",
-            "cost": 4.5
-        },
-        {
             "id": 115,
             "web_name": "De Cuyper",
-            "cost": 4.5
+            "cost": 4.6
         },
         {
             "id": 123,
             "web_name": "Hinshelwood",
             "cost": 6.0
+        },
+        {
+            "id": 388,
+            "web_name": "Gu\u00e9hi",
+            "cost": 6.0
         }
     ],
     "transfers_out": [
         {
-            "id": 94,
-            "web_name": "Schade",
-            "cost": 6.0
-        },
-        {
             "id": 469,
             "web_name": "N.Williams",
             "cost": 5.0
+        },
+        {
+            "id": 480,
+            "web_name": "Gibbs-White",
+            "cost": 8.0
         },
         {
             "id": 498,
@@ -43,7 +43,7 @@
         "element_type": 3,
         "team": 5,
         "cost": 6.0,
-        "xp": 8.12,
+        "xp": 8.13,
         "is_captain": true,
         "is_vice_captain": false,
         "now_cost": 6.0,
@@ -54,11 +54,11 @@
         "web_name": "De Cuyper",
         "element_type": 2,
         "team": 5,
-        "cost": 4.5,
+        "cost": 4.6,
         "xp": 7.86,
         "is_captain": false,
         "is_vice_captain": true,
-        "now_cost": 4.5,
+        "now_cost": 4.6,
         "status": "a"
     },
     "starters": [
@@ -75,15 +75,15 @@
             "status": "a"
         },
         {
-            "id": 88,
-            "web_name": "Kayode",
-            "element_type": 2,
+            "id": 94,
+            "web_name": "Schade",
+            "element_type": 3,
             "team": 4,
-            "cost": 4.5,
-            "xp": 5.46,
+            "cost": 6.0,
+            "xp": 1.5,
             "is_captain": false,
             "is_vice_captain": false,
-            "now_cost": 4.5,
+            "now_cost": 6.0,
             "status": "a"
         },
         {
@@ -103,11 +103,11 @@
             "web_name": "De Cuyper",
             "element_type": 2,
             "team": 5,
-            "cost": 4.5,
+            "cost": 4.6,
             "xp": 7.86,
             "is_captain": false,
             "is_vice_captain": true,
-            "now_cost": 4.5,
+            "now_cost": 4.6,
             "status": "a"
         },
         {
@@ -116,7 +116,7 @@
             "element_type": 3,
             "team": 5,
             "cost": 6.0,
-            "xp": 8.12,
+            "xp": 8.13,
             "is_captain": true,
             "is_vice_captain": false,
             "now_cost": 6.0,
@@ -171,15 +171,15 @@
             "status": "a"
         },
         {
-            "id": 426,
-            "web_name": "B.Fernandes",
-            "element_type": 3,
-            "team": 16,
-            "cost": 12.0,
-            "xp": 1.25,
+            "id": 388,
+            "web_name": "Gu\u00e9hi",
+            "element_type": 2,
+            "team": 15,
+            "cost": 6.0,
+            "xp": 5.12,
             "is_captain": false,
             "is_vice_captain": false,
-            "now_cost": 12.0,
+            "now_cost": 6.0,
             "status": "a"
         },
         {
@@ -219,15 +219,15 @@
             "status": "a"
         },
         {
-            "id": 480,
-            "web_name": "Gibbs-White",
+            "id": 426,
+            "web_name": "B.Fernandes",
             "element_type": 3,
-            "team": 18,
-            "cost": 8.0,
-            "xp": 0.86,
+            "team": 16,
+            "cost": 12.0,
+            "xp": 1.25,
             "is_captain": false,
-            "now_cost": 8.0,
-            "status": "d"
+            "now_cost": 12.0,
+            "status": "a"
         },
         {
             "id": 529,
@@ -241,6 +241,6 @@
             "status": "a"
         }
     ],
-    "expected_score": 35.78,
-    "remaining_bank": 2.5
+    "expected_score": 35.7,
+    "remaining_bank": 2.9
 }
