@@ -1,0 +1,151 @@
+import pandas as pd
+import numpy as np
+import logging
+import urllib.request
+import json
+import os
+import math
+from typing import Dict, Any, List
+from xp_model import generate_xp_matrix
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logger = logging.getLogger(__name__)
+
+# Vaastav GitHub URLs for 2023-24 Season
+BASE_URL = "https://raw.githubusercontent.com/vaastav/Fantasy-Premier-League/master/data/2023-24"
+MERGED_GW_URL = f"{BASE_URL}/gws/merged_gw.csv"
+PLAYERS_RAW_URL = f"{BASE_URL}/players_raw.csv"
+TEAMS_URL = f"{BASE_URL}/teams.csv"
+FIXTURES_URL = f"{BASE_URL}/fixtures.csv"
+
+def fetch_data():
+    logger.info("Downloading historical Vaastav data (this will take ~10 seconds)...")
+    df_gw = pd.read_csv(MERGED_GW_URL, low_memory=False)
+    df_players = pd.read_csv(PLAYERS_RAW_URL, low_memory=False)
+    df_teams = pd.read_csv(TEAMS_URL, low_memory=False)
+    df_fixtures = pd.read_csv(FIXTURES_URL, low_memory=False)
+    return df_gw, df_players, df_teams, df_fixtures
+
+def build_mock_api(df_gw, df_players, df_teams, df_fixtures, current_gw: int):
+    # 1. Mock Teams
+    teams = df_teams.to_dict(orient="records")
+    
+    # 2. Mock Fixtures
+    fixtures = []
+    for f in df_fixtures.to_dict(orient="records"):
+        gw = f.get("event")
+        if pd.isna(gw): continue
+        is_finished = (gw < current_gw)
+        
+        fixture = {
+            "event": int(gw),
+            "team_h": int(f.get("team_h")),
+            "team_a": int(f.get("team_a")),
+            "team_h_score": int(f.get("team_h_score")) if is_finished and not pd.isna(f.get("team_h_score")) else None,
+            "team_a_score": int(f.get("team_a_score")) if is_finished and not pd.isna(f.get("team_a_score")) else None,
+            "finished": is_finished,
+            "team_h_difficulty": int(f.get("team_h_difficulty", 3)),
+            "team_a_difficulty": int(f.get("team_a_difficulty", 3))
+        }
+        fixtures.append(fixture)
+
+    # 3. Mock Bootstrap Players
+    elements = []
+    for p in df_players.to_dict(orient="records"):
+        pid = int(p.get("id"))
+        cost = p.get("now_cost", 50)
+        
+        element = {
+            "id": pid,
+            "element_type": int(p.get("element_type", 3)),
+            "team": int(p.get("team", 1)),
+            "now_cost": float(cost),
+            "status": "a", 
+            "chance_of_playing_next_round": 100,
+            "form": 0.0,
+            "minutes": 0,
+            "expected_goals_per_90": float(p.get("expected_goals_per_90", 0.0) or 0.0),
+            "expected_assists_per_90": float(p.get("expected_assists_per_90", 0.0) or 0.0),
+            "points_per_game": float(p.get("points_per_game", 0.0) or 0.0)
+        }
+        elements.append(element)
+        
+    bootstrap = {
+        "teams": teams,
+        "elements": elements
+    }
+    
+    # 4. Mock All History (Only up to current_gw - 1)
+    df_past = df_gw[df_gw['GW'] < current_gw]
+    all_history = {}
+    
+    for pid, group in df_past.groupby('element'):
+        history = []
+        for _, row in group.iterrows():
+            h = {
+                "round": int(row['GW']),
+                "minutes": int(row['minutes']),
+                "total_points": int(row['total_points']),
+                "expected_goals": float(row.get('expected_goals', 0) or 0),
+                "expected_assists": float(row.get('expected_assists', 0) or 0),
+                "bps": float(row.get('bps', 0) or 0),
+                "value": float(row.get('value', 50)),
+                "transfers_balance": float(row.get('transfers_balance', 0) or 0),
+                "fixture_difficulty": 3
+            }
+            history.append(h)
+        all_history[int(pid)] = history
+
+    for e in elements:
+        all_history.setdefault(e["id"], [])
+
+    return bootstrap, fixtures, all_history
+
+def run_backtest():
+    logger.info("Initializing Backtester...")
+    try:
+        df_gw, df_players, df_teams, df_fixtures = fetch_data()
+    except Exception as e:
+        logger.error(f"Failed to fetch Vaastav data: {e}")
+        return
+
+    TEST_GWS = range(15, 21)
+    
+    total_error = 0.0
+    total_predictions = 0
+
+    logger.info(f"Starting Walk-Forward Time Machine from GW {TEST_GWS.start} to {TEST_GWS.stop - 1}")
+    
+    for target_gw in TEST_GWS:
+        logger.info(f"\n--- Backtesting Gameweek {target_gw} ---")
+        
+        bootstrap, fixtures, all_history = build_mock_api(df_gw, df_players, df_teams, df_fixtures, current_gw=target_gw)
+        xp_matrix = generate_xp_matrix([target_gw], bootstrap=bootstrap, fixtures=fixtures, all_history=all_history)
+        
+        df_target = df_gw[df_gw['GW'] == target_gw]
+        actuals = {int(row['element']): float(row['total_points']) for _, row in df_target.iterrows()}
+        
+        gw_error = 0.0
+        gw_count = 0
+        
+        for pid, points in actuals.items():
+            if df_target[df_target['element'] == pid]['minutes'].iloc[0] > 60:
+                predicted_xp = xp_matrix.get(pid, {}).get(target_gw, 0.0)
+                error = abs(predicted_xp - points)
+                gw_error += error
+                gw_count += 1
+                
+        if gw_count > 0:
+            mae = gw_error / gw_count
+            logger.info(f"GW {target_gw} Mean Absolute Error (MAE): {mae:.2f} pts per player")
+            total_error += gw_error
+            total_predictions += gw_count
+
+    if total_predictions > 0:
+        final_mae = total_error / total_predictions
+        logger.info(f"\n==========================================")
+        logger.info(f"FINAL BACKTEST MAE: {final_mae:.2f} Points")
+        logger.info(f"==========================================")
+
+if __name__ == "__main__":
+    run_backtest()

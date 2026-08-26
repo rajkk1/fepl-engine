@@ -241,7 +241,7 @@ def calculate_expected_minutes(player: Dict[str, Any], current_gw: int = 1) -> f
         base_mins = 15.0
     return round(base_mins * avail_mult, 1)
 
-def generate_xp_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None) -> Dict[int, Dict[int, float]]:
+def generate_xp_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None, all_history=None) -> Dict[int, Dict[int, float]]:
     if bootstrap is None: bootstrap = get_bootstrap_static()
     if fixtures is None: fixtures = get_fixtures()
     
@@ -254,10 +254,11 @@ def generate_xp_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None) ->
             current_gw = max(current_gw, f.get("event") or 1)
             
     player_ids = [p["id"] for p in players]
-    logger.info(f"Fetching historical data for {len(player_ids)} players concurrently...")
-    summaries = get_all_element_summaries(player_ids)
     
-    all_history = {pid: summaries.get(pid, {}).get("history", []) for pid in player_ids}
+    if all_history is None:
+        logger.info(f"Fetching historical data for {len(player_ids)} players concurrently...")
+        summaries = get_all_element_summaries(player_ids)
+        all_history = {pid: summaries.get(pid, {}).get("history", []) for pid in player_ids}
     
     ensemble = EnsembleForecaster()
     past_fixtures = [f for f in fixtures if f.get("finished")]
