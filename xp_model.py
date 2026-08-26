@@ -229,18 +229,17 @@ ensemble_engine = EnsembleForecaster()
 
 
 def calculate_expected_minutes(player: Dict[str, Any]) -> float:
-    """Estimate player expected minutes (xMin)."""
+    """Estimate player expected minutes (xMin) conditionally (IF they play)."""
     status = player.get("status", "a")
     if status in ["i", "s", "u"]:
         return 0.0
 
-    chance = player.get("chance_of_playing_next_round")
-    chance_mult = (float(chance) / 100.0) if chance is not None else 1.0
-
     form = float(player.get("form", 0.0) or 0.0)
     minutes = float(player.get("minutes", 0) or 0)
+    cost = float(player.get("now_cost", 0) or 0)
 
-    if minutes > 500 or form > 3.0:
+    # Early season fix: Premium players (>= £7.5m) and GW1 starters (>= 60 mins) are nailed on.
+    if minutes > 500 or form > 3.0 or cost >= 75 or (minutes >= 60 and minutes < 500):
         base_mins = 82.0
     elif minutes > 200:
         base_mins = 60.0
@@ -249,7 +248,7 @@ def calculate_expected_minutes(player: Dict[str, Any]) -> float:
     else:
         base_mins = 15.0
 
-    return round(base_mins * chance_mult, 1)
+    return round(base_mins, 1)
 
 
 def generate_xp_matrix(

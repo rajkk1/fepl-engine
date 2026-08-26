@@ -227,17 +227,17 @@ def solve_fpl_optimization(
                 else:
                     bench.append(p_info)
 
-        # Sort starters by xP to identify Captain and Vice-Captain reliably
+        # Assign Vice-Captain to the highest xP player who is not the Captain
         sorted_starters = sorted(starters, key=lambda item: item.get("xp", 0.0), reverse=True)
         if sorted_starters:
-            top_c = sorted_starters[0]["id"]
-            top_vc = sorted_starters[1]["id"] if len(sorted_starters) > 1 else top_c
+            top_vc = None
+            for p in sorted_starters:
+                if not p.get("is_captain"):
+                    top_vc = p["id"]
+                    break
             
             for p in starters:
-                p["is_captain"] = (p["id"] == top_c)
                 p["is_vice_captain"] = (p["id"] == top_vc)
-                if p["is_captain"]:
-                    captain_id = p["id"]
 
         transfers_in = [
             {"id": pid, "web_name": player_dict[pid]["web_name"], "cost": now_cost[pid]}
