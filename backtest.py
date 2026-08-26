@@ -89,9 +89,14 @@ def build_mock_api(df_gw, df_players, df_teams, df_fixtures, current_gw: int):
                 "total_points": int(row['total_points']),
                 "expected_goals": float(row.get('expected_goals', 0) or 0),
                 "expected_assists": float(row.get('expected_assists', 0) or 0),
+                "expected_goals_conceded": float(row.get('expected_goals_conceded', 0) or 0),
+                "expected_goal_involvements": float(row.get('expected_goal_involvements', 0) or 0),
                 "bps": float(row.get('bps', 0) or 0),
                 "value": float(row.get('value', 50)),
                 "transfers_balance": float(row.get('transfers_balance', 0) or 0),
+                "was_home": bool(row.get('was_home', False)),
+                "opponent_team": int(row.get('opponent_team', 1)),
+                "starts": int(row.get('starts', 0)),
                 "fixture_difficulty": 3
             }
             history.append(h)
@@ -102,26 +107,29 @@ def build_mock_api(df_gw, df_players, df_teams, df_fixtures, current_gw: int):
 
     return bootstrap, fixtures, all_history
 
-def run_backtest():
-    logger.info("Initializing Backtester...")
-    try:
-        df_gw, df_players, df_teams, df_fixtures = fetch_data()
-    except Exception as e:
-        logger.error(f"Failed to fetch Vaastav data: {e}")
-        return
+def run_backtest(weights: tuple = None, df_gw=None, df_players=None, df_teams=None, df_fixtures=None) -> float:
+    if df_gw is None:
+        logger.info("Initializing Backtester...")
+        try:
+            df_gw, df_players, df_teams, df_fixtures = fetch_data()
+        except Exception as e:
+            logger.error(f"Failed to fetch Vaastav data: {e}")
+            return 999.0
 
     TEST_GWS = range(15, 21)
     
     total_error = 0.0
     total_predictions = 0
 
-    logger.info(f"Starting Walk-Forward Time Machine from GW {TEST_GWS.start} to {TEST_GWS.stop - 1}")
+    if not weights:
+        logger.info(f"Starting Walk-Forward Time Machine from GW {TEST_GWS.start} to {TEST_GWS.stop - 1}")
     
     for target_gw in TEST_GWS:
-        logger.info(f"\n--- Backtesting Gameweek {target_gw} ---")
+        if not weights:
+            logger.info(f"\n--- Backtesting Gameweek {target_gw} ---")
         
         bootstrap, fixtures, all_history = build_mock_api(df_gw, df_players, df_teams, df_fixtures, current_gw=target_gw)
-        xp_matrix = generate_xp_matrix([target_gw], bootstrap=bootstrap, fixtures=fixtures, all_history=all_history)
+        xp_matrix = generate_xp_matrix([target_gw], bootstrap=bootstrap, fixtures=fixtures, all_history=all_history, weights=weights)
         
         df_target = df_gw[df_gw['GW'] == target_gw]
         actuals = {int(row['element']): float(row['total_points']) for _, row in df_target.iterrows()}
@@ -138,15 +146,19 @@ def run_backtest():
                 
         if gw_count > 0:
             mae = gw_error / gw_count
-            logger.info(f"GW {target_gw} Mean Absolute Error (MAE): {mae:.2f} pts per player")
+            if not weights:
+                logger.info(f"GW {target_gw} Mean Absolute Error (MAE): {mae:.2f} pts per player")
             total_error += gw_error
             total_predictions += gw_count
 
     if total_predictions > 0:
         final_mae = total_error / total_predictions
-        logger.info(f"\n==========================================")
-        logger.info(f"FINAL BACKTEST MAE: {final_mae:.2f} Points")
-        logger.info(f"==========================================")
+        if not weights:
+            logger.info(f"\n==========================================")
+            logger.info(f"FINAL BACKTEST MAE: {final_mae:.2f} Points")
+            logger.info(f"==========================================")
+        return final_mae
+    return 999.0
 
 if __name__ == "__main__":
     run_backtest()

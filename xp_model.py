@@ -44,6 +44,7 @@ class DixonColesModel:
             alphas = {tid: params[i] for i, tid in enumerate(team_ids)}
             betas = {tid: params[num_teams + i] for i, tid in enumerate(team_ids)}
             gamma = params[2 * num_teams]
+            rho = params[2 * num_teams + 1]
             
             nll = 0.0
             for h, a, hg, ag, w in match_data:
@@ -51,16 +52,24 @@ class DixonColesModel:
                 mu = alphas[a] * betas[h]
                 ll_h = hg * math.log(max(lam, 1e-5)) - lam
                 ll_a = ag * math.log(max(mu, 1e-5)) - mu
-                nll -= w * (ll_h + ll_a)
+                
+                # Item #12: Dixon-Coles Rho Correction for low-scoring draws
+                tau = 1.0
+                if hg == 0 and ag == 0: tau = 1.0 - lam * mu * rho
+                elif hg == 0 and ag == 1: tau = 1.0 + lam * rho
+                elif hg == 1 and ag == 0: tau = 1.0 + mu * rho
+                elif hg == 1 and ag == 1: tau = 1.0 - rho
+                
+                nll -= w * (ll_h + ll_a + math.log(max(tau, 1e-10)))
             
             nll += 100 * (sum(alphas.values())/num_teams - 1.0)**2
             nll += 100 * (sum(betas.values())/num_teams - 1.0)**2
             return nll
 
-        init_params = [1.0] * (2 * num_teams) + [1.18]
-        bounds = [(0.1, 5.0)] * (2 * num_teams) + [(0.5, 2.0)]
+        init_params = [1.0] * (2 * num_teams) + [1.18, 0.0]
+        bounds = [(0.1, 3.0)] * (2 * num_teams) + [(0.5, 2.0), (-0.2, 0.2)]
         
-        res = minimize(neg_log_likelihood, init_params, bounds=bounds, method="L-BFGS-B")
+        res = minimize(neg_log_likelihood, init_params, bounds=bounds, method='L-BFGS-B')
         
         for i, tid in enumerate(team_ids):
             self.alpha[tid] = res.x[i]
@@ -150,30 +159,42 @@ class KalmanFormFilter:
 
 class TrueGradientBoostedTree:
     def __init__(self):
-        self.model = GradientBoostingRegressor(n_estimators=50, max_depth=3, random_state=42)
+        # Increased depth and estimators because we now have 8 features instead of 3
+        self.model = GradientBoostingRegressor(n_estimators=100, max_depth=4, random_state=42)
         self.is_trained = False
+        self.teams_map = {}
 
-    def train(self, all_history):
+    def train(self, all_history, teams):
+        self.teams_map = {t["id"]: t for t in teams}
         X = []
         y = []
         for pid, history in all_history.items():
-            bps_window = []
+            bps_w, xgi_w, xgc_w, starts_w = [], [], [], []
             for h in history:
-                bps = float(h.get("bps", 0) or 0)
-                bps_window.append(bps)
-                if len(bps_window) > 4:
-                    bps_window.pop(0)
-                avg_bps = sum(bps_window) / len(bps_window)
+                bps_w.append(float(h.get("bps", 0) or 0))
+                xgi_w.append(float(h.get("expected_goal_involvements", 0) or 0))
+                xgc_w.append(float(h.get("expected_goals_conceded", 0) or 0))
+                starts_w.append(float(h.get("starts", 0) or 0))
                 
-                # FIX: Only train on matches where they started (minutes > 60) so the model predicts "Points if starting". 
-                # This prevents double-shrinking when we multiply by xMin/90 later.
+                if len(bps_w) > 4: bps_w.pop(0)
+                if len(xgi_w) > 4: xgi_w.pop(0)
+                if len(xgc_w) > 4: xgc_w.pop(0)
+                if len(starts_w) > 4: starts_w.pop(0)
+                
+                avg_bps = sum(bps_w) / len(bps_w) if bps_w else 0.0
+                avg_xgi = sum(xgi_w) / len(xgi_w) if xgi_w else 0.0
+                avg_xgc = sum(xgc_w) / len(xgc_w) if xgc_w else 0.0
+                avg_starts = sum(starts_w) / len(starts_w) if starts_w else 0.0
+                
                 if h.get("minutes", 0) > 60:
-                    # FIX: Dropped FDR. BPS is now a 4-match rolling average.
-                    # We will just train on transfers_balance, value, and avg_bps.
-                    value = h.get("value", 50)
-                    transfers_bal = h.get("transfers_balance", 0)
-                    X.append([value, transfers_bal, avg_bps])
-                    y.append(h.get("total_points", 0))
+                    value = float(h.get("value", 50))
+                    transfers_bal = float(h.get("transfers_balance", 0))
+                    was_home = 1.0 if h.get("was_home") else 0.0
+                    opp_id = h.get("opponent_team", 1)
+                    fdr = float(self.teams_map.get(opp_id, {}).get("strength", 3))
+                    
+                    X.append([value, transfers_bal, avg_bps, was_home, fdr, avg_xgi, avg_xgc, avg_starts])
+                    y.append(float(h.get("total_points", 0)))
         
         if len(X) > 50:
             self.model.fit(X, y)
@@ -186,13 +207,21 @@ class TrueGradientBoostedTree:
         value = float(player.get("now_cost", 50) or 50)
         transfers_bal = float(player.get("transfers_in_event", 0) or 0) - float(player.get("transfers_out_event", 0) or 0)
         
-        recent_bps = [float(h.get("bps", 0) or 0) for h in history[-4:]] if history else [0.0]
-        avg_bps = sum(recent_bps) / len(recent_bps) if recent_bps else 0.0
+        bps_w = [float(h.get("bps", 0) or 0) for h in history[-4:]] if history else [0.0]
+        xgi_w = [float(h.get("expected_goal_involvements", 0) or 0) for h in history[-4:]] if history else [0.0]
+        xgc_w = [float(h.get("expected_goals_conceded", 0) or 0) for h in history[-4:]] if history else [0.0]
+        starts_w = [float(h.get("starts", 0) or 0) for h in history[-4:]] if history else [0.0]
         
-        # Predict points assuming 90 minutes played
-        pred = self.model.predict([[value, transfers_bal, avg_bps]])[0]
+        avg_bps = sum(bps_w) / len(bps_w) if bps_w else 0.0
+        avg_xgi = sum(xgi_w) / len(xgi_w) if xgi_w else 0.0
+        avg_xgc = sum(xgc_w) / len(xgc_w) if xgc_w else 0.0
+        avg_starts = sum(starts_w) / len(starts_w) if starts_w else 0.0
         
-        # Scale by actual expected minutes
+        was_home = 1.0 if fixture.get("team_h") == player.get("team") else 0.0
+        opp_id = fixture.get("team_a") if was_home else fixture.get("team_h")
+        fdr = float(self.teams_map.get(opp_id, {}).get("strength", 3))
+        
+        pred = self.model.predict([[value, transfers_bal, avg_bps, was_home, fdr, avg_xgi, avg_xgc, avg_starts]])[0]
         return round(max(0.0, pred * (xMin/90.0)), 2)
 
 class EnsembleForecaster:
@@ -207,7 +236,7 @@ class EnsembleForecaster:
 
     def fit(self, teams, past_fixtures, current_gw, all_history):
         self.dc.fit_team_ratings(teams, past_fixtures, current_gw)
-        self.gt.train(all_history)
+        self.gt.train(all_history, teams)
         
     def predict(self, player, fixture, history, xMin):
         if xMin <= 0: return 0.0
