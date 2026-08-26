@@ -135,30 +135,40 @@ class TrueGradientBoostedTree:
         X = []
         y = []
         for pid, history in all_history.items():
+            bps_window = []
             for h in history:
+                bps = float(h.get("bps", 0) or 0)
+                bps_window.append(bps)
+                if len(bps_window) > 4:
+                    bps_window.pop(0)
+                avg_bps = sum(bps_window) / len(bps_window)
+                
                 # FIX: Only train on matches where they started (minutes > 60) so the model predicts "Points if starting". 
                 # This prevents double-shrinking when we multiply by xMin/90 later.
                 if h.get("minutes", 0) > 60:
-                    # FIX: Dropped FDR and BPS. FDR belongs to Dixon-Coles. BPS has scale mismatch.
-                    # We will just train on transfers_balance and value to capture "wisdom of the crowds".
+                    # FIX: Dropped FDR. BPS is now a 4-match rolling average.
+                    # We will just train on transfers_balance, value, and avg_bps.
                     value = h.get("value", 50)
                     transfers_bal = h.get("transfers_balance", 0)
-                    X.append([value, transfers_bal])
+                    X.append([value, transfers_bal, avg_bps])
                     y.append(h.get("total_points", 0))
         
         if len(X) > 50:
             self.model.fit(X, y)
             self.is_trained = True
 
-    def predict_match(self, player, fixture, xMin):
+    def predict_match(self, player, fixture, history, xMin):
         if not self.is_trained:
             return 0.0
             
         value = float(player.get("now_cost", 50) or 50)
         transfers_bal = float(player.get("transfers_in_event", 0) or 0) - float(player.get("transfers_out_event", 0) or 0)
         
+        recent_bps = [float(h.get("bps", 0) or 0) for h in history[-4:]] if history else [0.0]
+        avg_bps = sum(recent_bps) / len(recent_bps) if recent_bps else 0.0
+        
         # Predict points assuming 90 minutes played
-        pred = self.model.predict([[value, transfers_bal]])[0]
+        pred = self.model.predict([[value, transfers_bal, avg_bps]])[0]
         
         # Scale by actual expected minutes
         return round(max(0.0, pred * (xMin/90.0)), 2)
@@ -182,15 +192,22 @@ class EnsembleForecaster:
         
         xp_dc = self.dc.predict_match(player, fixture, xMin)
         xp_kf = self.kf.predict_match(player, history, xMin)
-        xp_gt = self.gt.predict_match(player, fixture, xMin)
+        xp_gt = self.gt.predict_match(player, fixture, history, xMin)
         
         ensemble_xp = xApp + (self.w_dc * xp_dc) + (self.w_kf * xp_kf) + (self.w_gt * xp_gt)
         return round(ensemble_xp, 2)
 
 def calculate_expected_minutes(player: Dict[str, Any], current_gw: int = 1) -> float:
     status = player.get("status", "a")
-    if status in ["i", "s", "u"]:
+    chance = player.get("chance_of_playing_next_round")
+    if status in ["i", "s", "u"] or chance == 0:
         return 0.0
+        
+    if chance is not None:
+        avail_mult = float(chance) / 100.0
+    else:
+        avail_mult = 1.0
+
     form = float(player.get("form", 0.0) or 0.0)
     minutes = float(player.get("minutes", 0) or 0)
     cost = float(player.get("now_cost", 0) or 0)
@@ -205,7 +222,7 @@ def calculate_expected_minutes(player: Dict[str, Any], current_gw: int = 1) -> f
         base_mins = 35.0
     else:
         base_mins = 15.0
-    return round(base_mins, 1)
+    return round(base_mins * avail_mult, 1)
 
 def generate_xp_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None) -> Dict[int, Dict[int, float]]:
     if bootstrap is None: bootstrap = get_bootstrap_static()
@@ -242,23 +259,14 @@ def generate_xp_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None) ->
         xp_matrix[pid] = {}
         history = all_history.get(pid, [])
         xMin = calculate_expected_minutes(p, current_gw)
-        
-        status = p.get("status", "a")
-        chance_playing = p.get("chance_of_playing_next_round")
-        if status in ["i", "s", "u"] or chance_playing == 0:
-            avail_mult = 0.0
-        elif chance_playing is not None:
-            avail_mult = float(chance_playing) / 100.0
-        else:
-            avail_mult = 1.0
 
         for gw in horizon_gws:
             gw_fixes = fixture_map.get(gw, {}).get(p["team"], [])
-            if not gw_fixes or avail_mult == 0.0:
+            if not gw_fixes or xMin <= 0:
                 xp_matrix[pid][gw] = 0.0
             else:
                 total_xp = sum(ensemble.predict(p, f, history, xMin) for f in gw_fixes)
-                xp_matrix[pid][gw] = round(total_xp * avail_mult, 2)
+                xp_matrix[pid][gw] = round(total_xp, 2)
                 
     return xp_matrix
 

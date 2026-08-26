@@ -66,12 +66,14 @@ def solve_fpl_optimization(
     tin = {}
     tout = {}
     hits = {}
+    ft_carried = {}
     bank = {}
 
     gws = sorted(horizon_gws)
     
     for t in gws:
         hits[t] = pulp.LpVariable(f"hits_{t}", lowBound=0, cat=pulp.LpInteger)
+        ft_carried[t] = pulp.LpVariable(f"ft_carried_{t}", lowBound=0, upBound=4, cat=pulp.LpInteger)
         bank[t] = pulp.LpVariable(f"bank_{t}", lowBound=0, cat=pulp.LpContinuous)
         
         for pid in player_ids:
@@ -110,6 +112,7 @@ def solve_fpl_optimization(
         first_gw = gws[0]
         # Budget cap £100.0m
         prob += pulp.lpSum([s[pid, first_gw] * now_cost[pid] for pid in player_ids]) <= (100.0 + initial_bank), f"Initial_Budget_GW{first_gw}"
+        prob += ft_carried[first_gw] == 0, f"No_FT_Carry_Wildcard"
     else:
         # Pre-existing squad transition
         first_gw = gws[0]
@@ -121,9 +124,9 @@ def solve_fpl_optimization(
         # Initial Bank equation
         prob += bank[first_gw] == initial_bank + pulp.lpSum([tout[pid, first_gw] * now_cost[pid] for pid in player_ids]) - pulp.lpSum([tin[pid, first_gw] * now_cost[pid] for pid in player_ids]), f"Bank_{first_gw}"
         
-        # Hits calculation for first GW
+        # FT Rollover math for first GW
         num_transfers_first = pulp.lpSum([tin[pid, first_gw] for pid in player_ids])
-        prob += hits[first_gw] >= num_transfers_first - initial_ft, f"Hit_LowerBound_{first_gw}"
+        prob += num_transfers_first + ft_carried[first_gw] <= initial_ft + hits[first_gw], f"FT_Math_{first_gw}"
 
     # Constraints per Gameweek
     for idx, t in enumerate(gws):
@@ -174,9 +177,9 @@ def solve_fpl_optimization(
             # Bank balance continuity
             prob += bank[t] == bank[prev_t] + pulp.lpSum([tout[pid, t] * now_cost[pid] for pid in player_ids]) - pulp.lpSum([tin[pid, t] * now_cost[pid] for pid in player_ids]), f"Bank_Cont_{t}"
             
-            # Hit calculation (assuming 1 FT accrued per GW)
+            # FT Rollover math for subsequent GWs
             num_transfers = pulp.lpSum([tin[pid, t] for pid in player_ids])
-            prob += hits[t] >= num_transfers - 1, f"Hit_LowerBound_{t}"
+            prob += num_transfers + ft_carried[t] <= 1 + ft_carried[prev_t] + hits[t], f"FT_Math_{t}"
 
         # Max hits limit per GW
         prob += hits[t] <= max_hits_per_gw, f"Max_Hits_{t}"
