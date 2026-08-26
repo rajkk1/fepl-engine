@@ -85,10 +85,14 @@ def solve_fpl_optimization(
 
     # Objective Function incorporating Triple Captain & Bench Boost chips
     obj_terms = []
-    tc_mult = 2.0 if active_chip == "tc" else 1.0  # Extra 2x for Triple Captain (total 3x)
-    b_weight = 1.0 if active_chip == "bb" else bench_weight  # Full 1.0 weight for Bench Boost
 
-    for t in gws:
+    for idx, t in enumerate(gws):
+        # Chips only apply to the current target gameweek (the first week in the horizon)
+        is_chip_active_now = (active_chip is not None and idx == 0)
+        
+        tc_mult = 2.0 if (is_chip_active_now and active_chip == "tc") else 1.0  # Extra 2x for Triple Captain (total 3x)
+        b_weight = 1.0 if (is_chip_active_now and active_chip == "bb") else bench_weight  # Full 1.0 weight for Bench Boost
+
         for pid in player_ids:
             xp_val = xp_matrix.get(pid, {}).get(t, 0.0)
             # Starter xP + Captain bonus (1x or 2x for TC) + Bench weight (0.10 or 1.0 for BB)
@@ -97,7 +101,7 @@ def solve_fpl_optimization(
             obj_terms.append((s[pid, t] - x[pid, t]) * (xp_val * b_weight))
         
         # Subtract hit penalties (-4 points per hit, 0 if Wildcard/Free Hit chip active)
-        if active_chip in ["wc", "fh"]:
+        if is_chip_active_now and active_chip in ["wc", "fh"]:
             pass
         else:
             obj_terms.append(-4.0 * hits[t])

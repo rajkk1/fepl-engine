@@ -81,17 +81,54 @@ def main():
     horizon_gws = list(range(current_gw, current_gw + args.horizon))
     xp_matrix = generate_xp_matrix(horizon_gws, bootstrap=bootstrap, fixtures=fixtures)
 
-    print(f"🧠 Solving ILP Optimization Model (Active Chip: {args.chip if args.chip else 'None'})...\n")
-    res = solve_fpl_optimization(
-        bootstrap=bootstrap,
-        xp_matrix=xp_matrix,
-        horizon_gws=horizon_gws,
-        initial_squad_ids=squad_ids,
-        initial_bank=bank,
-        initial_ft=ft,
-        max_hits_per_gw=2,
-        active_chip=args.chip if args.chip else None
-    )
+    active_chip = args.chip if args.chip else ""
+    
+    # #9. Automated Chip Comparison
+    if not active_chip:
+        print("🤖 Evaluating all possible Chip Strategies...")
+        best_gain = 0.0
+        best_chip = ""
+        
+        # 1. Get baseline (No Chip)
+        base_res = solve_fpl_optimization(
+            bootstrap=bootstrap, xp_matrix=xp_matrix, horizon_gws=horizon_gws, 
+            initial_squad_ids=squad_ids, initial_bank=bank, initial_ft=ft, 
+            max_hits_per_gw=2, active_chip=None
+        )
+        base_xp = base_res.get("total_xp", 0.0)
+        
+        # 2. Test Chips
+        chip_thresholds = {"tc": 10.0, "bb": 12.0, "fh": 15.0, "wc": 20.0}
+        chip_results = {"": base_res}
+        
+        for c, threshold in chip_thresholds.items():
+            c_res = solve_fpl_optimization(
+                bootstrap=bootstrap, xp_matrix=xp_matrix, horizon_gws=horizon_gws, 
+                initial_squad_ids=squad_ids, initial_bank=bank, initial_ft=ft, 
+                max_hits_per_gw=2, active_chip=c
+            )
+            c_xp = c_res.get("total_xp", 0.0)
+            gain = c_xp - base_xp
+            
+            if gain > threshold and gain > best_gain:
+                best_gain = gain
+                best_chip = c
+            
+            chip_results[c] = c_res
+            
+        active_chip = best_chip
+        res = chip_results[active_chip]
+        if active_chip:
+            print(f"🔥 Automatic Chip Activation: {active_chip.upper()} (Marginal Gain: +{best_gain:.2f} xP)\n")
+        else:
+            print(f"🧠 Solving ILP Optimization Model (Active Chip: None)...\n")
+    else:
+        print(f"🧠 Solving ILP Optimization Model (Active Chip: {active_chip})...\n")
+        res = solve_fpl_optimization(
+            bootstrap=bootstrap, xp_matrix=xp_matrix, horizon_gws=horizon_gws, 
+            initial_squad_ids=squad_ids, initial_bank=bank, initial_ft=ft, 
+            max_hits_per_gw=2, active_chip=active_chip
+        )
 
     if res.get("status") != "Optimal":
         print("⚠️ Warning: ILP Solver did not find a strictly optimal solution.")
