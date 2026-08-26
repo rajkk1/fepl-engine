@@ -66,7 +66,8 @@ def build_mock_api(df_gw, df_players, df_teams, df_fixtures, current_gw: int):
             "minutes": 0,
             "expected_goals_per_90": float(p.get("expected_goals_per_90", 0.0) or 0.0),
             "expected_assists_per_90": float(p.get("expected_assists_per_90", 0.0) or 0.0),
-            "points_per_game": float(p.get("points_per_game", 0.0) or 0.0)
+            "points_per_game": float(p.get("points_per_game", 0.0) or 0.0),
+            "penalties_order": int(p.get("penalties_order")) if not pd.isna(p.get("penalties_order")) else None
         }
         elements.append(element)
         

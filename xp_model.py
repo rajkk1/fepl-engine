@@ -95,6 +95,11 @@ class DixonColesModel:
         player_match_xg = (player_xg90 / 1.5) * team_xg * min_frac
         player_match_xa = (player_xa90 / 1.5) * team_xg * min_frac
         
+        # #6. Penalty Taker Flag: Statistically a team gets ~0.15 penalties per match. 
+        # A penalty is ~0.76 xG. So 1st choice takers get an extra ~0.11 xG per match.
+        if player.get("penalties_order") == 1:
+            player_match_xg += (0.11 * min_frac)
+        
         xG_pts = player_match_xg * POINTS_GOAL.get(element_type, 4)
         xA_pts = player_match_xa * POINTS_ASSIST
         
@@ -283,9 +288,12 @@ def generate_xp_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None, al
             if not gw_fixes or xMin <= 0:
                 xp_matrix[pid][gw] = 0.0
             else:
-                total_xp = sum(ensemble.predict(p, f, history, xMin) for f in gw_fixes)
+                total_xp = 0.0
+                for idx, f in enumerate(gw_fixes):
+                    # #8. DGW Rotation Adjustment: reduce xMin by 22 mins for the second fixture
+                    adjusted_xmin = xMin if idx == 0 else max(xMin - 22.0, 0.0) 
+                    total_xp += ensemble.predict(p, f, history, adjusted_xmin)
                 xp_matrix[pid][gw] = round(total_xp, 2)
-                
     return xp_matrix
 
 if __name__ == "__main__":
