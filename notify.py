@@ -38,8 +38,8 @@ def check_deadline_and_notify():
         return
 
     # 3. Calculate time until deadline
-    deadline_dt = datetime.datetime.strptime(deadline_str, "%Y-%m-%dT%H:%M:%SZ")
-    now_dt = datetime.datetime.utcnow()
+    deadline_dt = datetime.datetime.strptime(deadline_str, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    now_dt = datetime.datetime.now(datetime.timezone.utc)
     time_diff = deadline_dt - now_dt
     hours_until = time_diff.total_seconds() / 3600
 
