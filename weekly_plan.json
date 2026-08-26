@@ -1,32 +1,64 @@
 {
-    "gameweek": 1,
+    "gameweek": 2,
     "team_id": 4309239,
-    "transfers_in": [],
-    "transfers_out": [],
-    "hits": 0,
+    "transfers_in": [
+        {
+            "id": 115,
+            "web_name": "De Cuyper",
+            "cost": 4.6
+        },
+        {
+            "id": 123,
+            "web_name": "Hinshelwood",
+            "cost": 6.0
+        },
+        {
+            "id": 368,
+            "web_name": "Szoboszlai",
+            "cost": 7.0
+        }
+    ],
+    "transfers_out": [
+        {
+            "id": 155,
+            "web_name": "Enzo",
+            "cost": 7.0
+        },
+        {
+            "id": 426,
+            "web_name": "B.Fernandes",
+            "cost": 12.0
+        },
+        {
+            "id": 498,
+            "web_name": "Senesi",
+            "cost": 6.0
+        }
+    ],
+    "hits": 2,
     "active_chip": "",
     "captain": {
-        "id": 426,
-        "web_name": "B.Fernandes",
-        "element_type": 3,
-        "team": 16,
-        "cost": 12.0,
-        "xp": 4.69,
+        "id": 115,
+        "web_name": "De Cuyper",
+        "element_type": 2,
+        "team": 5,
+        "cost": 4.6,
+        "xp": 9.9,
         "is_captain": true,
         "is_vice_captain": false,
-        "now_cost": 12.0,
+        "now_cost": 4.6,
         "status": "a"
     },
     "vice_captain": {
-        "id": 106,
-        "web_name": "Thiago",
-        "element_type": 4,
-        "team": 4,
-        "cost": 8.0,
-        "xp": 4.44,
+        "id": 123,
+        "web_name": "Hinshelwood",
+        "element_type": 3,
+        "team": 5,
+        "cost": 6.0,
+        "xp": 9.79,
         "is_captain": false,
         "is_vice_captain": true,
-        "now_cost": 8.0,
+        "now_cost": 6.0,
         "status": "a"
     },
     "starters": [
@@ -36,7 +68,7 @@
             "element_type": 1,
             "team": 4,
             "cost": 5.0,
-            "xp": 2.99,
+            "xp": 4.83,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 5.0,
@@ -48,7 +80,7 @@
             "element_type": 3,
             "team": 4,
             "cost": 6.0,
-            "xp": 3.96,
+            "xp": 3.98,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 6.0,
@@ -60,22 +92,34 @@
             "element_type": 4,
             "team": 4,
             "cost": 8.0,
-            "xp": 4.44,
+            "xp": 4.07,
             "is_captain": false,
-            "is_vice_captain": true,
+            "is_vice_captain": false,
             "now_cost": 8.0,
             "status": "a"
         },
         {
-            "id": 155,
-            "web_name": "Enzo",
-            "element_type": 3,
-            "team": 6,
-            "cost": 7.0,
-            "xp": 3.94,
-            "is_captain": false,
+            "id": 115,
+            "web_name": "De Cuyper",
+            "element_type": 2,
+            "team": 5,
+            "cost": 4.6,
+            "xp": 9.9,
+            "is_captain": true,
             "is_vice_captain": false,
-            "now_cost": 7.0,
+            "now_cost": 4.6,
+            "status": "a"
+        },
+        {
+            "id": 123,
+            "web_name": "Hinshelwood",
+            "element_type": 3,
+            "team": 5,
+            "cost": 6.0,
+            "xp": 9.79,
+            "is_captain": false,
+            "is_vice_captain": true,
+            "now_cost": 6.0,
             "status": "a"
         },
         {
@@ -84,22 +128,22 @@
             "element_type": 2,
             "team": 9,
             "cost": 6.0,
-            "xp": 3.55,
+            "xp": 3.37,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 6.0,
             "status": "a"
         },
         {
-            "id": 346,
-            "web_name": "Calvert-Lewin",
-            "element_type": 4,
-            "team": 13,
-            "cost": 6.0,
-            "xp": 3.88,
+            "id": 368,
+            "web_name": "Szoboszlai",
+            "element_type": 3,
+            "team": 14,
+            "cost": 7.0,
+            "xp": 8.21,
             "is_captain": false,
             "is_vice_captain": false,
-            "now_cost": 6.0,
+            "now_cost": 7.0,
             "status": "a"
         },
         {
@@ -108,22 +152,10 @@
             "element_type": 2,
             "team": 15,
             "cost": 6.5,
-            "xp": 3.52,
+            "xp": 3.3,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 6.5,
-            "status": "a"
-        },
-        {
-            "id": 426,
-            "web_name": "B.Fernandes",
-            "element_type": 3,
-            "team": 16,
-            "cost": 12.0,
-            "xp": 4.69,
-            "is_captain": true,
-            "is_vice_captain": false,
-            "now_cost": 12.0,
             "status": "a"
         },
         {
@@ -132,7 +164,7 @@
             "element_type": 3,
             "team": 16,
             "cost": 8.0,
-            "xp": 3.97,
+            "xp": 3.8,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 8.0,
@@ -144,7 +176,7 @@
             "element_type": 2,
             "team": 18,
             "cost": 5.0,
-            "xp": 3.48,
+            "xp": 3.67,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 5.0,
@@ -156,11 +188,11 @@
             "element_type": 3,
             "team": 18,
             "cost": 8.0,
-            "xp": 4.29,
+            "xp": 3.11,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 8.0,
-            "status": "a"
+            "status": "d"
         }
     ],
     "bench": [
@@ -170,7 +202,7 @@
             "element_type": 2,
             "team": 8,
             "cost": 5.5,
-            "xp": 3.27,
+            "xp": 2.8,
             "is_captain": false,
             "now_cost": 5.5,
             "status": "a"
@@ -181,18 +213,18 @@
             "element_type": 4,
             "team": 9,
             "cost": 5.5,
-            "xp": 3.56,
+            "xp": 1.38,
             "is_captain": false,
             "now_cost": 5.5,
             "status": "a"
         },
         {
-            "id": 498,
-            "web_name": "Senesi",
-            "element_type": 2,
-            "team": 19,
+            "id": 346,
+            "web_name": "Calvert-Lewin",
+            "element_type": 4,
+            "team": 13,
             "cost": 6.0,
-            "xp": 3.24,
+            "xp": 2.57,
             "is_captain": false,
             "now_cost": 6.0,
             "status": "a"
@@ -203,12 +235,12 @@
             "element_type": 1,
             "team": 20,
             "cost": 5.0,
-            "xp": 2.76,
+            "xp": 2.74,
             "is_captain": false,
             "now_cost": 5.0,
             "status": "a"
         }
     ],
-    "expected_score": 42.709999999999994,
-    "remaining_bank": 12.5
+    "expected_score": 58.029999999999994,
+    "remaining_bank": 7.9
 }
