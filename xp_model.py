@@ -171,6 +171,21 @@ class TrueGradientBoostedTree:
         for pid, history in all_history.items():
             bps_w, xgi_w, xgc_w, starts_w = [], [], [], []
             for h in history:
+                # M-03: Calculate window statistics strictly BEFORE adding current row
+                avg_bps = sum(bps_w) / len(bps_w) if bps_w else 0.0
+                avg_xgi = sum(xgi_w) / len(xgi_w) if xgi_w else 0.0
+                avg_xgc = sum(xgc_w) / len(xgc_w) if xgc_w else 0.0
+                avg_starts = sum(starts_w) / len(starts_w) if starts_w else 0.0
+                
+                was_home = 1.0 if h.get("was_home") else 0.0
+                opp_id = h.get("opponent_team", 1)
+                fdr = float(self.teams_map.get(opp_id, {}).get("strength", 3))
+                
+                # Append target row features (dropped value and transfers_balance)
+                X.append([avg_bps, was_home, fdr, avg_xgi, avg_xgc, avg_starts])
+                y.append(float(h.get("total_points", 0)))
+                
+                # NOW append current row to the window for the next iteration
                 bps_w.append(float(h.get("bps", 0) or 0))
                 xgi_w.append(float(h.get("expected_goal_involvements", 0) or 0))
                 xgc_w.append(float(h.get("expected_goals_conceded", 0) or 0))
@@ -180,21 +195,6 @@ class TrueGradientBoostedTree:
                 if len(xgi_w) > 4: xgi_w.pop(0)
                 if len(xgc_w) > 4: xgc_w.pop(0)
                 if len(starts_w) > 4: starts_w.pop(0)
-                
-                avg_bps = sum(bps_w) / len(bps_w) if bps_w else 0.0
-                avg_xgi = sum(xgi_w) / len(xgi_w) if xgi_w else 0.0
-                avg_xgc = sum(xgc_w) / len(xgc_w) if xgc_w else 0.0
-                avg_starts = sum(starts_w) / len(starts_w) if starts_w else 0.0
-                
-                if h.get("minutes", 0) > 60:
-                    value = float(h.get("value", 50))
-                    transfers_bal = float(h.get("transfers_balance", 0))
-                    was_home = 1.0 if h.get("was_home") else 0.0
-                    opp_id = h.get("opponent_team", 1)
-                    fdr = float(self.teams_map.get(opp_id, {}).get("strength", 3))
-                    
-                    X.append([value, transfers_bal, avg_bps, was_home, fdr, avg_xgi, avg_xgc, avg_starts])
-                    y.append(float(h.get("total_points", 0)))
         
         if len(X) > 50:
             self.model.fit(X, y)
@@ -204,9 +204,6 @@ class TrueGradientBoostedTree:
         if not self.is_trained:
             return 0.0
             
-        value = float(player.get("now_cost", 50) or 50)
-        transfers_bal = float(player.get("transfers_in_event", 0) or 0) - float(player.get("transfers_out_event", 0) or 0)
-        
         bps_w = [float(h.get("bps", 0) or 0) for h in history[-4:]] if history else [0.0]
         xgi_w = [float(h.get("expected_goal_involvements", 0) or 0) for h in history[-4:]] if history else [0.0]
         xgc_w = [float(h.get("expected_goals_conceded", 0) or 0) for h in history[-4:]] if history else [0.0]
@@ -221,7 +218,7 @@ class TrueGradientBoostedTree:
         opp_id = fixture.get("team_a") if was_home else fixture.get("team_h")
         fdr = float(self.teams_map.get(opp_id, {}).get("strength", 3))
         
-        pred = self.model.predict([[value, transfers_bal, avg_bps, was_home, fdr, avg_xgi, avg_xgc, avg_starts]])[0]
+        pred = self.model.predict([[avg_bps, was_home, fdr, avg_xgi, avg_xgc, avg_starts]])[0]
         return round(max(0.0, pred * (xMin/90.0)), 2)
 
 class EnsembleForecaster:

@@ -49,24 +49,47 @@ def build_mock_api(df_gw, df_players, df_teams, df_fixtures, current_gw: int):
         }
         fixtures.append(fixture)
 
-    # 3. Mock Bootstrap Players
+    # 3. Mock Bootstrap Players (Strictly Point-In-Time)
+    # V-01 Fix: Calculate per-90 stats from df_past to prevent leakage
+    df_past = df_gw[df_gw['GW'] < current_gw]
+    
+    player_stats = {}
+    for pid, group in df_past.groupby('element'):
+        total_mins = group['minutes'].sum()
+        total_xg = pd.to_numeric(group.get('expected_goals', 0), errors='coerce').sum()
+        total_xa = pd.to_numeric(group.get('expected_assists', 0), errors='coerce').sum()
+        total_pts = group['total_points'].sum()
+        games = len(group)
+        last_val = group['value'].iloc[-1] if not group.empty else 50
+        
+        xg90 = (total_xg / total_mins * 90) if total_mins > 0 else 0.0
+        xa90 = (total_xa / total_mins * 90) if total_mins > 0 else 0.0
+        ppg = (total_pts / games) if games > 0 else 0.0
+        
+        player_stats[int(pid)] = {
+            "xg90": xg90,
+            "xa90": xa90,
+            "ppg": ppg,
+            "val": float(last_val)
+        }
+
     elements = []
     for p in df_players.to_dict(orient="records"):
         pid = int(p.get("id"))
-        cost = p.get("now_cost", 50)
+        stats = player_stats.get(pid, {"xg90": 0.0, "xa90": 0.0, "ppg": 0.0, "val": float(p.get("now_cost", 50))})
         
         element = {
             "id": pid,
             "element_type": int(p.get("element_type", 3)),
             "team": int(p.get("team", 1)),
-            "now_cost": float(cost),
+            "now_cost": stats["val"],
             "status": "a", 
             "chance_of_playing_next_round": 100,
             "form": 0.0,
             "minutes": 0,
-            "expected_goals_per_90": float(p.get("expected_goals_per_90", 0.0) or 0.0),
-            "expected_assists_per_90": float(p.get("expected_assists_per_90", 0.0) or 0.0),
-            "points_per_game": float(p.get("points_per_game", 0.0) or 0.0),
+            "expected_goals_per_90": stats["xg90"],
+            "expected_assists_per_90": stats["xa90"],
+            "points_per_game": stats["ppg"],
             "penalties_order": int(p.get("penalties_order")) if not pd.isna(p.get("penalties_order")) else None
         }
         elements.append(element)
