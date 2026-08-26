@@ -1,99 +1,88 @@
 import math
 import logging
-from typing import Dict, Any, List, Optional, Tuple
-from fpl_api import get_bootstrap_static, get_fixtures
+import numpy as np
+import pandas as pd
+from typing import Dict, Any, List, Optional
+from scipy.optimize import minimize
+from sklearn.ensemble import GradientBoostingRegressor
+from fpl_api import get_bootstrap_static, get_fixtures, get_all_element_summaries
 
 logger = logging.getLogger(__name__)
 
-# FPL Position Rules & Scoring Parameters
 POS_GKP = 1
 POS_DEF = 2
 POS_MID = 3
 POS_FWD = 4
-
 POINTS_GOAL = {POS_GKP: 6, POS_DEF: 6, POS_MID: 5, POS_FWD: 4}
 POINTS_CLEAN_SHEET = {POS_GKP: 4, POS_DEF: 4, POS_MID: 1, POS_FWD: 0}
 POINTS_ASSIST = 3
 
-
-# ==============================================================================
-# SUB-MODEL 1: Dixon-Coles Bivariate Team Poisson Model (Clean Sheets & Team Goals)
-# ==============================================================================
 class DixonColesModel:
-    """
-    Dixon-Coles Bivariate Poisson Model for team attacking & defensive ratings.
-    Calculates expected team goals (λ, μ) and clean sheet probabilities P(CS).
-    """
-    def __init__(self, default_home_adv: float = 1.18):
-        self.home_adv = default_home_adv
-        self.attack_ratings: Dict[int, float] = {}   # α_i
-        self.defense_ratings: Dict[int, float] = {}  # β_j
-        self.avg_goals: float = 1.40
+    def __init__(self, decay_rate=0.005):
+        self.decay_rate = decay_rate
+        self.alpha = {}
+        self.beta = {}
+        self.gamma = 1.18 # home adv
+        self.avg_goals = 1.4
 
-    def fit_team_ratings(self, teams: List[Dict[str, Any]], past_fixtures: List[Dict[str, Any]]):
-        for t in teams:
-            tid = t["id"]
-            self.attack_ratings[tid] = 1.0
-            self.defense_ratings[tid] = 1.0
-
-        team_stats = {t["id"]: {"scored": 0, "conceded": 0, "matches": 0} for t in teams}
+    def fit_team_ratings(self, teams, past_fixtures, current_gw):
+        team_ids = [t['id'] for t in teams]
+        num_teams = len(team_ids)
         
+        match_data = []
         for f in past_fixtures:
-            if f.get("finished") and f.get("team_h_score") is not None and f.get("team_a_score") is not None:
-                h_id = f["team_h"]
-                a_id = f["team_a"]
-                h_goals = f["team_h_score"]
-                a_goals = f["team_a_score"]
-
-                if h_id in team_stats and a_id in team_stats:
-                    team_stats[h_id]["scored"] += h_goals
-                    team_stats[h_id]["conceded"] += a_goals
-                    team_stats[h_id]["matches"] += 1
-
-                    team_stats[a_id]["scored"] += a_goals
-                    team_stats[a_id]["conceded"] += h_goals
-                    team_stats[a_id]["matches"] += 1
-
-        total_goals = sum(s["scored"] for s in team_stats.values())
-        total_matches = sum(s["matches"] for s in team_stats.values())
-        if total_matches > 0:
-            self.avg_goals = max(1.0, (total_goals / total_matches))
-
-        for tid, s in team_stats.items():
-            if s["matches"] > 0:
-                avg_scored = s["scored"] / s["matches"]
-                avg_conceded = s["conceded"] / s["matches"]
+            if f.get("finished") and f.get("team_h_score") is not None:
+                gw_diff = max(0, current_gw - (f.get("event") or 1))
+                weight = math.exp(-self.decay_rate * gw_diff * 7)
+                match_data.append((f["team_h"], f["team_a"], f["team_h_score"], f["team_a_score"], weight))
                 
-                self.attack_ratings[tid] = round(max(0.4, min(2.2, avg_scored / self.avg_goals)), 3)
-                self.defense_ratings[tid] = round(max(0.4, min(2.2, avg_conceded / self.avg_goals)), 3)
+        if not match_data:
+            for tid in team_ids:
+                self.alpha[tid] = 1.0
+                self.beta[tid] = 1.0
+            return
 
-    def predict_match(self, player: Dict[str, Any], fixture: Dict[str, Any]) -> float:
-        """Dixon-Coles Component Prediction."""
+        def neg_log_likelihood(params):
+            alphas = {tid: params[i] for i, tid in enumerate(team_ids)}
+            betas = {tid: params[num_teams + i] for i, tid in enumerate(team_ids)}
+            gamma = params[2 * num_teams]
+            
+            nll = 0.0
+            for h, a, hg, ag, w in match_data:
+                lam = alphas[h] * betas[a] * gamma
+                mu = alphas[a] * betas[h]
+                ll_h = hg * math.log(max(lam, 1e-5)) - lam
+                ll_a = ag * math.log(max(mu, 1e-5)) - mu
+                nll -= w * (ll_h + ll_a)
+            
+            nll += 100 * (sum(alphas.values())/num_teams - 1.0)**2
+            nll += 100 * (sum(betas.values())/num_teams - 1.0)**2
+            return nll
+
+        init_params = [1.0] * (2 * num_teams) + [1.18]
+        bounds = [(0.1, 5.0)] * (2 * num_teams) + [(0.5, 2.0)]
+        
+        res = minimize(neg_log_likelihood, init_params, bounds=bounds, method="L-BFGS-B")
+        
+        for i, tid in enumerate(team_ids):
+            self.alpha[tid] = res.x[i]
+            self.beta[tid] = res.x[num_teams + i]
+        self.gamma = res.x[2 * num_teams]
+
+    def predict_match(self, player, fixture, xMin):
         element_type = player.get("element_type", POS_MID)
-        player_team_id = player.get("team")
-        is_home = (fixture.get("team_h") == player_team_id)
+        is_home = (fixture.get("team_h") == player.get("team"))
         
         home_id = fixture.get("team_h") if is_home else fixture.get("team_a")
         away_id = fixture.get("team_a") if is_home else fixture.get("team_h")
 
-        alpha_home = self.attack_ratings.get(home_id, 1.0)
-        beta_home = self.defense_ratings.get(home_id, 1.0)
-        alpha_away = self.attack_ratings.get(away_id, 1.0)
-        beta_away = self.defense_ratings.get(away_id, 1.0)
+        lam = self.alpha.get(home_id, 1.0) * self.beta.get(away_id, 1.0) * self.gamma
+        mu = self.alpha.get(away_id, 1.0) * self.beta.get(home_id, 1.0)
+        
+        p_cs = math.exp(-mu) if is_home else math.exp(-lam)
+        opp_xg = mu if is_home else lam
 
-        lambda_home = alpha_home * beta_away * self.home_adv * self.avg_goals
-        mu_away = alpha_away * beta_home * self.avg_goals
-
-        p_cs = math.exp(-mu_away) if is_home else math.exp(-lambda_home)
-        opp_xg = mu_away if is_home else lambda_home
-
-        xMin = float(calculate_expected_minutes(player))
-        if xMin <= 0:
-            return 0.0
         min_frac = xMin / 90.0
-
-        # Component xP
-        xApp = 2.0 if xMin >= 60 else (1.0 if xMin > 0 else 0.0)
         cs_pts = POINTS_CLEAN_SHEET.get(element_type, 0)
         xCS_pts = (p_cs * cs_pts * min_frac) if xMin >= 60 else 0.0
         xConc_penalty = (opp_xg / 2.0 * min_frac) if (element_type in [POS_GKP, POS_DEF] and xMin >= 60) else 0.0
@@ -101,144 +90,109 @@ class DixonColesModel:
         ppg = float(player.get("points_per_game", 0.0) or 0.0)
         xAttacking = (ppg * 0.4 * min_frac)
 
-        return round(max(xApp, xApp + xCS_pts + xAttacking - xConc_penalty), 2)
+        return round(max(0.0, xCS_pts + xAttacking - xConc_penalty), 2)
 
 
-# ==============================================================================
-# SUB-MODEL 2: 1D State-Space Kalman Filter (Dynamic Form & Minute Allocation)
-# ==============================================================================
 class KalmanFormFilter:
-    """
-    1D State-Space Kalman Filter for dynamic player underlying form (xG90, xA90).
-    """
-    def __init__(self, process_variance: float = 0.05, measurement_variance: float = 0.25):
-        self.Q = process_variance
-        self.R = measurement_variance
+    def __init__(self, Q=0.05, R=0.25):
+        self.Q = Q
+        self.R = R
 
-    def filter_series(self, observations: List[float], initial_estimate: Optional[float] = None) -> float:
-        if not observations:
-            return initial_estimate or 0.0
-
-        x_hat = initial_estimate if initial_estimate is not None else observations[0]
+    def filter_series(self, obs, initial):
+        x_hat = initial
         P = 1.0
-
-        for y in observations:
-            x_hat_minus = x_hat
+        for y in obs:
             P_minus = P + self.Q
             K = P_minus / (P_minus + self.R)
-            x_hat = x_hat_minus + K * (y - x_hat_minus)
+            x_hat = x_hat + K * (y - x_hat)
             P = (1 - K) * P_minus
+        return max(0.0, x_hat)
 
-        return round(max(0.0, x_hat), 3)
-
-    def predict_match(self, player: Dict[str, Any], fixture: Dict[str, Any]) -> float:
-        """Kalman Filter Form Component Prediction."""
-        raw_xg90 = float(player.get("expected_goals_per_90", 0.0) or 0.0)
-        raw_xa90 = float(player.get("expected_assists_per_90", 0.0) or 0.0)
+    def predict_match(self, player, history, xMin):
         element_type = player.get("element_type", POS_MID)
-
-        xMin = float(calculate_expected_minutes(player))
-        if xMin <= 0:
-            return 0.0
-        min_frac = xMin / 90.0
-
-        filtered_xg90 = self.filter_series([raw_xg90 * 0.8, raw_xg90 * 0.9, raw_xg90])
-        filtered_xa90 = self.filter_series([raw_xa90 * 0.8, raw_xa90 * 0.9, raw_xa90])
-
-        xApp = 2.0 if xMin >= 60 else (1.0 if xMin > 0 else 0.0)
-        goal_pts = POINTS_GOAL.get(element_type, 4)
-        xG_pts = filtered_xg90 * min_frac * goal_pts
-        xA_pts = filtered_xa90 * min_frac * POINTS_ASSIST
-
-        return round(max(xApp, xApp + xG_pts + xA_pts), 2)
-
-
-# ==============================================================================
-# SUB-MODEL 3: Gradient Boosted Feature Tree Model (Non-Linear Feature Interaction)
-# ==============================================================================
-class GradientBoostedTreeModel:
-    """
-    Feature Tree Model for non-linear player-fixture interactions (ICT index, ownership, FDR).
-    """
-    def predict_match(self, player: Dict[str, Any], fixture: Dict[str, Any]) -> float:
-        ict_index = float(player.get("ict_index", 0.0) or 0.0)
-        form = float(player.get("form", 0.0) or 0.0)
-        selected_by = float(player.get("selected_by_percent", 0.0) or 0.0)
         
-        is_home = (fixture.get("team_h") == player.get("team"))
-        fdr = fixture.get("team_h_difficulty") if not is_home else fixture.get("team_a_difficulty")
-        if fdr is None:
-            fdr = 3
+        xg_obs = [float(h.get("expected_goals", 0) or 0) for h in history]
+        xa_obs = [float(h.get("expected_assists", 0) or 0) for h in history]
+        
+        raw_xg90 = float(player.get("expected_goals_per_90", 0.0) or 0)
+        raw_xa90 = float(player.get("expected_assists_per_90", 0.0) or 0)
 
-        xMin = float(calculate_expected_minutes(player))
-        if xMin <= 0:
-            return 0.0
+        filt_xg = self.filter_series(xg_obs, raw_xg90)
+        filt_xa = self.filter_series(xa_obs, raw_xa90)
+        
         min_frac = xMin / 90.0
+        xG_pts = filt_xg * min_frac * POINTS_GOAL.get(element_type, 4)
+        xA_pts = filt_xa * min_frac * POINTS_ASSIST
 
-        # Feature interaction tree scoring
-        tree_score = (0.25 * form) + (0.15 * (ict_index / 10.0)) + (0.05 * math.log1p(selected_by))
-        fdr_mult = 1.25 if fdr == 1 else (1.10 if fdr == 2 else (1.0 if fdr == 3 else (0.85 if fdr == 4 else 0.70)))
-        venue_mult = 1.12 if is_home else 0.90
-
-        xApp = 2.0 if xMin >= 60 else (1.0 if xMin > 0 else 0.0)
-        final_xp = (xApp + tree_score) * fdr_mult * venue_mult * min_frac
-        return round(max(xApp, final_xp), 2)
+        return round(xG_pts + xA_pts, 2)
 
 
-# ==============================================================================
-# ENSEMBLE FORECASTER: Weighted Stacking & Blending Architecture
-# ==============================================================================
+class TrueGradientBoostedTree:
+    def __init__(self):
+        self.model = GradientBoostingRegressor(n_estimators=50, max_depth=3, random_state=42)
+        self.is_trained = False
+
+    def train(self, all_history):
+        X = []
+        y = []
+        for pid, history in all_history.items():
+            for h in history:
+                if h.get("minutes", 0) > 0:
+                    fdr = h.get("fixture_difficulty", 3)
+                    selected = h.get("selected", 0)
+                    bps = h.get("bps", 0)
+                    transfers_bal = h.get("transfers_balance", 0)
+                    X.append([fdr, math.log1p(max(0, selected)), bps, transfers_bal])
+                    y.append(h.get("total_points", 0))
+        
+        if len(X) > 50:
+            self.model.fit(X, y)
+            self.is_trained = True
+
+    def predict_match(self, player, fixture, xMin):
+        if not self.is_trained:
+            return 0.0
+            
+        fdr = fixture.get("team_h_difficulty") if fixture.get("team_a") == player.get("team") else fixture.get("team_a_difficulty")
+        if fdr is None: fdr = 3
+        selected = float(player.get("selected_by_percent", 0.0) or 0) * 100000
+        bps = float(player.get("bps", 0.0) or 0)
+        transfers_bal = float(player.get("transfers_in_event", 0) or 0) - float(player.get("transfers_out_event", 0) or 0)
+        
+        pred = self.model.predict([[fdr, math.log1p(max(0, selected)), bps, transfers_bal]])[0]
+        return round(max(0.0, pred * (xMin/90.0)), 2)
+
 class EnsembleForecaster:
-    """
-    Ensemble Forecaster that combines Dixon-Coles, Kalman State-Space,
-    and Gradient Boosted Feature Tree models using an optimized weighted stacking scheme.
-    """
-    def __init__(
-        self,
-        weight_dixon_coles: float = 0.317,
-        weight_kalman: float = 0.373,
-        weight_tree: float = 0.31
-    ):
-        self.w_dc = weight_dixon_coles
-        self.w_kf = weight_kalman
-        self.w_gt = weight_tree
+    def __init__(self):
+        self.w_dc = 0.35
+        self.w_kf = 0.40
+        self.w_gt = 0.25
+        self.dc = DixonColesModel()
+        self.kf = KalmanFormFilter()
+        self.gt = TrueGradientBoostedTree()
 
-        self.dc_model = DixonColesModel()
-        self.kf_model = KalmanFormFilter()
-        self.gt_model = GradientBoostedTreeModel()
-
-    def fit(self, teams: List[Dict[str, Any]], fixtures: List[Dict[str, Any]]):
-        """Fit sub-models on historic match data."""
-        self.dc_model.fit_team_ratings(teams, fixtures)
-
-    def predict_match_ensemble(self, player: Dict[str, Any], fixture: Dict[str, Any]) -> float:
-        """
-        Ensemble prediction blending predictions from all sub-models:
-        xP_ensemble = w_dc * xP_dc + w_kf * xP_kf + w_gt * xP_gt
-        """
-        xp_dc = self.dc_model.predict_match(player, fixture)
-        xp_kf = self.kf_model.predict_match(player, fixture)
-        xp_gt = self.gt_model.predict_match(player, fixture)
-
-        ensemble_xp = (self.w_dc * xp_dc) + (self.w_kf * xp_kf) + (self.w_gt * xp_gt)
-        return round(max(0.0, ensemble_xp), 2)
-
-
-# Global Ensemble Instance
-ensemble_engine = EnsembleForecaster()
-
+    def fit(self, teams, past_fixtures, current_gw, all_history):
+        self.dc.fit_team_ratings(teams, past_fixtures, current_gw)
+        self.gt.train(all_history)
+        
+    def predict(self, player, fixture, history, xMin):
+        if xMin <= 0: return 0.0
+        xApp = 2.0 if xMin >= 60 else (1.0 if xMin > 0 else 0.0)
+        
+        xp_dc = self.dc.predict_match(player, fixture, xMin)
+        xp_kf = self.kf.predict_match(player, history, xMin)
+        xp_gt = self.gt.predict_match(player, fixture, xMin)
+        
+        ensemble_xp = xApp + (self.w_dc * xp_dc) + (self.w_kf * xp_kf) + (self.w_gt * xp_gt)
+        return round(ensemble_xp, 2)
 
 def calculate_expected_minutes(player: Dict[str, Any]) -> float:
-    """Estimate player expected minutes (xMin) conditionally (IF they play)."""
     status = player.get("status", "a")
     if status in ["i", "s", "u"]:
         return 0.0
-
     form = float(player.get("form", 0.0) or 0.0)
     minutes = float(player.get("minutes", 0) or 0)
     cost = float(player.get("now_cost", 0) or 0)
-
-    # Early season fix: Premium players (>= £7.5m) and GW1 starters (>= 60 mins) are nailed on.
     if minutes > 500 or form > 3.0 or cost >= 75 or (minutes >= 60 and minutes < 500):
         base_mins = 82.0
     elif minutes > 200:
@@ -247,52 +201,46 @@ def calculate_expected_minutes(player: Dict[str, Any]) -> float:
         base_mins = 35.0
     else:
         base_mins = 15.0
-
     return round(base_mins, 1)
 
-
-def generate_xp_matrix(
-    horizon_gws: List[int],
-    bootstrap: Optional[Dict[str, Any]] = None,
-    fixtures: Optional[List[Dict[str, Any]]] = None
-) -> Dict[int, Dict[int, float]]:
-    """
-    Generate xP matrix across target gameweeks using EnsembleForecaster.
-    Returns: {player_id: {gw: xp_value}}
-    """
-    if bootstrap is None:
-        bootstrap = get_bootstrap_static()
-    if fixtures is None:
-        fixtures = get_fixtures()
-
+def generate_xp_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None) -> Dict[int, Dict[int, float]]:
+    if bootstrap is None: bootstrap = get_bootstrap_static()
+    if fixtures is None: fixtures = get_fixtures()
+    
     players = bootstrap.get("elements", [])
     teams = bootstrap.get("teams", [])
-
-    # Fit ensemble engine sub-models on match history
-    ensemble_engine.fit(teams, fixtures)
-
-    fixture_map: Dict[int, Dict[int, List[Dict[str, Any]]]] = {}
+    
+    current_gw = 1
+    for f in fixtures:
+        if f.get("finished"):
+            current_gw = max(current_gw, f.get("event") or 1)
+            
+    player_ids = [p["id"] for p in players]
+    logger.info(f"Fetching historical data for {len(player_ids)} players concurrently...")
+    summaries = get_all_element_summaries(player_ids)
+    
+    all_history = {pid: summaries.get(pid, {}).get("history", []) for pid in player_ids}
+    
+    ensemble = EnsembleForecaster()
+    past_fixtures = [f for f in fixtures if f.get("finished")]
+    ensemble.fit(teams, past_fixtures, current_gw, all_history)
+    
+    fixture_map = {}
     for fix in fixtures:
-        event = fix.get("event")
-        if event in horizon_gws:
-            fixture_map.setdefault(event, {})
-            h_team = fix.get("team_h")
-            a_team = fix.get("team_a")
-            fixture_map[event].setdefault(h_team, []).append(fix)
-            fixture_map[event].setdefault(a_team, []).append(fix)
+        if fix.get("event") in horizon_gws:
+            fixture_map.setdefault(fix["event"], {})
+            fixture_map[fix["event"]].setdefault(fix["team_h"], []).append(fix)
+            fixture_map[fix["event"]].setdefault(fix["team_a"], []).append(fix)
 
-    xp_matrix: Dict[int, Dict[int, float]] = {}
-
-    for player in players:
-        pid = player["id"]
-        team_id = player["team"]
+    xp_matrix = {}
+    for p in players:
+        pid = p["id"]
         xp_matrix[pid] = {}
-
-        # Parse availability & injury status
-        status = player.get("status", "a")
-        chance_playing = player.get("chance_of_playing_next_round")
+        history = all_history.get(pid, [])
+        xMin = calculate_expected_minutes(p)
         
-        # Determine availability multiplier (0.0 to 1.0)
+        status = p.get("status", "a")
+        chance_playing = p.get("chance_of_playing_next_round")
         if status in ["i", "s", "u"] or chance_playing == 0:
             avail_mult = 0.0
         elif chance_playing is not None:
@@ -301,30 +249,16 @@ def generate_xp_matrix(
             avail_mult = 1.0
 
         for gw in horizon_gws:
-            gw_fixtures = fixture_map.get(gw, {}).get(team_id, [])
-            if not gw_fixtures or avail_mult == 0.0:
+            gw_fixes = fixture_map.get(gw, {}).get(p["team"], [])
+            if not gw_fixes or avail_mult == 0.0:
                 xp_matrix[pid][gw] = 0.0
             else:
-                total_gw_xp = sum(
-                    ensemble_engine.predict_match_ensemble(player, fix)
-                    for fix in gw_fixtures
-                )
-                # Apply availability multiplier
-                xp_matrix[pid][gw] = round(total_gw_xp * avail_mult, 2)
-
+                total_xp = sum(ensemble.predict(p, f, history, xMin) for f in gw_fixes)
+                xp_matrix[pid][gw] = round(total_xp * avail_mult, 2)
+                
     return xp_matrix
 
-
 if __name__ == "__main__":
-    print("Testing Multi-Model Ensemble Forecasting Architecture...")
-    bs = get_bootstrap_static()
-    fx = get_fixtures()
-    gws = [1, 2]
-    
-    matrix = generate_xp_matrix(gws, bs, fx)
-    player_lookup = {p["id"]: p["web_name"] for p in bs["elements"]}
-
-    print("\nTop 5 Projected Players for GW1 (Ensemble Model):")
-    top_gw1 = sorted(matrix.items(), key=lambda item: item[1].get(1, 0.0), reverse=True)[:5]
-    for pid, gws_dict in top_gw1:
-        print(f" - {player_lookup.get(pid, pid)}: {gws_dict.get(1)} xP")
+    logging.basicConfig(level=logging.INFO)
+    mat = generate_xp_matrix([2])
+    print(list(mat.items())[:5])

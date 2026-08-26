@@ -45,6 +45,32 @@ def get_element_summary(player_id: int, use_cache: bool = True) -> Dict[str, Any
     url = f"{BASE_URL}element-summary/{player_id}/"
     return fetch_json(url, use_cache=use_cache)
 
+import asyncio
+import httpx
+
+async def _fetch_all_summaries_async(player_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+    async with httpx.AsyncClient(headers=HEADERS, timeout=20.0) as client:
+        sem = asyncio.Semaphore(50) # Prevent rate limiting
+        
+        async def fetch(pid):
+            async with sem:
+                url = f"{BASE_URL}element-summary/{pid}/"
+                try:
+                    resp = await client.get(url)
+                    resp.raise_for_status()
+                    return pid, resp.json()
+                except Exception as e:
+                    logger.error(f"Error async fetching summary for {pid}: {e}")
+                    return pid, {}
+
+        tasks = [fetch(pid) for pid in player_ids]
+        results = await asyncio.gather(*tasks)
+        return dict(results)
+
+def get_all_element_summaries(player_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+    """Fetch all element summaries concurrently in ~10 seconds."""
+    return asyncio.run(_fetch_all_summaries_async(player_ids))
+
 def get_manager_info(team_id: int) -> Dict[str, Any]:
     """Fetch manager overview, overall rank, and league memberships."""
     url = f"{BASE_URL}entry/{team_id}/"
