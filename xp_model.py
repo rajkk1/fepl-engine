@@ -111,8 +111,9 @@ class KalmanFormFilter:
     def predict_match(self, player, history, xMin):
         element_type = player.get("element_type", POS_MID)
         
-        xg_obs = [float(h.get("expected_goals", 0) or 0) for h in history]
-        xa_obs = [float(h.get("expected_assists", 0) or 0) for h in history]
+        # FIX: Convert per-match expected goals into per-90 rates so it matches the initial state units!
+        xg_obs = [float(h.get("expected_goals", 0) or 0) * 90 / max(1, h.get("minutes", 0)) for h in history if h.get("minutes", 0) > 0]
+        xa_obs = [float(h.get("expected_assists", 0) or 0) * 90 / max(1, h.get("minutes", 0)) for h in history if h.get("minutes", 0) > 0]
         
         raw_xg90 = float(player.get("expected_goals_per_90", 0.0) or 0)
         raw_xa90 = float(player.get("expected_assists_per_90", 0.0) or 0)
@@ -137,12 +138,14 @@ class TrueGradientBoostedTree:
         y = []
         for pid, history in all_history.items():
             for h in history:
-                if h.get("minutes", 0) > 0:
-                    fdr = h.get("fixture_difficulty", 3)
-                    selected = h.get("selected", 0)
-                    bps = h.get("bps", 0)
+                # FIX: Only train on matches where they started (minutes > 60) so the model predicts "Points if starting". 
+                # This prevents double-shrinking when we multiply by xMin/90 later.
+                if h.get("minutes", 0) > 60:
+                    # FIX: Dropped FDR and BPS. FDR belongs to Dixon-Coles. BPS has scale mismatch.
+                    # We will just train on transfers_balance and value to capture "wisdom of the crowds".
+                    value = h.get("value", 50)
                     transfers_bal = h.get("transfers_balance", 0)
-                    X.append([fdr, math.log1p(max(0, selected)), bps, transfers_bal])
+                    X.append([value, transfers_bal])
                     y.append(h.get("total_points", 0))
         
         if len(X) > 50:
@@ -153,13 +156,13 @@ class TrueGradientBoostedTree:
         if not self.is_trained:
             return 0.0
             
-        fdr = fixture.get("team_h_difficulty") if fixture.get("team_a") == player.get("team") else fixture.get("team_a_difficulty")
-        if fdr is None: fdr = 3
-        selected = float(player.get("selected_by_percent", 0.0) or 0) * 100000
-        bps = float(player.get("bps", 0.0) or 0)
+        value = float(player.get("now_cost", 50) or 50)
         transfers_bal = float(player.get("transfers_in_event", 0) or 0) - float(player.get("transfers_out_event", 0) or 0)
         
-        pred = self.model.predict([[fdr, math.log1p(max(0, selected)), bps, transfers_bal]])[0]
+        # Predict points assuming 90 minutes played
+        pred = self.model.predict([[value, transfers_bal]])[0]
+        
+        # Scale by actual expected minutes
         return round(max(0.0, pred * (xMin/90.0)), 2)
 
 class EnsembleForecaster:
