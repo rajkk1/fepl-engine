@@ -219,7 +219,7 @@ class EnsembleForecaster:
         ensemble_xp = xApp + (self.w_dc * xp_dc) + (self.w_kf * xp_kf) + (self.w_gt * xp_gt)
         return round(ensemble_xp, 2)
 
-def calculate_expected_minutes(player: Dict[str, Any], current_gw: int = 1) -> float:
+def calculate_expected_minutes(player: Dict[str, Any], current_gw: int = 1, history: List[Dict] = None) -> float:
     status = player.get("status", "a")
     chance = player.get("chance_of_playing_next_round")
     if status in ["i", "s", "u"] or chance == 0:
@@ -244,6 +244,18 @@ def calculate_expected_minutes(player: Dict[str, Any], current_gw: int = 1) -> f
         base_mins = 35.0
     else:
         base_mins = 15.0
+        
+    # #5. Continuous xMin Model: Calculate EMA of recent minutes
+    if history and len(history) > 0:
+        alpha = 0.3
+        ema = float(history[0].get("minutes", 0))
+        for h in history[1:]:
+            ema = (alpha * float(h.get("minutes", 0))) + ((1 - alpha) * ema)
+            
+        # Blend 70% EMA with 30% bucket baseline. 
+        # This protects premium players returning from injury who would otherwise have an EMA of 0.
+        base_mins = (ema * 0.7) + (base_mins * 0.3)
+        
     return round(base_mins * avail_mult, 1)
 
 def generate_xp_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None, all_history=None) -> Dict[int, Dict[int, float]]:
@@ -281,7 +293,7 @@ def generate_xp_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None, al
         pid = p["id"]
         xp_matrix[pid] = {}
         history = all_history.get(pid, [])
-        xMin = calculate_expected_minutes(p, current_gw)
+        xMin = calculate_expected_minutes(p, current_gw, history)
 
         for gw in horizon_gws:
             gw_fixes = fixture_map.get(gw, {}).get(p["team"], [])
