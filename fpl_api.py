@@ -55,21 +55,35 @@ async def _fetch_all_summaries_async(player_ids: List[int]) -> Dict[int, Dict[st
         async def fetch(pid):
             async with sem:
                 url = f"{BASE_URL}element-summary/{pid}/"
-                try:
-                    resp = await client.get(url)
-                    resp.raise_for_status()
-                    return pid, resp.json()
-                except Exception as e:
-                    logger.error(f"Error async fetching summary for {pid}: {e}")
-                    return pid, {}
+                for attempt in range(5):
+                    try:
+                        resp = await client.get(url)
+                        if resp.status_code == 429:
+                            await asyncio.sleep((2 ** attempt) + 1)
+                            continue
+                        resp.raise_for_status()
+                        return pid, resp.json()
+                    except Exception as e:
+                        if attempt < 4:
+                            await asyncio.sleep((2 ** attempt) + 1)
+                            continue
+                        logger.error(f"Error async fetching summary for {pid}: {e}")
+                        return pid, {}
 
         tasks = [fetch(pid) for pid in player_ids]
         results = await asyncio.gather(*tasks)
         return dict(results)
 
 def get_all_element_summaries(player_ids: List[int]) -> Dict[int, Dict[str, Any]]:
-    """Fetch all element summaries concurrently in ~10 seconds."""
-    return asyncio.run(_fetch_all_summaries_async(player_ids))
+    """Fetch all element summaries concurrently in ~10 seconds with exponential backoff."""
+    results = asyncio.run(_fetch_all_summaries_async(player_ids))
+    
+    # E-02: Hard failure if coverage drops below 95% due to rate limits
+    valid_count = sum(1 for data in results.values() if data)
+    if valid_count < len(player_ids) * 0.95:
+        raise RuntimeError(f"FPL API heavily rate-limited! Only fetched {valid_count}/{len(player_ids)} summaries.")
+        
+    return results
 
 def get_manager_info(team_id: int) -> Dict[str, Any]:
     """Fetch manager overview, overall rank, and league memberships."""
