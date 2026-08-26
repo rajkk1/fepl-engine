@@ -73,13 +73,15 @@ def solve_fpl_optimization(
     
     for t in gws:
         hits[t] = pulp.LpVariable(f"hits_{t}", lowBound=0, cat=pulp.LpInteger)
-        ft_carried[t] = pulp.LpVariable(f"ft_carried_{t}", lowBound=0, upBound=4, cat=pulp.LpInteger)
+        # O-04: Free transfers bank up to 5
+        ft_carried[t] = pulp.LpVariable(f"ft_carried_{t}", lowBound=0, upBound=5, cat=pulp.LpInteger)
         bank[t] = pulp.LpVariable(f"bank_{t}", lowBound=0, cat=pulp.LpContinuous)
         
         for pid in player_ids:
             s[pid, t] = pulp.LpVariable(f"s_{pid}_{t}", cat=pulp.LpBinary)
             x[pid, t] = pulp.LpVariable(f"x_{pid}_{t}", cat=pulp.LpBinary)
             c[pid, t] = pulp.LpVariable(f"c_{pid}_{t}", cat=pulp.LpBinary)
+            vc[pid, t] = pulp.LpVariable(f"vc_{pid}_{t}", cat=pulp.LpBinary)
             tin[pid, t] = pulp.LpVariable(f"tin_{pid}_{t}", cat=pulp.LpBinary)
             tout[pid, t] = pulp.LpVariable(f"tout_{pid}_{t}", cat=pulp.LpBinary)
 
@@ -87,17 +89,22 @@ def solve_fpl_optimization(
     obj_terms = []
 
     for idx, t in enumerate(gws):
-        # Chips only apply to the current target gameweek (the first week in the horizon)
         is_chip_active_now = (active_chip is not None and idx == 0)
         
-        tc_mult = 2.0 if (is_chip_active_now and active_chip == "tc") else 1.0  # Extra 2x for Triple Captain (total 3x)
-        b_weight = 1.0 if (is_chip_active_now and active_chip == "bb") else bench_weight  # Full 1.0 weight for Bench Boost
+        tc_mult = 2.0 if (is_chip_active_now and active_chip == "tc") else 1.0
+        # O-07: Drop arbitrary bench weighting unless Bench Boost is active
+        b_weight = 1.0 if (is_chip_active_now and active_chip == "bb") else 0.0
 
         for pid in player_ids:
             xp_val = xp_matrix.get(pid, {}).get(t, 0.0)
-            # Starter xP + Captain bonus (1x or 2x for TC) + Bench weight (0.10 or 1.0 for BB)
+            
+            # Starter xP + Captain bonus (1x or 2x for TC)
             obj_terms.append(x[pid, t] * xp_val)
             obj_terms.append(c[pid, t] * (xp_val * tc_mult))
+            
+            # M-07/O-07: Model vice captaincy risk (~10% chance captain doesn't play)
+            obj_terms.append(vc[pid, t] * (xp_val * 0.10 * tc_mult))
+            
             obj_terms.append((s[pid, t] - x[pid, t]) * (xp_val * b_weight))
         
         # Subtract hit penalties (-4 points per hit, 0 if Wildcard/Free Hit chip active)
@@ -163,10 +170,13 @@ def solve_fpl_optimization(
         for pid in player_ids:
             prob += x[pid, t] <= s[pid, t], f"Starter_In_Squad_{pid}_{t}"
 
-        # 4. Captain
+        # 4. Captain and Vice Captain
         prob += pulp.lpSum([c[pid, t] for pid in player_ids]) == 1, f"Captain_Count_{t}"
+        prob += pulp.lpSum([vc[pid, t] for pid in player_ids]) == 1, f"ViceCaptain_Count_{t}"
         for pid in player_ids:
             prob += c[pid, t] <= x[pid, t], f"Captain_Is_Starter_{pid}_{t}"
+            prob += vc[pid, t] <= x[pid, t], f"ViceCaptain_Is_Starter_{pid}_{t}"
+            prob += c[pid, t] + vc[pid, t] <= 1, f"Captain_Not_VC_{pid}_{t}"
 
         # 5. User Locks and Bans
         for pid in locked_set:
@@ -237,37 +247,23 @@ def solve_fpl_optimization(
             c_val = pulp.value(c[pid, t]) or 0
 
             if s_val > 0.5:
+                vc_val = pulp.value(vc[pid, t]) or 0
+                
                 p_info = {
                     "id": pid,
                     "web_name": player_dict[pid]["web_name"],
                     "element_type": element_type[pid],
                     "team": team_id[pid],
                     "cost": now_cost[pid],
-                    "xp": xp_matrix.get(pid, {}).get(t, 0.0)
+                    "xp": xp_matrix.get(pid, {}).get(t, 0.0),
+                    "is_captain": bool(c_val > 0.5),
+                    "is_vice_captain": bool(vc_val > 0.5)
                 }
-                
-                if c_val > 0.5:
-                    captain_id = pid
-                    p_info["is_captain"] = True
-                else:
-                    p_info["is_captain"] = False
 
                 if x_val > 0.5:
                     starters.append(p_info)
                 else:
                     bench.append(p_info)
-
-        # Assign Vice-Captain to the highest xP player who is not the Captain
-        sorted_starters = sorted(starters, key=lambda item: item.get("xp", 0.0), reverse=True)
-        if sorted_starters:
-            top_vc = None
-            for p in sorted_starters:
-                if not p.get("is_captain"):
-                    top_vc = p["id"]
-                    break
-            
-            for p in starters:
-                p["is_vice_captain"] = (p["id"] == top_vc)
 
         transfers_in = [
             {"id": pid, "web_name": player_dict[pid]["web_name"], "cost": now_cost[pid]}

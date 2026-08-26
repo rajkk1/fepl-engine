@@ -37,7 +37,7 @@ def print_separator(char="=", length=70):
 def main():
     load_dotenv()
     parser = argparse.ArgumentParser(description="FEPL Weekly Action Plan CLI")
-    parser.add_argument("--team", type=int, help="Your FPL Team ID", default=os.getenv("FPL_TEAM_ID", 4309239))
+    parser.add_argument("--team", type=int, required=True, help="Your FPL Team ID (required)")
     parser.add_argument("--horizon", type=int, default=5, help="Planning horizon in gameweeks (default: 5)")
     parser.add_argument("--chip", type=str, default="", help="Chip to activate: wc, fh, tc, bb")
     parser.add_argument("--ft", type=int, default=None, help="Number of free transfers currently available. Defaults to 1.")
