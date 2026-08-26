@@ -189,16 +189,19 @@ class EnsembleForecaster:
         ensemble_xp = xApp + (self.w_dc * xp_dc) + (self.w_kf * xp_kf) + (self.w_gt * xp_gt)
         return round(ensemble_xp, 2)
 
-def calculate_expected_minutes(player: Dict[str, Any]) -> float:
+def calculate_expected_minutes(player: Dict[str, Any], current_gw: int = 1) -> float:
     status = player.get("status", "a")
     if status in ["i", "s", "u"]:
         return 0.0
     form = float(player.get("form", 0.0) or 0.0)
     minutes = float(player.get("minutes", 0) or 0)
     cost = float(player.get("now_cost", 0) or 0)
-    if minutes > 500 or form > 3.0 or cost >= 75 or (minutes >= 60 and minutes < 500):
+    
+    avg_mins = minutes / max(1, current_gw)
+    
+    if avg_mins >= 60 or form > 3.0 or cost >= 75:
         base_mins = 82.0
-    elif minutes > 200:
+    elif avg_mins >= 30:
         base_mins = 60.0
     elif minutes > 0:
         base_mins = 35.0
@@ -240,7 +243,7 @@ def generate_xp_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None) ->
         pid = p["id"]
         xp_matrix[pid] = {}
         history = all_history.get(pid, [])
-        xMin = calculate_expected_minutes(p)
+        xMin = calculate_expected_minutes(p, current_gw)
         
         status = p.get("status", "a")
         chance_playing = p.get("chance_of_playing_next_round")
