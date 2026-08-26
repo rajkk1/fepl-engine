@@ -210,7 +210,8 @@ def solve_fpl_optimization(
             prob += hits[t] <= max_hits_per_gw, f"Max_Hits_{t}"
 
     # Solve the model using default PuLP solver (PULP_CBC_CMD)
-    solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=60, gapRel=0.01)
+    # Give the solver up to 5 minutes to find the optimal transfer sequence
+    solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=300, gapRel=0.01)
     status = prob.solve(solver)
     status_str = pulp.LpStatus[status]
 
