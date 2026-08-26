@@ -586,6 +586,11 @@ dependencies = [
     { name = "understat" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.15.0" },
@@ -598,6 +603,9 @@ requires-dist = [
     { name = "scipy", specifier = ">=1.15.3" },
     { name = "understat", specifier = ">=0.1.4" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.1.1" }]
 
 [[package]]
 name = "frozenlist"

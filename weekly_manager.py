@@ -18,18 +18,23 @@ sys.stdout.reconfigure(encoding='utf-8')
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 def get_manager_team_state(team_id: int, current_gw: int):
-    """Attempt to fetch manager's latest team state and bank balance."""
+    """Attempt to fetch manager's latest team state, bank balance, and selling prices."""
     try:
         picks_data = fpl_api.get_manager_picks(team_id, current_gw - 1 if current_gw > 1 else 1)
         squad_ids = [p["element"] for p in picks_data.get("picks", [])]
         bank = picks_data.get("entry_history", {}).get("bank", 0) / 10.0
-        # Simple heuristic: if it's GW1, unlimited transfers. Otherwise, assume 1 free transfer for now.
-        # FPL API doesn't expose rolled transfers easily on public endpoints without auth, so we default to 1 FT.
+        
+        # O-05: Track actual selling prices instead of assuming now_cost
+        sell_prices = {}
+        for p in picks_data.get("picks", []):
+            if "selling_price" in p:
+                sell_prices[p["element"]] = p["selling_price"] / 10.0
+                
         ft = 100 if current_gw == 1 else 1
-        return squad_ids, bank, ft
+        return squad_ids, bank, ft, sell_prices
     except Exception:
         # Pre-season or no team found
-        return None, 100.0, 100
+        return None, 100.0, 100, {}
 
 def print_separator(char="=", length=70):
     print(char * length)
@@ -67,16 +72,14 @@ def main():
     print(f"🗓️  Current Target Gameweek: GW{current_gw}")
     
     # Get Manager State
-    squad_ids, bank, default_ft = get_manager_team_state(team_id, current_gw)
+    squad_ids, bank, default_ft, sell_prices = get_manager_team_state(team_id, current_gw)
     ft = args.ft if args.ft is not None else default_ft
     
     if squad_ids:
         print(f"💰 Current Bank: £{bank:.1f}m | Free Transfers: {ft if ft < 100 else 'Unlimited (Wildcard/Pre-season)'}")
     else:
-        print(f"💰 Pre-season mode detected. Initial Budget: £100.0m | Unlimited Transfers")
-        bank = 0.0
+        print(f"⚠️ No active squad found (Assuming Pre-season/Wildcard state)")
         ft = 100
-        squad_ids = None
 
     print()
     print(f"⏳ Generating Expected Points (xP) for GW{current_gw} to GW{current_gw + args.horizon - 1}...")
@@ -95,6 +98,7 @@ def main():
         base_res = solve_fpl_optimization(
             bootstrap=bootstrap, xp_matrix=xp_matrix, horizon_gws=horizon_gws, 
             initial_squad_ids=squad_ids, initial_bank=bank, initial_ft=ft, 
+            initial_sell_prices=sell_prices,
             max_hits_per_gw=2, active_chip=None
         )
         base_xp = base_res.get("total_xp", 0.0)
@@ -107,6 +111,7 @@ def main():
             c_res = solve_fpl_optimization(
                 bootstrap=bootstrap, xp_matrix=xp_matrix, horizon_gws=horizon_gws, 
                 initial_squad_ids=squad_ids, initial_bank=bank, initial_ft=ft, 
+                initial_sell_prices=sell_prices,
                 max_hits_per_gw=2, active_chip=c
             )
             c_xp = c_res.get("total_xp", 0.0)
@@ -129,6 +134,7 @@ def main():
         res = solve_fpl_optimization(
             bootstrap=bootstrap, xp_matrix=xp_matrix, horizon_gws=horizon_gws, 
             initial_squad_ids=squad_ids, initial_bank=bank, initial_ft=ft, 
+            initial_sell_prices=sell_prices,
             max_hits_per_gw=2, active_chip=active_chip
         )
 

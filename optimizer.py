@@ -16,6 +16,7 @@ def solve_fpl_optimization(
     initial_squad_ids: Optional[List[int]] = None,
     initial_bank: float = 0.0,
     initial_ft: int = 1,
+    initial_sell_prices: Optional[Dict[int, float]] = None,
     locked_player_ids: Optional[List[int]] = None,
     banned_player_ids: Optional[List[int]] = None,
     max_hits_per_gw: int = 2,
@@ -37,6 +38,14 @@ def solve_fpl_optimization(
     
     # Prices (FPL API prices are stored multiplied by 10 e.g. 100 = £10.0m)
     now_cost = {pid: player_dict[pid]["now_cost"] / 10.0 for pid in player_ids}
+    
+    # O-05: Selling price differs from now_cost if player was bought cheaper and rose
+    sell_cost = {pid: now_cost[pid] for pid in player_ids}
+    if initial_sell_prices:
+        for pid, sp in initial_sell_prices.items():
+            if pid in sell_cost:
+                sell_cost[pid] = sp
+
     element_type = {pid: player_dict[pid]["element_type"] for pid in player_ids}
     team_id = {pid: player_dict[pid]["team"] for pid in player_ids}
 
@@ -63,6 +72,7 @@ def solve_fpl_optimization(
     s = {}
     x = {}
     c = {}
+    vc = {}
     tin = {}
     tout = {}
     hits = {}
@@ -132,8 +142,8 @@ def solve_fpl_optimization(
             in_initial = 1 if pid in initial_set else 0
             prob += s[pid, first_gw] == in_initial + tin[pid, first_gw] - tout[pid, first_gw], f"Init_Trans_{pid}_{first_gw}"
         
-        # Initial Bank equation
-        prob += bank[first_gw] == initial_bank + pulp.lpSum([tout[pid, first_gw] * now_cost[pid] for pid in player_ids]) - pulp.lpSum([tin[pid, first_gw] * now_cost[pid] for pid in player_ids]), f"Bank_{first_gw}"
+        # Initial Bank equation (O-05: Use sell_cost for transfers out)
+        prob += bank[first_gw] == initial_bank + pulp.lpSum([tout[pid, first_gw] * sell_cost[pid] for pid in player_ids]) - pulp.lpSum([tin[pid, first_gw] * now_cost[pid] for pid in player_ids]), f"Bank_{first_gw}"
         
         # FT Rollover math for first GW
         if active_chip in ["wc", "fh"]:
@@ -196,8 +206,8 @@ def solve_fpl_optimization(
                     in_initial = 1 if pid in set(initial_squad_ids) else 0
                     prob += s[pid, t] == in_initial + tin[pid, t] - tout[pid, t], f"Trans_{pid}_{t}"
                 
-                # Bank balance also reverts to initial
-                prob += bank[t] == initial_bank + pulp.lpSum([tout[pid, t] * now_cost[pid] for pid in player_ids]) - pulp.lpSum([tin[pid, t] * now_cost[pid] for pid in player_ids]), f"Bank_Cont_{t}"
+                # Bank balance also reverts to initial (O-05)
+                prob += bank[t] == initial_bank + pulp.lpSum([tout[pid, t] * sell_cost[pid] for pid in player_ids]) - pulp.lpSum([tin[pid, t] * now_cost[pid] for pid in player_ids]), f"Bank_Cont_{t}"
                 
                 # FT math operates normally, assuming 1 FT carried over from the FH week
                 num_transfers = pulp.lpSum([tin[pid, t] for pid in player_ids])
@@ -206,8 +216,8 @@ def solve_fpl_optimization(
                 for pid in player_ids:
                     prob += s[pid, t] == s[pid, prev_t] + tin[pid, t] - tout[pid, t], f"Trans_{pid}_{t}"
                 
-                # Bank balance continuity
-                prob += bank[t] == bank[prev_t] + pulp.lpSum([tout[pid, t] * now_cost[pid] for pid in player_ids]) - pulp.lpSum([tin[pid, t] * now_cost[pid] for pid in player_ids]), f"Bank_Cont_{t}"
+                # Bank balance continuity (O-05)
+                prob += bank[t] == bank[prev_t] + pulp.lpSum([tout[pid, t] * sell_cost[pid] for pid in player_ids]) - pulp.lpSum([tin[pid, t] * now_cost[pid] for pid in player_ids]), f"Bank_Cont_{t}"
                 
                 # FT Rollover math for subsequent GWs
                 num_transfers = pulp.lpSum([tin[pid, t] for pid in player_ids])
