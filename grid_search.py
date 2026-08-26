@@ -1,9 +1,17 @@
 import logging
 import time
+import concurrent.futures
+from functools import partial
 from backtest import fetch_data, run_backtest
+import multiprocessing
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
+
+def evaluate_combination(weights, df_gw, df_players, df_teams, df_fixtures):
+    """Worker function for multiprocessing."""
+    mae = run_backtest(weights=weights, df_gw=df_gw, df_players=df_players, df_teams=df_teams, df_fixtures=df_fixtures)
+    return weights, mae
 
 def run_grid_search():
     logger.info("==========================================")
@@ -17,37 +25,44 @@ def run_grid_search():
         logger.error(f"Failed to fetch data: {e}")
         return
 
-    logger.info("Data loaded. Starting grid search...\n")
-
-    best_mae = 999.0
-    best_weights = None
-    results = []
+    logger.info("Data loaded. Generating combinations...\n")
 
     # Iterate over Dixon-Coles, Kalman, and GBT weights in steps of 0.10
     steps = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-    
-    total_combinations = 0
-    
-    start_time = time.time()
+    combinations = []
 
     for w_dc in steps:
         for w_kf in steps:
             w_gt = round(1.0 - w_dc - w_kf, 2)
             # Ensure the weights sum exactly to 1.0 and are all positive
             if w_gt >= 0.0 and abs((w_dc + w_kf + w_gt) - 1.0) < 0.01:
-                total_combinations += 1
-                weights = (w_dc, w_kf, w_gt)
-                
-                # Run the backtester silently using the pre-loaded data
-                mae = run_backtest(weights=weights, df_gw=df_gw, df_players=df_players, df_teams=df_teams, df_fixtures=df_fixtures)
-                
-                results.append((weights, mae))
-                
+                combinations.append((w_dc, w_kf, w_gt))
+    
+    total_combinations = len(combinations)
+    num_cores = multiprocessing.cpu_count()
+    logger.info(f"Firing up {num_cores} CPU cores to process {total_combinations} combinations in parallel!\n")
+
+    start_time = time.time()
+    best_mae = 999.0
+    best_weights = None
+
+    # Use partial to bind the dataframe arguments so map() only needs to pass the weights
+    worker = partial(evaluate_combination, df_gw=df_gw, df_players=df_players, df_teams=df_teams, df_fixtures=df_fixtures)
+
+    with concurrent.futures.ProcessPoolExecutor(max_workers=num_cores) as executor:
+        # Submit all tasks and process as they complete
+        futures = {executor.submit(worker, w): w for w in combinations}
+        
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                weights, mae = future.result()
+                w_dc, w_kf, w_gt = weights
                 logger.info(f"Tested Weights (DC={w_dc:.2f}, KF={w_kf:.2f}, GT={w_gt:.2f}) -> MAE: {mae:.3f}")
-                
                 if mae < best_mae:
                     best_mae = mae
                     best_weights = weights
+            except Exception as exc:
+                logger.error(f"A combination generated an exception: {exc}")
 
     elapsed = time.time() - start_time
     logger.info("\n==========================================")
