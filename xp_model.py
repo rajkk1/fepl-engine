@@ -31,13 +31,12 @@ class DixonColesModel:
         for f in past_fixtures:
             if f.get("finished") and f.get("team_h_score") is not None:
                 gw_diff = max(0, current_gw - (f.get("event") or 1))
-                weight = math.exp(-self.decay_rate * gw_diff * 7)
-                match_data.append((f["team_h"], f["team_a"], f["team_h_score"], f["team_a_score"], weight))
+                match_data.append((f["team_h"], f["team_a"], f["team_h_score"], f["team_a_score"], gw_diff))
                 
         if not match_data:
             for tid in team_ids:
-                self.alpha[tid] = 1.0
-                self.beta[tid] = 1.0
+                self.alpha[tid] = 0.0
+                self.beta[tid] = 0.0
             return
 
         def neg_log_likelihood(params):
@@ -45,11 +44,13 @@ class DixonColesModel:
             betas = {tid: params[num_teams + i] for i, tid in enumerate(team_ids)}
             gamma = params[2 * num_teams]
             rho = params[2 * num_teams + 1]
+            decay = params[2 * num_teams + 2]
             
             nll = 0.0
-            for h, a, hg, ag, w in match_data:
-                lam = alphas[h] * betas[a] * gamma
-                mu = alphas[a] * betas[h]
+            for h, a, hg, ag, gw_diff in match_data:
+                w = math.exp(-decay * gw_diff * 7)
+                lam = math.exp(alphas[h] - betas[a] + gamma)
+                mu = math.exp(alphas[a] - betas[h])
                 ll_h = hg * math.log(max(lam, 1e-5)) - lam
                 ll_a = ag * math.log(max(mu, 1e-5)) - mu
                 
@@ -62,12 +63,15 @@ class DixonColesModel:
                 
                 nll -= w * (ll_h + ll_a + math.log(max(tau, 1e-10)))
             
-            nll += 100 * (sum(alphas.values())/num_teams - 1.0)**2
-            nll += 100 * (sum(betas.values())/num_teams - 1.0)**2
+            # M-06: Sum-to-zero identification and soft prior shrinkage
+            nll += 100 * (sum(alphas.values()))**2
+            nll += 100 * (sum(betas.values()))**2
+            nll += 10 * sum([a**2 for a in alphas.values()])
+            nll += 10 * sum([b**2 for b in betas.values()])
             return nll
 
-        init_params = [1.0] * (2 * num_teams) + [1.18, 0.0]
-        bounds = [(0.1, 3.0)] * (2 * num_teams) + [(0.5, 2.0), (-0.2, 0.2)]
+        init_params = [0.0] * (2 * num_teams) + [0.2, 0.0, 0.005]
+        bounds = [(-2.0, 2.0)] * (2 * num_teams) + [(0.0, 1.0), (-0.2, 0.2), (0.001, 0.05)]
         
         res = minimize(neg_log_likelihood, init_params, bounds=bounds, method='L-BFGS-B')
         
@@ -83,8 +87,8 @@ class DixonColesModel:
         home_id = fixture.get("team_h") if is_home else fixture.get("team_a")
         away_id = fixture.get("team_a") if is_home else fixture.get("team_h")
 
-        lam = self.alpha.get(home_id, 1.0) * self.beta.get(away_id, 1.0) * self.gamma
-        mu = self.alpha.get(away_id, 1.0) * self.beta.get(home_id, 1.0)
+        lam = math.exp(self.alpha.get(home_id, 0.0) - self.beta.get(away_id, 0.0) + self.gamma)
+        mu = math.exp(self.alpha.get(away_id, 0.0) - self.beta.get(home_id, 0.0))
         
         team_xg = lam if is_home else mu
         opp_xg = mu if is_home else lam
@@ -95,7 +99,7 @@ class DixonColesModel:
         player_xa90 = float(player.get("expected_assists_per_90", 0.0) or 0)
         
         # M-05: Divide by the player's own team's baseline xG so strong teams aren't double-counted
-        team_baseline = self.alpha.get(player.get("team"), 1.0) * 1.4
+        team_baseline = math.exp(self.alpha.get(player.get("team"), 0.0)) * 1.4
         
         player_match_xg = player_xg90 * (team_xg / team_baseline)
         player_match_xa = player_xa90 * (team_xg / team_baseline)
@@ -103,11 +107,15 @@ class DixonColesModel:
         if player.get("penalties_order") == 1:
             player_match_xg += 0.11
             
+        # M-08: Add Defensive Contribution Points (DefCon) based on position
+        xDefCon = 0.6 if element_type == POS_DEF else (0.4 if element_type == POS_MID else 0.0)
+            
         return {
             "xg": player_match_xg,
             "xa": player_match_xa,
             "p_cs": p_cs,
-            "opp_xg": opp_xg
+            "opp_xg": opp_xg,
+            "xDefCon": xDefCon
         }
 
 class KalmanFormFilter:
@@ -219,8 +227,8 @@ class TrueGradientBoostedTree:
 class EnsembleForecaster:
     def __init__(self, weights: tuple = None):
         if weights is None:
-            # Optimal weights discovered via Grid Search (MAE: 2.33)
-            weights = (0.40, 0.60, 0.00)
+            # Optimal leak-free weights discovered via Grid Search (MAE: 2.41)
+            weights = (0.70, 0.10, 0.20)
         self.w_dc, self.w_kf, self.w_gt = weights
         self.dc = DixonColesModel()
         self.kf = KalmanFormFilter()
@@ -249,11 +257,13 @@ class EnsembleForecaster:
         xa = (self.w_dc * dc_res["xa"]) + (self.w_kf * kf_res["xa"])
         p_cs = dc_res["p_cs"]
         opp_xg = dc_res["opp_xg"]
+        xDefCon = dc_res.get("xDefCon", 0.0)
         
         # Scale attacking returns by the probability of being on the pitch
         min_frac = xMin / 90.0
         xg *= min_frac
         xa *= min_frac
+        xDefCon *= min_frac
         
         element_type = player.get("element_type", POS_MID)
         
@@ -267,7 +277,7 @@ class EnsembleForecaster:
         xSaves = (opp_xg * 0.7 * min_frac) if element_type == POS_GKP else 0.0
         xBonus = (xg * 1.5) + (xa * 1.0) + (p_cs * 0.2 * p_60)
         
-        math_pts = xApp + xCS_pts + xG_pts + xA_pts + xSaves + xBonus - xConc_penalty
+        math_pts = xApp + xCS_pts + xG_pts + xA_pts + xSaves + xBonus + xDefCon - xConc_penalty
         
         # GBT is a monolithic black box that predicts total points directly
         gt_pts = self.gt.predict_match(player, fixture, history) * min_frac
