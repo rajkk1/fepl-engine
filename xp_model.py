@@ -77,18 +77,35 @@ class DixonColesModel:
         lam = self.alpha.get(home_id, 1.0) * self.beta.get(away_id, 1.0) * self.gamma
         mu = self.alpha.get(away_id, 1.0) * self.beta.get(home_id, 1.0)
         
-        p_cs = math.exp(-mu) if is_home else math.exp(-lam)
+        team_xg = lam if is_home else mu
         opp_xg = mu if is_home else lam
+        
+        p_cs = math.exp(-opp_xg)
 
         min_frac = xMin / 90.0
         cs_pts = POINTS_CLEAN_SHEET.get(element_type, 0)
         xCS_pts = (p_cs * cs_pts * min_frac) if xMin >= 60 else 0.0
         xConc_penalty = (opp_xg / 2.0 * min_frac) if (element_type in [POS_GKP, POS_DEF] and xMin >= 60) else 0.0
 
-        ppg = float(player.get("points_per_game", 0.0) or 0.0)
-        xAttacking = (ppg * 0.4 * min_frac)
+        # 1. Fixture-Adjusted Attacking xP (Allocate team xG to player based on historical share)
+        player_xg90 = float(player.get("expected_goals_per_90", 0.0) or 0)
+        player_xa90 = float(player.get("expected_assists_per_90", 0.0) or 0)
+        
+        # Assuming average PL team scores ~1.5 goals per match
+        player_match_xg = (player_xg90 / 1.5) * team_xg * min_frac
+        player_match_xa = (player_xa90 / 1.5) * team_xg * min_frac
+        
+        xG_pts = player_match_xg * POINTS_GOAL.get(element_type, 4)
+        xA_pts = player_match_xa * POINTS_ASSIST
+        
+        # 2. Goalkeeper Saves Model (~0.7 save points per expected goal conceded)
+        xSaves = (opp_xg * 0.7 * min_frac) if element_type == POS_GKP else 0.0
+        
+        # 3. Simple Heuristic Bonus Model (Bonus highly correlated with xG, xA, and CS)
+        xBonus = (player_match_xg * 1.5) + (player_match_xa * 1.0) + (p_cs * 0.2 if xMin >= 60 else 0.0)
 
-        return round(max(0.0, xCS_pts + xAttacking - xConc_penalty), 2)
+        total_pts = xCS_pts + xG_pts + xA_pts + xSaves + xBonus - xConc_penalty
+        return round(max(0.0, total_pts), 2)
 
 
 class KalmanFormFilter:
