@@ -155,13 +155,16 @@ def run_backtest(weights: tuple = None, df_gw=None, df_players=None, df_teams=No
         xp_matrix = generate_xp_matrix([target_gw], bootstrap=bootstrap, fixtures=fixtures, all_history=all_history, weights=weights)
         
         df_target = df_gw[df_gw['GW'] == target_gw]
-        actuals = {int(row['element']): float(row['total_points']) for _, row in df_target.iterrows()}
+        
+        # E-03: Use groupby to properly sum double gameweeks instead of overwriting the dict
+        actuals = df_target.groupby('element')['total_points'].sum().to_dict()
+        minutes_played = df_target.groupby('element')['minutes'].sum().to_dict()
         
         gw_error = 0.0
         gw_count = 0
         
         for pid, points in actuals.items():
-            if df_target[df_target['element'] == pid]['minutes'].iloc[0] > 60:
+            if minutes_played.get(pid, 0) > 60:
                 predicted_xp = xp_matrix.get(pid, {}).get(target_gw, 0.0)
                 error = abs(predicted_xp - points)
                 gw_error += error
