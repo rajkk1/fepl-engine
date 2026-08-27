@@ -102,8 +102,8 @@ def solve_fpl_optimization(
         is_chip_active_now = (active_chip is not None and idx == 0)
         
         tc_mult = 2.0 if (is_chip_active_now and active_chip == "tc") else 1.0
-        # O-07: Drop arbitrary bench weighting unless Bench Boost is active
-        b_weight = 1.0 if (is_chip_active_now and active_chip == "bb") else 0.0
+        # O-07: Use bench weighting to heuristically model autosubs unless Bench Boost is active
+        b_weight = 1.0 if (is_chip_active_now and active_chip == "bb") else bench_weight
 
         for pid in player_ids:
             xp_val = xp_matrix.get(pid, {}).get(t, 0.0)
@@ -131,8 +131,9 @@ def solve_fpl_optimization(
     if is_gw1_wildcard:
         # Single wildcard setup for first GW in horizon
         first_gw = gws[0]
-        # Budget cap £100.0m
-        prob += pulp.lpSum([s[pid, first_gw] * now_cost[pid] for pid in player_ids]) <= (100.0 + initial_bank), f"Initial_Budget_GW{first_gw}"
+        # Budget cap £100.0m (fallback bank is 100.0, so use it directly)
+        budget = initial_bank if initial_bank >= 90.0 else 100.0
+        prob += bank[first_gw] == budget - pulp.lpSum([s[pid, first_gw] * now_cost[pid] for pid in player_ids]), f"Bank_{first_gw}"
         prob += ft_carried[first_gw] == 0, f"No_FT_Carry_Wildcard"
     else:
         # Pre-existing squad transition
@@ -231,7 +232,7 @@ def solve_fpl_optimization(
 
     # Solve the model using default PuLP solver (PULP_CBC_CMD)
     # Give the solver up to 5 minutes to find the optimal transfer sequence
-    solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=300, gapRel=0.01)
+    solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=300, gapRel=0.001)
     status = prob.solve(solver)
     status_str = pulp.LpStatus[status]
 
@@ -269,6 +270,9 @@ def solve_fpl_optimization(
                     "is_captain": bool(c_val > 0.5),
                     "is_vice_captain": bool(vc_val > 0.5)
                 }
+                
+                if c_val > 0.5:
+                    captain_id = pid
 
                 if x_val > 0.5:
                     starters.append(p_info)

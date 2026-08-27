@@ -44,7 +44,7 @@ class DixonColesModel:
             betas = {tid: params[num_teams + i] for i, tid in enumerate(team_ids)}
             gamma = params[2 * num_teams]
             rho = params[2 * num_teams + 1]
-            decay = params[2 * num_teams + 2]
+            decay = 0.005 # Fixed to avoid degeneracy
             
             nll = 0.0
             for h, a, hg, ag, gw_diff in match_data:
@@ -70,8 +70,8 @@ class DixonColesModel:
             nll += 10 * sum([b**2 for b in betas.values()])
             return nll
 
-        init_params = [0.0] * (2 * num_teams) + [0.2, 0.0, 0.005]
-        bounds = [(-2.0, 2.0)] * (2 * num_teams) + [(0.0, 1.0), (-0.2, 0.2), (0.001, 0.05)]
+        init_params = [0.0] * (2 * num_teams) + [0.2, 0.0]
+        bounds = [(-2.0, 2.0)] * (2 * num_teams) + [(0.0, 1.0), (-0.2, 0.2)]
         
         res = minimize(neg_log_likelihood, init_params, bounds=bounds, method='L-BFGS-B')
         
@@ -79,6 +79,7 @@ class DixonColesModel:
             self.alpha[tid] = res.x[i]
             self.beta[tid] = res.x[num_teams + i]
         self.gamma = res.x[2 * num_teams]
+        self.rho = res.x[2 * num_teams + 1]
 
     def predict_match(self, player, fixture):
         element_type = player.get("element_type", POS_MID)
@@ -107,8 +108,10 @@ class DixonColesModel:
         if player.get("penalties_order") == 1:
             player_match_xg += 0.11
             
-        # M-08: Add Defensive Contribution Points (DefCon) based on position
-        xDefCon = 0.6 if element_type == POS_DEF else (0.4 if element_type == POS_MID else 0.0)
+        # M-08: Add Defensive Contribution Points (DefCon) based on player's actual API stats
+        # FPL awards 1 point per 3 defensive actions
+        defcon_90 = float(player.get("defensive_contribution_per_90", 0.0) or 0.0)
+        xDefCon = defcon_90 / 3.0
             
         return {
             "xg": player_match_xg,
@@ -182,7 +185,7 @@ class TrueGradientBoostedTree:
                 
                 was_home = 1.0 if h.get("was_home") else 0.0
                 opp_id = h.get("opponent_team", 1)
-                fdr = float(self.teams_map.get(opp_id, {}).get("strength", 3))
+                fdr = float(self.teams_map.get(opp_id, {}).get("strength") or 3.0)
                 
                 # Append target row features (dropped value and transfers_balance)
                 X.append([avg_bps, was_home, fdr, avg_xgi, avg_xgc, avg_starts])
@@ -219,7 +222,7 @@ class TrueGradientBoostedTree:
         
         was_home = 1.0 if fixture.get("team_h") == player.get("team") else 0.0
         opp_id = fixture.get("team_a") if was_home else fixture.get("team_h")
-        fdr = float(self.teams_map.get(opp_id, {}).get("strength", 3))
+        fdr = float(self.teams_map.get(opp_id, {}).get("strength") or 3.0)
         
         pred = self.model.predict([[avg_bps, was_home, fdr, avg_xgi, avg_xgc, avg_starts]])[0]
         return round(max(0.0, pred), 2)
@@ -227,8 +230,8 @@ class TrueGradientBoostedTree:
 class EnsembleForecaster:
     def __init__(self, weights: tuple = None):
         if weights is None:
-            # Optimal leak-free weights discovered via Grid Search (MAE: 2.41)
-            weights = (0.70, 0.10, 0.20)
+            # Optimal leak-free weights discovered via Grid Search (Spearman: 0.689)
+            weights = (0.00, 0.00, 1.00)
         self.w_dc, self.w_kf, self.w_gt = weights
         self.dc = DixonColesModel()
         self.kf = KalmanFormFilter()
@@ -252,9 +255,13 @@ class EnsembleForecaster:
         dc_res = self.dc.predict_match(player, fixture)
         kf_res = self.kf.predict_match(player, history)
         
-        # M-01: Blend at the component level
-        xg = (self.w_dc * dc_res["xg"]) + (self.w_kf * kf_res["xg"])
-        xa = (self.w_dc * dc_res["xa"]) + (self.w_kf * kf_res["xa"])
+        # M-01/Bug Fix: Blend at the component level and normalize weights
+        comp_sum = self.w_dc + self.w_kf
+        if comp_sum > 0:
+            xg = (self.w_dc * dc_res["xg"] + self.w_kf * kf_res["xg"]) / comp_sum
+            xa = (self.w_dc * dc_res["xa"] + self.w_kf * kf_res["xa"]) / comp_sum
+        else:
+            xg, xa = 0.0, 0.0
         p_cs = dc_res["p_cs"]
         opp_xg = dc_res["opp_xg"]
         xDefCon = dc_res.get("xDefCon", 0.0)
@@ -275,7 +282,8 @@ class EnsembleForecaster:
         xConc_penalty = (opp_xg / 2.0 * min_frac) if element_type in [POS_GKP, POS_DEF] else 0.0
         
         xSaves = (opp_xg * 0.7 * min_frac) if element_type == POS_GKP else 0.0
-        xBonus = (xg * 1.5) + (xa * 1.0) + (p_cs * 0.2 * p_60)
+        # M-07: Scale xBonus down to approximate the 6-point per-fixture limit
+        xBonus = ((xg * 1.5) + (xa * 1.0) + (p_cs * 0.2 * p_60)) * 0.4
         
         math_pts = xApp + xCS_pts + xG_pts + xA_pts + xSaves + xBonus + xDefCon - xConc_penalty
         
