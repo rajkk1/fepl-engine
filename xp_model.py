@@ -99,8 +99,9 @@ class DixonColesModel:
         player_xg90 = float(player.get("expected_goals_per_90", 0.0) or 0)
         player_xa90 = float(player.get("expected_assists_per_90", 0.0) or 0)
         
-        # M-05: Divide by the player's own team's baseline xG so strong teams aren't double-counted
-        team_baseline = math.exp(self.alpha.get(player.get("team"), 0.0)) * 1.4
+        # Fix team_baseline scaling by removing the erroneous 1.4 intercept multiplier and averaging home/away
+        alpha_team = self.alpha.get(player.get("team"), 0.0)
+        team_baseline = (math.exp(alpha_team + self.gamma) + math.exp(alpha_team)) / 2.0
         
         player_match_xg = player_xg90 * (team_xg / team_baseline)
         player_match_xa = player_xa90 * (team_xg / team_baseline)
@@ -279,16 +280,22 @@ class EnsembleForecaster:
         
         cs_pts = POINTS_CLEAN_SHEET.get(element_type, 0)
         xCS_pts = p_60 * p_cs * cs_pts
-        xConc_penalty = (opp_xg / 2.0 * min_frac) if element_type in [POS_GKP, POS_DEF] else 0.0
+        # Calculate true expected goals conceded penalty E[floor(X/2)] using Poisson PMF
+        e_floor_x2 = sum(math.exp(-opp_xg) * (opp_xg**k) / math.factorial(k) * (k // 2) for k in range(10))
+        xConc_penalty = e_floor_x2 * min_frac if element_type in [POS_GKP, POS_DEF] else 0.0
         
-        xSaves = (opp_xg * 0.7 * min_frac) if element_type == POS_GKP else 0.0
+        # Calculate true expected saves points E[floor(saves/3)] assuming saves ~ Poisson(opp_xg * 2.5)
+        expected_saves = opp_xg * 2.5
+        e_floor_saves3 = sum(math.exp(-expected_saves) * (expected_saves**k) / math.factorial(k) * (k // 3) for k in range(15))
+        xSaves = e_floor_saves3 * min_frac if element_type == POS_GKP else 0.0
         # M-07: Scale xBonus down to approximate the 6-point per-fixture limit
         xBonus = ((xg * 1.5) + (xa * 1.0) + (p_cs * 0.2 * p_60)) * 0.4
         
         math_pts = xApp + xCS_pts + xG_pts + xA_pts + xSaves + xBonus + xDefCon - xConc_penalty
         
         # GBT is a monolithic black box that predicts total points directly
-        gt_pts = self.gt.predict_match(player, fixture, history) * min_frac
+        # It is trained on unconditional points (including 0-minute matches), so no min_frac scaling is needed
+        gt_pts = self.gt.predict_match(player, fixture, history)
         
         ensemble_xp = (1.0 - self.w_gt) * math_pts + (self.w_gt * gt_pts)
         return round(ensemble_xp, 2)

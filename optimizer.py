@@ -288,10 +288,28 @@ def solve_fpl_optimization(
             for pid in player_ids if (pulp.value(tout[pid, t]) or 0) > 0.5
         ]
 
+        # Compute true expected points for the gameweek
+        is_chip_active_now = (active_chip is not None and t == gws[0])
+        tc_mult = 2.0 if (is_chip_active_now and active_chip == "tc") else 1.0
+        
+        gw_xp = 0.0
+        for p in starters:
+            gw_xp += p["xp"]
+            if p["is_captain"]:
+                gw_xp += p["xp"] * tc_mult
+            if p["is_vice_captain"]:
+                gw_xp += p["xp"] * 0.10 * tc_mult
+                
+        # Add heuristic bench contribution to gw_xp if BB is active or using autosub weight
+        b_weight = 1.0 if (is_chip_active_now and active_chip == "bb") else bench_weight
+        for p in bench:
+            gw_xp += p["xp"] * b_weight
+
         results["gameweeks"][t] = {
             "starters": starters,
             "bench": bench,
             "captain_id": captain_id,
+            "gw_xp": round(gw_xp, 2),
             "transfers_in": transfers_in,
             "transfers_out": transfers_out,
             "hits": int(pulp.value(hits[t]) or 0),
