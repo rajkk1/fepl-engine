@@ -1,0 +1,340 @@
+{
+    "gameweek": 2,
+    "team_id": 4309239,
+    "transfers_in": [
+        {
+            "id": 1,
+            "web_name": "Raya",
+            "cost": 6.0
+        },
+        {
+            "id": 12,
+            "web_name": "Saka",
+            "cost": 9.5
+        },
+        {
+            "id": 84,
+            "web_name": "Collins",
+            "cost": 5.5
+        },
+        {
+            "id": 115,
+            "web_name": "De Cuyper",
+            "cost": 4.6
+        },
+        {
+            "id": 123,
+            "web_name": "Hinshelwood",
+            "cost": 6.0
+        },
+        {
+            "id": 40,
+            "web_name": "Rogers",
+            "cost": 7.5
+        },
+        {
+            "id": 224,
+            "web_name": "Nketiah",
+            "cost": 5.5
+        },
+        {
+            "id": 226,
+            "web_name": "Pickford",
+            "cost": 5.5
+        },
+        {
+            "id": 379,
+            "web_name": "Isak",
+            "cost": 9.0
+        },
+        {
+            "id": 388,
+            "web_name": "Gu\u00e9hi",
+            "cost": 6.0
+        },
+        {
+            "id": 399,
+            "web_name": "Cherki",
+            "cost": 7.5
+        },
+        {
+            "id": 415,
+            "web_name": "Dorgu",
+            "cost": 6.0
+        }
+    ],
+    "transfers_out": [
+        {
+            "id": 82,
+            "web_name": "Kelleher",
+            "cost": 5.0
+        },
+        {
+            "id": 94,
+            "web_name": "Schade",
+            "cost": 6.0
+        },
+        {
+            "id": 155,
+            "web_name": "Enzo",
+            "cost": 7.0
+        },
+        {
+            "id": 229,
+            "web_name": "Tarkowski",
+            "cost": 6.0
+        },
+        {
+            "id": 248,
+            "web_name": "Beto",
+            "cost": 5.5
+        },
+        {
+            "id": 346,
+            "web_name": "Calvert-Lewin",
+            "cost": 6.0
+        },
+        {
+            "id": 426,
+            "web_name": "B.Fernandes",
+            "cost": 12.0
+        },
+        {
+            "id": 427,
+            "web_name": "Mbeumo",
+            "cost": 8.0
+        },
+        {
+            "id": 469,
+            "web_name": "N.Williams",
+            "cost": 5.0
+        },
+        {
+            "id": 480,
+            "web_name": "Gibbs-White",
+            "cost": 8.0
+        },
+        {
+            "id": 498,
+            "web_name": "Senesi",
+            "cost": 6.0
+        },
+        {
+            "id": 529,
+            "web_name": "Roefs",
+            "cost": 5.0
+        }
+    ],
+    "hits": 0,
+    "active_chip": "wc",
+    "captain": {
+        "id": 40,
+        "web_name": "Rogers",
+        "element_type": 3,
+        "team": 6,
+        "cost": 7.5,
+        "xp": 6.87,
+        "is_captain": true,
+        "is_vice_captain": false,
+        "now_cost": 7.5,
+        "status": "a"
+    },
+    "vice_captain": {
+        "id": 379,
+        "web_name": "Isak",
+        "element_type": 4,
+        "team": 14,
+        "cost": 9.0,
+        "xp": 5.62,
+        "is_captain": false,
+        "is_vice_captain": true,
+        "now_cost": 9.0,
+        "status": "a"
+    },
+    "starters": [
+        {
+            "id": 1,
+            "web_name": "Raya",
+            "element_type": 1,
+            "team": 1,
+            "cost": 6.0,
+            "xp": 1.78,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 6.0,
+            "status": "a"
+        },
+        {
+            "id": 12,
+            "web_name": "Saka",
+            "element_type": 3,
+            "team": 1,
+            "cost": 9.5,
+            "xp": 4.7,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 9.5,
+            "status": "a"
+        },
+        {
+            "id": 115,
+            "web_name": "De Cuyper",
+            "element_type": 2,
+            "team": 5,
+            "cost": 4.6,
+            "xp": 4.28,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 4.6,
+            "status": "a"
+        },
+        {
+            "id": 123,
+            "web_name": "Hinshelwood",
+            "element_type": 3,
+            "team": 5,
+            "cost": 6.0,
+            "xp": 4.86,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 6.0,
+            "status": "d"
+        },
+        {
+            "id": 40,
+            "web_name": "Rogers",
+            "element_type": 3,
+            "team": 6,
+            "cost": 7.5,
+            "xp": 6.87,
+            "is_captain": true,
+            "is_vice_captain": false,
+            "now_cost": 7.5,
+            "status": "a"
+        },
+        {
+            "id": 201,
+            "web_name": "Mu\u00f1oz",
+            "element_type": 2,
+            "team": 8,
+            "cost": 5.5,
+            "xp": 2.92,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 5.5,
+            "status": "a"
+        },
+        {
+            "id": 224,
+            "web_name": "Nketiah",
+            "element_type": 4,
+            "team": 8,
+            "cost": 5.5,
+            "xp": 5.46,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 5.5,
+            "status": "a"
+        },
+        {
+            "id": 379,
+            "web_name": "Isak",
+            "element_type": 4,
+            "team": 14,
+            "cost": 9.0,
+            "xp": 5.62,
+            "is_captain": false,
+            "is_vice_captain": true,
+            "now_cost": 9.0,
+            "status": "a"
+        },
+        {
+            "id": 388,
+            "web_name": "Gu\u00e9hi",
+            "element_type": 2,
+            "team": 15,
+            "cost": 6.0,
+            "xp": 4.56,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 6.0,
+            "status": "a"
+        },
+        {
+            "id": 399,
+            "web_name": "Cherki",
+            "element_type": 3,
+            "team": 15,
+            "cost": 7.5,
+            "xp": 5.06,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 7.5,
+            "status": "a"
+        },
+        {
+            "id": 415,
+            "web_name": "Dorgu",
+            "element_type": 3,
+            "team": 16,
+            "cost": 6.0,
+            "xp": 4.75,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 6.0,
+            "status": "a"
+        }
+    ],
+    "bench": [
+        {
+            "id": 226,
+            "web_name": "Pickford",
+            "element_type": 1,
+            "team": 9,
+            "cost": 5.5,
+            "xp": 1.62,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 5.5,
+            "status": "a"
+        },
+        {
+            "id": 106,
+            "web_name": "Thiago",
+            "element_type": 4,
+            "team": 4,
+            "cost": 8.0,
+            "xp": 4.63,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 8.0,
+            "status": "a"
+        },
+        {
+            "id": 387,
+            "web_name": "O'Reilly",
+            "element_type": 2,
+            "team": 15,
+            "cost": 6.5,
+            "xp": 2.28,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 6.5,
+            "status": "a"
+        },
+        {
+            "id": 84,
+            "web_name": "Collins",
+            "element_type": 2,
+            "team": 4,
+            "cost": 5.5,
+            "xp": 2.27,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 5.5,
+            "status": "a"
+        }
+    ],
+    "expected_score": 59.37,
+    "remaining_bank": 1.4
+}

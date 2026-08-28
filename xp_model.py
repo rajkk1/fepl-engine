@@ -203,7 +203,7 @@ class EnsembleForecaster:
         import datetime
         current_gw_date = None
         if past_fixtures:
-            current_gw_date = max([pd.to_datetime(f.get("kickoff_time")) for f in past_fixtures if f.get("kickoff_time")], default=None)
+            current_gw_date = max([pd.to_datetime(f.get("kickoff_time")).tz_convert(None) for f in past_fixtures if f.get("kickoff_time")], default=None)
             
         season_str = None
         if season:
