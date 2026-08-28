@@ -48,7 +48,7 @@ def run_season_simulation(season_str="2024-25", horizon=5):
         # 2. Generate XP Matrix for Horizon (current_gw to current_gw + horizon - 1)
         horizon_gws = [gw for gw in range(current_gw, current_gw + horizon) if gw <= max_gw]
         
-        xp_matrix = generate_xp_matrix(
+        xp_matrix = generate_merv_matrix(
             horizon_gws, 
             bootstrap=bootstrap, 
             fixtures=fixtures, 

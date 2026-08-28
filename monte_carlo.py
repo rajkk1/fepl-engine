@@ -56,5 +56,5 @@ def calculate_merv(xp: float, variance: float, eo: float, risk_aversion: float =
     """
     delta_variance = (1.0 - 2.0 * eo) * variance
     merv = xp - (risk_aversion * delta_variance)
-    return max(0.0, merv)
+    return float(merv)
 

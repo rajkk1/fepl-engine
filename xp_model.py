@@ -419,7 +419,7 @@ def generate_xp_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None, al
                 xp_matrix[pid][gw] = round(total_xp, 2)
     return xp_matrix
 
-def generate_merv_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None, all_history=None, weights: tuple = None, season: int = None, risk_aversion: float = 0.05) -> Dict[int, Dict[int, float]]:
+def generate_merv_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None, all_history=None, weights: tuple = None, season: int = None, risk_aversion: float = 0.0) -> Dict[int, Dict[int, float]]:
     """
     Generates a matrix of Marginal Expected Rank Value (MERV) instead of raw xP.
     Rank-Aware objective that penalizes variance for differentials and rewards variance reduction for highly owned players.

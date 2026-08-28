@@ -164,7 +164,9 @@ def run_backtest(weights: tuple = None, df_gw=None, df_players=None, df_teams=No
             logger.info(f"\n--- Backtesting Gameweek {target_gw} ---")
         
         bootstrap, fixtures, all_history = build_mock_api(df_gw, df_players, df_teams, df_fixtures, current_gw=target_gw)
-        xp_matrix = generate_xp_matrix([target_gw], bootstrap=bootstrap, fixtures=fixtures, all_history=all_history, weights=weights, season=2023)
+        from xp_model import generate_merv_matrix
+        season_int = int(season_str.split("-")[0])
+        xp_matrix = generate_merv_matrix([target_gw], bootstrap=bootstrap, fixtures=fixtures, all_history=all_history, weights=weights, season=season_int)
         
         df_target = df_gw[df_gw['GW'] == target_gw]
         
