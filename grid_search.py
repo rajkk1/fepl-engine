@@ -43,7 +43,7 @@ def run_grid_search():
     logger.info(f"Firing up {num_cores} CPU cores to process {total_combinations} combinations in parallel!\n")
 
     start_time = time.time()
-    best_score = -999.0
+    best_score = 999.0
     best_weights = None
 
     # Use partial to bind the dataframe arguments so map() only needs to pass the weights
@@ -57,8 +57,8 @@ def run_grid_search():
             try:
                 weights, score = future.result()
                 w_dc, w_kf, w_gt = weights
-                logger.info(f"Tested Weights (DC={w_dc:.2f}, KF={w_kf:.2f}, GT={w_gt:.2f}) -> Spearman: {score:.3f}")
-                if score > best_score:
+                logger.info(f"Tested Weights (DC={w_dc:.2f}, KF={w_kf:.2f}, GT={w_gt:.2f}) -> MAE: {score:.3f}")
+                if score < best_score:
                     best_score = score
                     best_weights = weights
             except Exception as exc:
@@ -69,7 +69,7 @@ def run_grid_search():
     logger.info(f"GRID SEARCH COMPLETE ({total_combinations} combinations tested in {elapsed:.1f}s)")
     logger.info("==========================================")
     logger.info(f"🏆 BEST WEIGHTS: Dixon-Coles={best_weights[0]:.2f} | Kalman={best_weights[1]:.2f} | GBT={best_weights[2]:.2f}")
-    logger.info(f"📈 HIGHEST SPEARMAN RANK CORRELATION: {best_score:.4f}")
+    logger.info(f"📈 LOWEST MEAN ABSOLUTE ERROR (MAE): {best_score:.4f}")
     logger.info("==========================================\n")
     logger.info("To use these weights, update EnsembleForecaster in xp_model.py!")
 

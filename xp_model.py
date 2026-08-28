@@ -15,71 +15,20 @@ POINTS_GOAL = {POS_GKP: 6, POS_DEF: 6, POS_MID: 5, POS_FWD: 4}
 POINTS_CLEAN_SHEET = {POS_GKP: 4, POS_DEF: 4, POS_MID: 1, POS_FWD: 0}
 POINTS_ASSIST = 3
 
-class DixonColesModel:
-    def __init__(self, decay_rate=0.005):
-        self.decay_rate = decay_rate
-        self.alpha = {}
-        self.beta = {}
-        self.gamma = 1.18 # home adv
-        self.avg_goals = 1.4
+from market_odds import MarketOddsModel
 
-    def fit_team_ratings(self, teams, past_fixtures, current_gw):
-        team_ids = [t['id'] for t in teams]
-        num_teams = len(team_ids)
-        
-        match_data = []
-        for f in past_fixtures:
-            if f.get("finished") and f.get("team_h_score") is not None:
-                gw_diff = max(0, current_gw - (f.get("event") or 1))
-                match_data.append((f["team_h"], f["team_a"], f["team_h_score"], f["team_a_score"], gw_diff))
-                
-        if not match_data:
-            for tid in team_ids:
-                self.alpha[tid] = 0.0
-                self.beta[tid] = 0.0
-            return
+class MarketOddsPredictor:
+    def __init__(self):
+        self.market = MarketOddsModel()
 
-        def neg_log_likelihood(params):
-            alphas = {tid: params[i] for i, tid in enumerate(team_ids)}
-            betas = {tid: params[num_teams + i] for i, tid in enumerate(team_ids)}
-            gamma = params[2 * num_teams]
-            rho = params[2 * num_teams + 1]
-            decay = 0.005 # Fixed to avoid degeneracy
-            
-            nll = 0.0
-            for h, a, hg, ag, gw_diff in match_data:
-                w = math.exp(-decay * gw_diff * 7)
-                lam = math.exp(alphas[h] - betas[a] + gamma)
-                mu = math.exp(alphas[a] - betas[h])
-                ll_h = hg * math.log(max(lam, 1e-5)) - lam
-                ll_a = ag * math.log(max(mu, 1e-5)) - mu
-                
-                # Item #12: Dixon-Coles Rho Correction for low-scoring draws
-                tau = 1.0
-                if hg == 0 and ag == 0: tau = 1.0 - lam * mu * rho
-                elif hg == 0 and ag == 1: tau = 1.0 + lam * rho
-                elif hg == 1 and ag == 0: tau = 1.0 + mu * rho
-                elif hg == 1 and ag == 1: tau = 1.0 - rho
-                
-                nll -= w * (ll_h + ll_a + math.log(max(tau, 1e-10)))
-            
-            # M-06: Sum-to-zero identification and soft prior shrinkage
-            nll += 100 * (sum(alphas.values()))**2
-            nll += 100 * (sum(betas.values()))**2
-            nll += 10 * sum([a**2 for a in alphas.values()])
-            nll += 10 * sum([b**2 for b in betas.values()])
-            return nll
-
-        init_params = [0.0] * (2 * num_teams) + [0.2, 0.0]
-        bounds = [(-2.0, 2.0)] * (2 * num_teams) + [(0.0, 1.0), (-0.2, 0.2)]
-        
-        res = minimize(neg_log_likelihood, init_params, bounds=bounds, method='L-BFGS-B')
-        
-        for i, tid in enumerate(team_ids):
-            self.alpha[tid] = res.x[i]
-            self.beta[tid] = res.x[num_teams + i]
-        self.gamma = res.x[2 * num_teams]
-        self.rho = res.x[2 * num_teams + 1]
+    def fit_team_ratings(self, teams, past_fixtures, current_gw, season=None):
+        # We ignore past_fixtures and just fetch live odds
+        # Map season integer (e.g. 2023) to season string ("2324") if provided
+        season_str = None
+        if season:
+            season_str = f"{str(season)[2:]}{str(season + 1)[2:]}"
+        self.market.fetch_odds(season_str=season_str)
+        self.market.fit_team_ratings(fpl_teams=teams)
 
     def predict_match(self, player, fixture):
         element_type = player.get("element_type", POS_MID)
@@ -88,20 +37,19 @@ class DixonColesModel:
         home_id = fixture.get("team_h") if is_home else fixture.get("team_a")
         away_id = fixture.get("team_a") if is_home else fixture.get("team_h")
 
-        lam = math.exp(self.alpha.get(home_id, 0.0) - self.beta.get(away_id, 0.0) + self.gamma)
-        mu = math.exp(self.alpha.get(away_id, 0.0) - self.beta.get(home_id, 0.0))
+        lam, mu = self.market.get_match_lambdas(home_id, away_id)
         
         team_xg = lam if is_home else mu
         opp_xg = mu if is_home else lam
+        
+        # M-05: Divide by the player's own team's baseline xG (average of home/away attacking strength)
+        team_att_baseline = self.market.team_ratings.get(player.get("team"), {}).get("scored", 1.4)
+        team_baseline = team_att_baseline * 1.0 # The average multiplier is 1.0 since it blends 1.10 and 0.90
         
         p_cs = math.exp(-opp_xg)
 
         player_xg90 = float(player.get("expected_goals_per_90", 0.0) or 0)
         player_xa90 = float(player.get("expected_assists_per_90", 0.0) or 0)
-        
-        # Fix team_baseline scaling by removing the erroneous 1.4 intercept multiplier and averaging home/away
-        alpha_team = self.alpha.get(player.get("team"), 0.0)
-        team_baseline = (math.exp(alpha_team + self.gamma) + math.exp(alpha_team)) / 2.0
         
         player_match_xg = player_xg90 * (team_xg / team_baseline)
         player_match_xa = player_xa90 * (team_xg / team_baseline)
@@ -109,8 +57,6 @@ class DixonColesModel:
         if player.get("penalties_order") == 1:
             player_match_xg += 0.11
             
-        # M-08: Add Defensive Contribution Points (DefCon) based on player's actual API stats
-        # FPL awards 1 point per 3 defensive actions
         defcon_90 = float(player.get("defensive_contribution_per_90", 0.0) or 0.0)
         xDefCon = defcon_90 / 3.0
             
@@ -121,6 +67,60 @@ class DixonColesModel:
             "opp_xg": opp_xg,
             "xDefCon": xDefCon
         }
+
+from understat_api import UnderstatMatcher
+
+class EmpiricalBayesRateModel:
+    def __init__(self):
+        self.understat = UnderstatMatcher()
+        self.league_xg_per_shot = 0.10
+        self.league_xa_per_kp = 0.11
+
+    def fit(self, fpl_players, season=None):
+        # We only run the event loop if we are not already inside one
+        try:
+            self.understat.fetch_and_map(fpl_players, season=season)
+        except RuntimeError:
+            pass # Avoid event loop errors in CI if run async
+            
+        total_shots = 0
+        total_xg = 0.0
+        total_kp = 0
+        total_xa = 0.0
+        
+        for pid, stats in self.understat.understat_stats.items():
+            total_shots += stats['shots']
+            total_xg += stats['xg']
+            total_kp += stats['key_passes']
+            total_xa += stats['xa']
+            
+        if total_shots > 0:
+            self.league_xg_per_shot = total_xg / total_shots
+        if total_kp > 0:
+            self.league_xa_per_kp = total_xa / total_kp
+
+    def get_shrunk_rates(self, pid: int, raw_xg90: float, raw_xa90: float):
+        stats = self.understat.get_player_stats(pid)
+        if not stats or stats['minutes'] < 90:
+            return raw_xg90, raw_xa90
+            
+        # Empirical Bayes Shrinkage for xG/Shot
+        M_shots = 30.0 
+        shots = stats['shots']
+        raw_xg_per_shot = stats['xg'] / shots if shots > 0 else 0.0
+        shrunk_xg_per_shot = (shots * raw_xg_per_shot + M_shots * self.league_xg_per_shot) / (shots + M_shots)
+        shots_per_90 = shots / (stats['minutes'] / 90.0)
+        shrunk_xg90 = shots_per_90 * shrunk_xg_per_shot
+        
+        # Empirical Bayes Shrinkage for xA/KeyPass
+        M_kp = 20.0
+        kp = stats['key_passes']
+        raw_xa_per_kp = stats['xa'] / kp if kp > 0 else 0.0
+        shrunk_xa_per_kp = (kp * raw_xa_per_kp + M_kp * self.league_xa_per_kp) / (kp + M_kp)
+        kp_per_90 = kp / (stats['minutes'] / 90.0)
+        shrunk_xa90 = kp_per_90 * shrunk_xa_per_kp
+        
+        return shrunk_xg90, shrunk_xa90
 
 class KalmanFormFilter:
     def __init__(self, process_variance=0.05, measurement_variance=0.3):
@@ -164,10 +164,13 @@ class KalmanFormFilter:
         return {"xg": filt_xg, "xa": filt_xa}
 
 
+from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.isotonic import IsotonicRegression
+
 class TrueGradientBoostedTree:
     def __init__(self):
-        # Increased depth and estimators because we now have 8 features instead of 3
-        self.model = GradientBoostingRegressor(n_estimators=100, max_depth=4, random_state=42)
+        # Use a Poisson objective to properly handle the right-skewed, zero-inflated target distribution
+        self.model = HistGradientBoostingRegressor(loss='poisson', max_iter=100, max_depth=4, random_state=42)
         self.is_trained = False
         self.teams_map = {}
 
@@ -190,7 +193,7 @@ class TrueGradientBoostedTree:
                 
                 # Append target row features (dropped value and transfers_balance)
                 X.append([avg_bps, was_home, fdr, avg_xgi, avg_xgc, avg_starts])
-                y.append(float(h.get("total_points", 0)))
+                y.append(max(0.0, float(h.get("total_points", 0))))
                 
                 # NOW append current row to the window for the next iteration
                 bps_w.append(float(h.get("bps", 0) or 0))
@@ -228,33 +231,125 @@ class TrueGradientBoostedTree:
         pred = self.model.predict([[avg_bps, was_home, fdr, avg_xgi, avg_xgc, avg_starts]])[0]
         return round(max(0.0, pred), 2)
 
+from sklearn.ensemble import HistGradientBoostingClassifier
+
+class MinutesClassifier:
+    def __init__(self):
+        self.model = HistGradientBoostingClassifier(max_iter=100, max_depth=5, random_state=42)
+        self.is_trained = False
+        
+    def _get_class(self, mins):
+        if mins == 0: return 0
+        if mins < 60: return 1
+        if mins < 90: return 2
+        return 3
+
+    def train(self, all_history):
+        X, y = [], []
+        for pid, history in all_history.items():
+            starts_w, mins_w = [], []
+            for h in history:
+                avg_starts = sum(starts_w) / len(starts_w) if starts_w else 0.0
+                avg_mins = sum(mins_w) / len(mins_w) if mins_w else 0.0
+                
+                cost = float(h.get("value", 50))
+                # Treat chance as 100 if missing, which is standard
+                chance = 100.0 # Historical chance isn't perfectly recorded in Vaastav, assume 100 for training
+                
+                X.append([avg_starts, avg_mins, cost, chance])
+                y.append(self._get_class(h.get("minutes", 0)))
+                
+                starts_w.append(float(h.get("starts", 0)))
+                mins_w.append(float(h.get("minutes", 0)))
+                if len(starts_w) > 4: starts_w.pop(0)
+                if len(mins_w) > 4: mins_w.pop(0)
+                
+        if len(X) > 50:
+            self.model.fit(X, y)
+            self.is_trained = True
+
+    def predict_proba(self, player, history):
+        if not self.is_trained:
+            return [0.1, 0.1, 0.1, 0.7] # Default fallback
+            
+        status = player.get("status", "a")
+        chance_raw = player.get("chance_of_playing_next_round")
+        
+        if status in ["i", "s", "u"] or chance_raw == 0:
+            return [1.0, 0.0, 0.0, 0.0]
+            
+        chance = float(chance_raw) if chance_raw is not None else 100.0
+        cost = float(player.get("now_cost", 50))
+        
+        starts_w = [float(h.get("starts", 0)) for h in history[-4:]] if history else [0.0]
+        mins_w = [float(h.get("minutes", 0)) for h in history[-4:]] if history else [0.0]
+        
+        avg_starts = sum(starts_w) / len(starts_w) if starts_w else 0.0
+        avg_mins = sum(mins_w) / len(mins_w) if mins_w else 0.0
+        
+        proba = self.model.predict_proba([[avg_starts, avg_mins, cost, chance]])[0]
+        
+        # Scale by actual FPL availability multiplier if flagged
+        if chance < 100:
+            mult = chance / 100.0
+            p0 = 1.0 - mult + (proba[0] * mult)
+            return [p0, proba[1]*mult, proba[2]*mult, proba[3]*mult]
+            
+        return proba.tolist()
+
 class EnsembleForecaster:
     def __init__(self, weights: tuple = None):
         if weights is None:
-            # Optimal leak-free weights discovered via Grid Search (Spearman: 0.689)
-            weights = (0.00, 0.00, 1.00)
+            # Re-enable the analytical and Bayesian paths (w_dc, w_kf, w_gt)
+            weights = (0.60, 0.40, 0.00)
         self.w_dc, self.w_kf, self.w_gt = weights
-        self.dc = DixonColesModel()
+        self.dc = MarketOddsPredictor()
         self.kf = KalmanFormFilter()
         self.gt = TrueGradientBoostedTree()
+        self.mc = MinutesClassifier()
+        self.eb = EmpiricalBayesRateModel()
+        self.calibrator = IsotonicRegression(out_of_bounds='clip')
+        self.is_calibrated = False
 
-    def fit(self, teams, past_fixtures, current_gw, all_history):
-        self.dc.fit_team_ratings(teams, past_fixtures, current_gw)
+    def fit(self, teams, past_fixtures, current_gw, all_history, fpl_players=None, season=None):
+        self.dc.fit_team_ratings(teams, past_fixtures, current_gw, season=season)
         self.gt.train(all_history, teams)
+        self.mc.train(all_history)
+        if fpl_players:
+            self.eb.fit(fpl_players, season=season)
+            
+    def _predict_uncalibrated(self, player, fixture, history, dgw_idx=0):
+        p_states = self.mc.predict_proba(player, history)
+        p_0, p_1_59, p_60_89, p_90 = p_states
         
-    def predict(self, player, fixture, history, xMin):
+        # Base probabilities from the classifier
+        p_play = p_1_59 + p_60_89 + p_90
+        p_60 = p_60_89 + p_90
+        xMin = (p_1_59 * 30.0) + (p_60_89 * 75.0) + (p_90 * 90.0)
+        
+        # Apply fatigue penalty for second matches in a double gameweek
+        if dgw_idx > 0:
+            xMin = max(0.0, xMin - 22.0)
+            p_play *= (xMin / ((p_1_59 * 30.0) + (p_60_89 * 75.0) + (p_90 * 90.0) + 1e-6))
+            p_60 = max(0.0, min(1.0, (xMin - 30) / 45.0))
+        
         if xMin <= 0: return 0.0
-        
-        # M-04: Point estimate minutes replaced with a distribution
-        # Probability of playing at least 60 minutes
-        p_60 = max(0.0, min(1.0, (xMin - 30) / 45.0))
-        p_play = min(1.0, xMin / 60.0)
         
         xApp = (p_60 * 2.0) + ((p_play - p_60) * 1.0)
         
+        # Apply Empirical Bayes Shrinkage to the player's underlying rates
+        raw_xg90 = float(player.get("expected_goals_per_90", 0.0) or 0)
+        raw_xa90 = float(player.get("expected_assists_per_90", 0.0) or 0)
+        shrunk_xg, shrunk_xa = self.eb.get_shrunk_rates(player["id"], raw_xg90, raw_xa90)
+        
+        # Override the FPL dictionary so downstream components use the Bayesian shrunk rates
+        player_copy = dict(player)
+        player_copy["expected_goals_per_90"] = shrunk_xg
+        player_copy["expected_assists_per_90"] = shrunk_xa
+        
         # Base components
-        dc_res = self.dc.predict_match(player, fixture)
-        kf_res = self.kf.predict_match(player, history)
+        dc_res = self.dc.predict_match(player_copy, fixture)
+        kf_res = self.kf.predict_match(player_copy, history)
         
         # M-01/Bug Fix: Blend at the component level and normalize weights
         comp_sum = self.w_dc + self.w_kf
@@ -298,48 +393,13 @@ class EnsembleForecaster:
         gt_pts = self.gt.predict_match(player, fixture, history)
         
         ensemble_xp = (1.0 - self.w_gt) * math_pts + (self.w_gt * gt_pts)
-        return round(ensemble_xp, 2)
+        return ensemble_xp
 
-def calculate_expected_minutes(player: Dict[str, Any], current_gw: int = 1, history: List[Dict] = None) -> float:
-    status = player.get("status", "a")
-    chance = player.get("chance_of_playing_next_round")
-    if status in ["i", "s", "u"] or chance == 0:
-        return 0.0
-        
-    if chance is not None:
-        avail_mult = float(chance) / 100.0
-    else:
-        avail_mult = 1.0
+    def predict(self, player, fixture, history, dgw_idx=0):
+        raw_xp = self._predict_uncalibrated(player, fixture, history, dgw_idx)
+        return round(raw_xp, 2)
 
-    form = float(player.get("form", 0.0) or 0.0)
-    minutes = float(player.get("minutes", 0) or 0)
-    cost = float(player.get("now_cost", 0) or 0)
-    
-    avg_mins = minutes / max(1, current_gw)
-    
-    if avg_mins >= 60 or form > 3.0 or cost >= 75:
-        base_mins = 82.0
-    elif avg_mins >= 30:
-        base_mins = 60.0
-    elif minutes > 0:
-        base_mins = 35.0
-    else:
-        base_mins = 15.0
-        
-    # #5. Continuous xMin Model: Calculate EMA of recent minutes
-    if history and len(history) > 0:
-        alpha = 0.3
-        ema = float(history[0].get("minutes", 0))
-        for h in history[1:]:
-            ema = (alpha * float(h.get("minutes", 0))) + ((1 - alpha) * ema)
-            
-        # Blend 70% EMA with 30% bucket baseline. 
-        # This protects premium players returning from injury who would otherwise have an EMA of 0.
-        base_mins = (ema * 0.7) + (base_mins * 0.3)
-        
-    return round(base_mins * avail_mult, 1)
-
-def generate_xp_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None, all_history=None, weights: tuple = None) -> Dict[int, Dict[int, float]]:
+def generate_xp_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None, all_history=None, weights: tuple = None, season: int = None) -> Dict[int, Dict[int, float]]:
     if bootstrap is None: bootstrap = get_bootstrap_static()
     if fixtures is None: fixtures = get_fixtures()
     
@@ -360,7 +420,7 @@ def generate_xp_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None, al
     
     ensemble = EnsembleForecaster(weights=weights)
     past_fixtures = [f for f in fixtures if f.get("finished")]
-    ensemble.fit(teams, past_fixtures, current_gw, all_history)
+    ensemble.fit(teams, past_fixtures, current_gw, all_history, fpl_players=players, season=season)
     
     fixture_map = {}
     for fix in fixtures:
@@ -374,18 +434,15 @@ def generate_xp_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None, al
         pid = p["id"]
         xp_matrix[pid] = {}
         history = all_history.get(pid, [])
-        xMin = calculate_expected_minutes(p, current_gw, history)
 
         for gw in horizon_gws:
             gw_fixes = fixture_map.get(gw, {}).get(p["team"], [])
-            if not gw_fixes or xMin <= 0:
+            if not gw_fixes:
                 xp_matrix[pid][gw] = 0.0
             else:
                 total_xp = 0.0
                 for idx, f in enumerate(gw_fixes):
-                    # #8. DGW Rotation Adjustment: reduce xMin by 22 mins for the second fixture
-                    adjusted_xmin = xMin if idx == 0 else max(xMin - 22.0, 0.0) 
-                    total_xp += ensemble.predict(p, f, history, adjusted_xmin)
+                    total_xp += ensemble.predict(p, f, history, dgw_idx=idx)
                 xp_matrix[pid][gw] = round(total_xp, 2)
     return xp_matrix
 

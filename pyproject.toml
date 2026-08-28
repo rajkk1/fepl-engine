@@ -14,6 +14,8 @@ dependencies = [
     "scikit-learn>=1.7.2",
     "beautifulsoup4>=4.15.0",
     "understat>=0.1.4",
+    "thefuzz>=0.22.1",
+    "Levenshtein>=0.25.0",
 ]
 
 [build-system]

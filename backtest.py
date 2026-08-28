@@ -142,6 +142,7 @@ def run_backtest(weights: tuple = None, df_gw=None, df_players=None, df_teams=No
     TEST_GWS = range(15, 21)
     
     total_error = 0.0
+    total_baseline_error = 0.0
     total_predictions = 0
 
     if not weights:
@@ -152,7 +153,7 @@ def run_backtest(weights: tuple = None, df_gw=None, df_players=None, df_teams=No
             logger.info(f"\n--- Backtesting Gameweek {target_gw} ---")
         
         bootstrap, fixtures, all_history = build_mock_api(df_gw, df_players, df_teams, df_fixtures, current_gw=target_gw)
-        xp_matrix = generate_xp_matrix([target_gw], bootstrap=bootstrap, fixtures=fixtures, all_history=all_history, weights=weights)
+        xp_matrix = generate_xp_matrix([target_gw], bootstrap=bootstrap, fixtures=fixtures, all_history=all_history, weights=weights, season=2023)
         
         df_target = df_gw[df_gw['GW'] == target_gw]
         
@@ -161,27 +162,37 @@ def run_backtest(weights: tuple = None, df_gw=None, df_players=None, df_teams=No
         minutes_played = df_target.groupby('element')['minutes'].sum().to_dict()
         
         gw_error = 0.0
+        gw_baseline_error = 0.0
         gw_count = 0
         
         for pid, points in actuals.items():
-            if minutes_played.get(pid, 0) > 60:
-                predicted_xp = xp_matrix.get(pid, {}).get(target_gw, 0.0)
-                error = abs(predicted_xp - points)
-                gw_error += error
-                gw_count += 1
+            history = all_history.get(pid, [])
+            baseline_xp = sum([float(h.get("total_points", 0)) for h in history[-5:]]) / min(5, max(1, len(history))) if history else 2.0
+            
+            predicted_xp = xp_matrix.get(pid, {}).get(target_gw, 0.0)
+            
+            error = abs(predicted_xp - points)
+            b_error = abs(baseline_xp - points)
+            
+            gw_error += error
+            gw_baseline_error += b_error
+            gw_count += 1
                 
         if gw_count > 0:
             mae = gw_error / gw_count
+            b_mae = gw_baseline_error / gw_count
             if not weights:
-                logger.info(f"GW {target_gw} Mean Absolute Error (MAE): {mae:.2f} pts per player")
+                logger.info(f"GW {target_gw} MAE: {mae:.2f} (Baseline: {b_mae:.2f})")
             total_error += gw_error
+            total_baseline_error += gw_baseline_error
             total_predictions += gw_count
 
     if total_predictions > 0:
         final_mae = total_error / total_predictions
+        final_b_mae = total_baseline_error / total_predictions
         if not weights:
             logger.info(f"\n==========================================")
-            logger.info(f"FINAL BACKTEST MAE: {final_mae:.2f} Points")
+            logger.info(f"FINAL BACKTEST MAE: {final_mae:.2f} Points (Baseline: {final_b_mae:.2f})")
             logger.info(f"==========================================")
         return final_mae
     return 999.0

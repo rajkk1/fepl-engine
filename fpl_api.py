@@ -10,19 +10,28 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-_cache: Dict[str, Any] = {}
+import time
 
-def fetch_json(url: str, use_cache: bool = True) -> Dict[str, Any]:
+_cache: Dict[str, Any] = {}
+CACHE_TTL = 3600 # 1 hour
+
+def fetch_json(url: str, use_cache: bool = True, cookie: Optional[str] = None) -> Dict[str, Any]:
     """Fetch JSON data from FPL API with caching support."""
     if use_cache and url in _cache:
-        return _cache[url]
+        cached = _cache[url]
+        if time.time() - cached["timestamp"] < CACHE_TTL:
+            return cached["data"]
     
     try:
-        response = requests.get(url, headers=HEADERS, timeout=10)
+        req_headers = HEADERS.copy()
+        if cookie:
+            req_headers["Cookie"] = cookie
+            
+        response = requests.get(url, headers=req_headers, timeout=10)
         response.raise_for_status()
         data = response.json()
         if use_cache:
-            _cache[url] = data
+            _cache[url] = {"data": data, "timestamp": time.time()}
         return data
     except Exception as e:
         logger.error(f"Error fetching FPL endpoint {url}: {e}")
@@ -94,6 +103,11 @@ def get_manager_picks(team_id: int, event_id: int) -> Dict[str, Any]:
     """Fetch squad picks for a specific manager and gameweek."""
     url = f"{BASE_URL}entry/{team_id}/event/{event_id}/picks/"
     return fetch_json(url, use_cache=False)
+
+def get_my_team(team_id: int, cookie: str) -> Dict[str, Any]:
+    """Fetch the authenticated team state to retrieve exact selling prices."""
+    url = f"{BASE_URL}my-team/{team_id}/"
+    return fetch_json(url, use_cache=False, cookie=cookie)
 
 def get_current_gameweek(bootstrap: Optional[Dict[str, Any]] = None) -> int:
     """Determine current or next active gameweek ID."""

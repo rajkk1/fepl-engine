@@ -36,6 +36,18 @@ def solve_fpl_optimization(
     locked_set = set(locked_player_ids or [])
     banned_set = set(banned_player_ids or [])
     
+    # Prune players to top 25 per position by total XP over the horizon to dramatically speed up solver
+    if len(horizon_gws) > 0:
+        total_xp_map = {pid: sum(xp_matrix.get(pid, {}).get(gw, 0.0) for gw in horizon_gws) for pid in player_ids}
+        must_keep = set(initial_squad_ids or []) | locked_set
+        pruned_ids = set()
+        for pos in [POS_GKP, POS_DEF, POS_MID, POS_FWD]:
+            pos_players = [pid for pid in player_ids if player_dict[pid]["element_type"] == pos]
+            pos_players.sort(key=lambda pid: total_xp_map.get(pid, 0.0), reverse=True)
+            pruned_ids.update(pos_players[:25])
+        pruned_ids.update(must_keep)
+        player_ids = [pid for pid in player_ids if pid in pruned_ids]
+    
     # Prices (FPL API prices are stored multiplied by 10 e.g. 100 = £10.0m)
     now_cost = {pid: player_dict[pid]["now_cost"] / 10.0 for pid in player_ids}
     
@@ -63,12 +75,6 @@ def solve_fpl_optimization(
     prob = pulp.LpProblem("FPL_Multi_GW_Optimizer", pulp.LpMaximize)
 
     # Decision Variables across gameweeks
-    # s[i, t]: player in squad
-    # x[i, t]: player in starting XI
-    # c[i, t]: captain
-    # tin[i, t]: transferred IN
-    # tout[i, t]: transferred OUT
-    # hits[t]: hit points penalty at GW t
     s = {}
     x = {}
     c = {}
@@ -108,20 +114,24 @@ def solve_fpl_optimization(
         for pid in player_ids:
             xp_val = xp_matrix.get(pid, {}).get(t, 0.0)
             
-            # Starter xP + Captain bonus (1x or 2x for TC)
-            obj_terms.append(x[pid, t] * xp_val)
-            obj_terms.append(c[pid, t] * (xp_val * tc_mult))
+            starter_pts = x[pid, t] * xp_val
+            bench_pts = (s[pid, t] - x[pid, t]) * xp_val * b_weight
+            captain_pts = c[pid, t] * xp_val * tc_mult
             
             # M-07/O-07: Model vice captaincy risk (~10% chance captain doesn't play)
-            obj_terms.append(vc[pid, t] * (xp_val * 0.10 * tc_mult))
+            vc_pts = vc[pid, t] * (xp_val * 0.10 * tc_mult)
             
-            obj_terms.append((s[pid, t] - x[pid, t]) * (xp_val * b_weight))
+            obj_terms.append(starter_pts + bench_pts + captain_pts + vc_pts)
         
         # Subtract hit penalties (-4 points per hit, 0 if Wildcard/Free Hit chip active)
         if is_chip_active_now and active_chip in ["wc", "fh"]:
             pass
         else:
             obj_terms.append(-4.0 * hits[t])
+
+    # Add terminal value for remaining free transfers at the end of the horizon (+1.5 expected points per FT)
+    if len(gws) > 0:
+        obj_terms.append(1.5 * ft_carried[gws[-1]])
 
     prob += pulp.lpSum(obj_terms), "Total_Expected_Points"
 
@@ -204,7 +214,7 @@ def solve_fpl_optimization(
             if active_chip == "fh" and idx == 1:
                 # FREE HIT REVERT: In the week after a Free Hit, the squad reverts to the original team
                 for pid in player_ids:
-                    in_initial = 1 if pid in set(initial_squad_ids) else 0
+                    in_initial = 1 if pid in set(initial_squad_ids or []) else 0
                     prob += s[pid, t] == in_initial + tin[pid, t] - tout[pid, t], f"Trans_{pid}_{t}"
                 
                 # Bank balance also reverts to initial (O-05)
@@ -232,7 +242,7 @@ def solve_fpl_optimization(
 
     # Solve the model using default PuLP solver (PULP_CBC_CMD)
     # Give the solver up to 5 minutes to find the optimal transfer sequence
-    solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=300, gapRel=0.001)
+    solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=300, gapRel=0.0)
     status = prob.solve(solver)
     status_str = pulp.LpStatus[status]
 

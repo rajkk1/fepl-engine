@@ -20,15 +20,22 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 def get_manager_team_state(team_id: int, current_gw: int):
     """Attempt to fetch manager's latest team state, bank balance, and selling prices."""
     try:
+        # Public fallback first
         picks_data = fpl_api.get_manager_picks(team_id, current_gw - 1 if current_gw > 1 else 1)
         squad_ids = [p["element"] for p in picks_data.get("picks", [])]
         bank = picks_data.get("entry_history", {}).get("bank", 0) / 10.0
         
-        # O-05: Track actual selling prices instead of assuming now_cost
         sell_prices = {}
-        for p in picks_data.get("picks", []):
-            if "selling_price" in p:
-                sell_prices[p["element"]] = p["selling_price"] / 10.0
+        # O-05: Track actual selling prices if FPL_COOKIE is available
+        cookie = os.getenv("FPL_COOKIE")
+        if cookie:
+            try:
+                my_team_data = fpl_api.get_my_team(team_id, cookie)
+                for p in my_team_data.get("picks", []):
+                    if "selling_price" in p:
+                        sell_prices[p["element"]] = p["selling_price"] / 10.0
+            except Exception as auth_err:
+                logging.warning(f"Failed to fetch authenticated my-team endpoint: {auth_err}")
                 
         ft = 100 if current_gw == 1 else 1
         return squad_ids, bank, ft, sell_prices
