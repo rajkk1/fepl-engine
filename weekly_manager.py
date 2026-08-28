@@ -49,14 +49,14 @@ def print_separator(char="=", length=70):
 def main():
     load_dotenv()
     parser = argparse.ArgumentParser(description="FEPL Weekly Action Plan CLI")
-    parser.add_argument("--team", type=int, help="Your FPL Team ID (can also be set via FPL_TEAM_ID env var)")
+    parser.add_argument("--team", type=int, default=4309239, help="Your FPL Team ID (can also be set via FPL_TEAM_ID env var)")
     parser.add_argument("--horizon", type=int, default=5, help="Planning horizon in gameweeks (default: 5)")
     parser.add_argument("--chip", type=str, default="", help="Chip to activate: wc, fh, tc, bb")
     parser.add_argument("--ft", type=int, default=None, help="Number of free transfers currently available. Defaults to 1.")
     parser.add_argument("--export-json", type=str, default="", help="Path to export the weekly plan as JSON (e.g., plan.json)")
     args = parser.parse_args()
 
-    team_id = args.team or os.getenv("FPL_TEAM_ID")
+    team_id = os.getenv("FPL_TEAM_ID") or args.team
     if not team_id:
         raise ValueError("Missing required FPL Team ID. Provide --team or set FPL_TEAM_ID in environment.")
     team_id = int(team_id)
