@@ -161,8 +161,8 @@ def run_backtest(weights: tuple = None, df_gw=None, df_players=None, df_teams=No
         actuals = df_target.groupby('element')['total_points'].sum().to_dict()
         minutes_played = df_target.groupby('element')['minutes'].sum().to_dict()
         
-        gw_error = 0.0
-        gw_baseline_error = 0.0
+        gw_dev = 0.0
+        gw_baseline_dev = 0.0
         gw_count = 0
         
         for pid, points in actuals.items():
@@ -171,30 +171,31 @@ def run_backtest(weights: tuple = None, df_gw=None, df_players=None, df_teams=No
             
             predicted_xp = xp_matrix.get(pid, {}).get(target_gw, 0.0)
             
-            error = abs(predicted_xp - points)
-            b_error = abs(baseline_xp - points)
+            # Use Poisson Deviance instead of Absolute Error
+            dev = max(0.0, 2 * (points * math.log(points / max(1e-4, predicted_xp)) - (points - predicted_xp)) if points > 0 else 2 * predicted_xp)
+            b_dev = max(0.0, 2 * (points * math.log(points / max(1e-4, baseline_xp)) - (points - baseline_xp)) if points > 0 else 2 * baseline_xp)
             
-            gw_error += error
-            gw_baseline_error += b_error
+            gw_dev += dev
+            gw_baseline_dev += b_dev
             gw_count += 1
                 
         if gw_count > 0:
-            mae = gw_error / gw_count
-            b_mae = gw_baseline_error / gw_count
+            dev = gw_dev / gw_count
+            b_dev = gw_baseline_dev / gw_count
             if not weights:
-                logger.info(f"GW {target_gw} MAE: {mae:.2f} (Baseline: {b_mae:.2f})")
-            total_error += gw_error
-            total_baseline_error += gw_baseline_error
+                logger.info(f"GW {target_gw} Deviance: {dev:.2f} (Baseline: {b_dev:.2f})")
+            total_error += gw_dev
+            total_baseline_error += gw_baseline_dev
             total_predictions += gw_count
 
     if total_predictions > 0:
-        final_mae = total_error / total_predictions
-        final_b_mae = total_baseline_error / total_predictions
+        final_dev = total_error / total_predictions
+        final_b_dev = total_baseline_error / total_predictions
         if not weights:
             logger.info(f"\n==========================================")
-            logger.info(f"FINAL BACKTEST MAE: {final_mae:.2f} Points (Baseline: {final_b_mae:.2f})")
+            logger.info(f"FINAL BACKTEST DEVIANCE: {final_dev:.2f} (Baseline: {final_b_dev:.2f})")
             logger.info(f"==========================================")
-        return final_mae
+        return final_dev
     return 999.0
 
 if __name__ == "__main__":

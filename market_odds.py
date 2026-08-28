@@ -32,7 +32,8 @@ class MarketOddsModel:
         url = f"https://www.football-data.co.uk/mmz4281/{season_str}/E0.csv"
         try:
             df = pd.read_csv(url)
-            self.odds_df = df[['HomeTeam', 'AwayTeam', 'B365H', 'B365D', 'B365A', 'B365>2.5', 'B365<2.5']].dropna()
+            df['Date'] = pd.to_datetime(df['Date'], format='%d/%m/%Y', errors='coerce')
+            self.odds_df = df[['Date', 'HomeTeam', 'AwayTeam', 'B365H', 'B365D', 'B365A', 'B365>2.5', 'B365<2.5']].dropna()
             _GLOBAL_ODDS_CACHE[season_str] = self.odds_df
         except Exception as e:
             print(f"Warning: Failed to fetch market odds: {e}")
@@ -59,11 +60,15 @@ class MarketOddsModel:
             f = p_home / (p_home + p_away)
             return f * mu_total, (1 - f) * mu_total
 
-    def fit_team_ratings(self, fpl_teams=None):
+    def fit_team_ratings(self, fpl_teams=None, current_gw_date=None):
         if self.odds_df is None or len(self.odds_df) == 0:
             return
 
-        fd_teams = list(self.odds_df['HomeTeam'].unique())
+        df_to_use = self.odds_df
+        if current_gw_date is not None:
+            df_to_use = self.odds_df[self.odds_df['Date'] <= current_gw_date]
+
+        fd_teams = list(df_to_use['HomeTeam'].unique())
         
         if fpl_teams and not self.FPL_TO_FD:
             for t in fpl_teams:
@@ -75,7 +80,7 @@ class MarketOddsModel:
         team_goals_scored = {k: [] for k in self.FPL_TO_FD.keys()}
         team_goals_conceded = {k: [] for k in self.FPL_TO_FD.keys()}
 
-        for _, row in self.odds_df.iterrows():
+        for _, row in df_to_use.iterrows():
             h_id = self.FD_TO_FPL.get(row['HomeTeam'])
             a_id = self.FD_TO_FPL.get(row['AwayTeam'])
             if not h_id or not a_id: continue

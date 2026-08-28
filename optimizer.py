@@ -36,15 +36,19 @@ def solve_fpl_optimization(
     locked_set = set(locked_player_ids or [])
     banned_set = set(banned_player_ids or [])
     
-    # Prune players to top 25 per position by total XP over the horizon to dramatically speed up solver
+    # Prune players to top 30 per position by total XP over the horizon + top 10 cheapest to dramatically speed up solver
     if len(horizon_gws) > 0:
         total_xp_map = {pid: sum(xp_matrix.get(pid, {}).get(gw, 0.0) for gw in horizon_gws) for pid in player_ids}
         must_keep = set(initial_squad_ids or []) | locked_set
         pruned_ids = set()
         for pos in [POS_GKP, POS_DEF, POS_MID, POS_FWD]:
             pos_players = [pid for pid in player_ids if player_dict[pid]["element_type"] == pos]
+            # Top by XP
             pos_players.sort(key=lambda pid: total_xp_map.get(pid, 0.0), reverse=True)
-            pruned_ids.update(pos_players[:25])
+            pruned_ids.update(pos_players[:30])
+            # Cheapest fodder
+            pos_players.sort(key=lambda pid: player_dict[pid]["now_cost"])
+            pruned_ids.update(pos_players[:10])
         pruned_ids.update(must_keep)
         player_ids = [pid for pid in player_ids if pid in pruned_ids]
     
@@ -58,6 +62,8 @@ def solve_fpl_optimization(
             if pid in sell_cost:
                 sell_cost[pid] = sp
 
+    # Team mapping for constraints
+    player_team = {pid: player_dict[pid]["team"] for pid in player_ids}
     element_type = {pid: player_dict[pid]["element_type"] for pid in player_ids}
     team_id = {pid: player_dict[pid]["team"] for pid in player_ids}
 
@@ -106,20 +112,20 @@ def solve_fpl_optimization(
 
     for idx, t in enumerate(gws):
         is_chip_active_now = (active_chip is not None and idx == 0)
-        
         tc_mult = 2.0 if (is_chip_active_now and active_chip == "tc") else 1.0
-        # O-07: Use bench weighting to heuristically model autosubs unless Bench Boost is active
-        b_weight = 1.0 if (is_chip_active_now and active_chip == "bb") else bench_weight
 
         for pid in player_ids:
             xp_val = xp_matrix.get(pid, {}).get(t, 0.0)
+            
+            is_gk = (element_type[pid] == POS_GKP)
+            b_weight = 1.0 if (is_chip_active_now and active_chip == "bb") else (0.01 if is_gk else 0.05)
             
             starter_pts = x[pid, t] * xp_val
             bench_pts = (s[pid, t] - x[pid, t]) * xp_val * b_weight
             captain_pts = c[pid, t] * xp_val * tc_mult
             
-            # M-07/O-07: Model vice captaincy risk (~10% chance captain doesn't play)
-            vc_pts = vc[pid, t] * (xp_val * 0.10 * tc_mult)
+            # Model vice captaincy risk (~5% chance captain doesn't play)
+            vc_pts = vc[pid, t] * (xp_val * 0.05 * tc_mult)
             
             obj_terms.append(starter_pts + bench_pts + captain_pts + vc_pts)
         
