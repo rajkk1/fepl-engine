@@ -3,7 +3,7 @@ import logging
 import argparse
 import time
 from backtest import fetch_data, build_mock_api
-from xp_model import generate_xp_matrix
+from xp_model import generate_xp_matrix, generate_merv_matrix
 from optimizer import solve_fpl_optimization
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")

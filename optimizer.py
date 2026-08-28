@@ -127,12 +127,10 @@ def solve_fpl_optimization(
             starter_pts = x[pid, t] * xp_val
             bench_pts = (s[pid, t] - x[pid, t]) * xp_val * b_weight
             
-            # Restore the Vice-Captain safety net using a realistic 2.5 MERV proxy to fix risk-aversion 
-            # without reintroducing the 6.0 mathematical exploit.
-            captain_pts = c[pid, t] * (xp_val + (1 - p_play) * 2.5) * tc_mult
+            P_CAP_BLANK = 0.05 # residual chance the chosen captain does not play
             
-            # We don't need a separate VC reward term in the objective anymore, but we'll leave it to force a VC choice
-            vc_pts = vc[pid, t] * (0.001)
+            captain_pts = c[pid, t] * xp_val * tc_mult
+            vc_pts = vc[pid, t] * xp_val * P_CAP_BLANK * tc_mult
             
             obj_terms.append(starter_pts + bench_pts + captain_pts + vc_pts)
             
@@ -337,9 +335,7 @@ def solve_fpl_optimization(
                 # Captain already accounted for 1x in starter, add the extra mult, discount by their p_play
                 gw_xp += p["xp"] * tc_mult
             if p["is_vice_captain"]:
-                # If captain blanks (1 - captain's p_play), VC gets the multiplier bonus
-                c_p_play = next((s["p_play"] for s in starters if s["is_captain"]), 1.0)
-                gw_xp += p["xp"] * tc_mult * (1 - c_p_play)
+                gw_xp += p["xp"] * tc_mult * 0.05 # P_CAP_BLANK
                 
         # Add heuristic bench contribution to gw_xp if BB is active or using autosub weight
         b_weight = 1.0 if (is_chip_active_now and active_chip == "bb") else 0.05

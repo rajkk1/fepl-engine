@@ -67,6 +67,15 @@ def build_mock_api(df_gw, df_players, df_teams, df_fixtures, current_gw: int):
             "val": float(last_val)
         }
 
+    # Extract exact ownership percentage from the previous gameweek
+    df_prev = df_gw[df_gw['GW'] == current_gw - 1]
+    own_pct = {}
+    if not df_prev.empty:
+        sel = df_prev.groupby('element')['selected'].max()
+        total_managers = sel.sum() / 15.0  # exact: 15 picks per manager
+        if total_managers > 0:
+            own_pct = (100.0 * sel / total_managers).to_dict()
+
     elements = []
     for p in df_players.to_dict(orient="records"):
         pid = int(p.get("id"))
@@ -85,6 +94,7 @@ def build_mock_api(df_gw, df_players, df_teams, df_fixtures, current_gw: int):
             "expected_goals_per_90": stats["xg90"],
             "expected_assists_per_90": stats["xa90"],
             "points_per_game": stats["ppg"],
+            "selected_by_percent": own_pct.get(pid, 0.0),
             "penalties_order": int(p.get("penalties_order")) if not pd.isna(p.get("penalties_order")) else None
         }
         elements.append(element)
