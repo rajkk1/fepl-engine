@@ -415,7 +415,7 @@ class MinutesClassifier:
         avg_starts = sum(starts_w) / len(starts_w) if starts_w else 0.0
         avg_mins = sum(mins_w) / len(mins_w) if mins_w else 0.0
         
-        proba = self.model.predict_proba([[avg_starts, avg_mins, cost, chance]])[0]
+        proba = self.model.predict_proba([[avg_starts, avg_mins, cost]])[0]
         
         # Scale by actual FPL availability multiplier if flagged
         if chance < 100:
