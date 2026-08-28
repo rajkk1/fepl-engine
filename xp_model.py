@@ -59,15 +59,15 @@ class MarketOddsPredictor:
 
 
 class GammaPoissonFilter:
-    def __init__(self, half_life=5.0, prior_weight=5.0):
+    def __init__(self, half_life=5.0, prior_weight=1.0):
         self.half_life = half_life
         self.prior_weight = prior_weight
         
         self.pos_priors = {
-            POS_GKP: {"xg": 0.00, "xa": 0.01, "cbit": 0.5, "cbirt": 0.5},
-            POS_DEF: {"xg": 0.05, "xa": 0.08, "cbit": 3.0, "cbirt": 3.0},
-            POS_MID: {"xg": 0.15, "xa": 0.15, "cbit": 1.0, "cbirt": 2.0},
-            POS_FWD: {"xg": 0.40, "xa": 0.15, "cbit": 0.5, "cbirt": 1.0}
+            POS_GKP: {"xg": 0.00, "xa": 0.01, "cbit": 0.5, "cbirt": 0.5, "saves": 2.5, "yc": 0.076},
+            POS_DEF: {"xg": 0.05, "xa": 0.08, "cbit": 7.45, "cbirt": 7.45, "saves": 0.0, "yc": 0.165},
+            POS_MID: {"xg": 0.15, "xa": 0.15, "cbit": 1.0, "cbirt": 7.86, "saves": 0.0, "yc": 0.134},
+            POS_FWD: {"xg": 0.40, "xa": 0.15, "cbit": 0.5, "cbirt": 4.09, "saves": 0.0, "yc": 0.088}
         }
 
     def predict_match(self, player, history, market_predictor, current_gw):
@@ -78,9 +78,11 @@ class GammaPoissonFilter:
         a0_xa = prior["xa"] * self.prior_weight
         a0_cbit = prior["cbit"] * self.prior_weight
         a0_cbirt = prior["cbirt"] * self.prior_weight
+        a0_saves = prior.get("saves", 0.0) * self.prior_weight
+        a0_yc = prior.get("yc", 0.135) * self.prior_weight
         b0 = self.prior_weight
         
-        sum_xg, sum_xa, sum_cbit, sum_cbirt, sum_w = 0.0, 0.0, 0.0, 0.0, 0.0
+        sum_xg, sum_xa, sum_cbit, sum_cbirt, sum_saves, sum_yc, sum_w = 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
         
         player_team = player.get("team")
         
@@ -106,6 +108,7 @@ class GammaPoissonFilter:
                 team_att_baseline = market_predictor.market.team_ratings.get(player_team, {}).get("scored", 1.4)
                 team_baseline = team_att_baseline * 1.0 if team_att_baseline > 0 else 1.4
                 fixture_multiplier = team_xg / team_baseline if team_baseline > 0 else 1.0
+                fixture_multiplier = max(0.6, min(1.6, fixture_multiplier))
                 
                 # Raw accumulated metrics in the match
                 obs_xg = float(h.get("expected_goals", 0) or 0) / fixture_multiplier
@@ -118,21 +121,32 @@ class GammaPoissonFilter:
                 cbit = cbi + tackles
                 cbirt = cbit + recoveries
                 
+                saves = float(h.get("saves", 0) or 0)
+                yc = float(h.get("yellow_cards", 0) or 0)
+                
                 sum_xg += w_i * obs_xg
                 sum_xa += w_i * obs_xa
                 sum_cbit += w_i * cbit
                 sum_cbirt += w_i * cbirt
+                sum_saves += w_i * saves
+                sum_yc += w_i * yc
                 sum_w += w_i * (mins / 90.0)
                 
         xg90 = (a0_xg + sum_xg) / (b0 + sum_w)
         xa90 = (a0_xa + sum_xa) / (b0 + sum_w)
         cbit90 = (a0_cbit + sum_cbit) / (b0 + sum_w)
         cbirt90 = (a0_cbirt + sum_cbirt) / (b0 + sum_w)
+        saves90 = (a0_saves + sum_saves) / (b0 + sum_w)
+        yc90 = (a0_yc + sum_yc) / (b0 + sum_w)
         
-        return {"xg": xg90, "xa": xa90, "cbit90": cbit90, "cbirt90": cbirt90}
-
-
-
+        return {
+            "xg": xg90,
+            "xa": xa90,
+            "cbit90": cbit90,
+            "cbirt90": cbirt90,
+            "saves90": saves90,
+            "yc90": yc90
+        }
 
 from sklearn.ensemble import HistGradientBoostingClassifier
 
@@ -233,7 +247,7 @@ class MinutesClassifier:
 class EnsembleForecaster:
     def __init__(self, weights: tuple = None):
         self.dc = MarketOddsPredictor()
-        self.gpf = GammaPoissonFilter(half_life=5.0, prior_weight=5.0)
+        self.gpf = GammaPoissonFilter(half_life=5.0, prior_weight=1.0)
         self.mc = MinutesClassifier()
 
     def fit(self, teams, past_fixtures, current_gw, all_history, fpl_players=None, season=None):
@@ -304,23 +318,25 @@ class EnsembleForecaster:
         xG_pts = xg * POINTS_GOAL.get(element_type, 4)
         xA_pts = xa * POINTS_ASSIST
         
-        # CS points: use player_opp_xg for p_cs to fix CS/lambda inconsistency
-        player_opp_xg = opp_xg * min_frac
-        p_cs_player = math.exp(-player_opp_xg)
+        # CS points: use cond_frac to prevent double-discounting
+        cond_frac = ((p_60_89 * 75.0) + (p_90 * 90.0)) / (p_60 * 90.0) if p_60 > 0 else 0.0
+        p_cs_player = math.exp(-opp_xg * cond_frac)
         
         cs_pts = POINTS_CLEAN_SHEET.get(element_type, 0)
         xCS_pts = p_60 * p_cs_player * cs_pts
         
         # Calculate expected goals conceded penalty
+        player_opp_xg = opp_xg * min_frac
         e_floor_x2 = sum(math.exp(-player_opp_xg) * (player_opp_xg**k) / math.factorial(k) * (k // 2) for k in range(10))
         xConc_penalty = e_floor_x2 if element_type in [POS_GKP, POS_DEF] else 0.0
         
         # Card Penalty
-        xCard_penalty = p_play * 0.3
+        yc90 = gpf_res.get("yc90", 0.135)
+        xCard_penalty = yc90 * min_frac
         
-        # Calculate expected saves points using SoT
-        sot90 = gpf_res.get("sot90", 0.0)
-        expected_saves = max(0.0, (sot90 * min_frac) - player_opp_xg)
+        # Calculate expected saves points using E[floor(saves/3)] -> roughly expected_saves/3.0
+        saves90 = gpf_res.get("saves90", 0.0)
+        expected_saves = saves90 * min_frac
         xSaves = (expected_saves / 3.0) if element_type == POS_GKP else 0.0
         
         # DefCon (Defensive Contributions) added in 25/26
@@ -358,6 +374,7 @@ class EnsembleForecaster:
         math_pts = xApp + xCS_pts + xG_pts + xA_pts + xSaves + xDefCon + xBonus - xConc_penalty - xCard_penalty
         
         components = {
+            "id": player.get("id", 42),
             "p_play": p_play,
             "p_60": p_60,
             "xApp": xApp,

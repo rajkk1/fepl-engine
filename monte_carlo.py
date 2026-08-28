@@ -1,8 +1,6 @@
 import numpy as np
 from typing import Dict, Any
 
-import numpy as np
-
 def simulate_player_variance(comps: dict, n_sims=10000) -> float:
     """
     Simulates a player's gameweek 10,000 times using numpy to find their variance.
@@ -10,31 +8,31 @@ def simulate_player_variance(comps: dict, n_sims=10000) -> float:
     if comps.get("math_pts", 0) == 0:
         return 0.0
         
-    np.random.seed(comps.get("id", 42) + int(comps.get("math_pts", 0)*100))
+    seed = int(comps.get("id", 42) + (comps.get("math_pts", 0) * 100))
+    rng = np.random.default_rng(seed)
         
     p_play = comps.get("p_play", 0.0)
     p_60 = comps.get("p_60", 0.0)
+    element_type = comps.get("element_type", 3)
+    p_cs = comps.get("p_cs", 0.0)
     
     if p_play <= 0:
         return 0.0
         
-    p_cs = comps.get("p_cs", 0.0)
-    element_type = comps.get("element_type", 3)
-    
-    # Un-discount rates for the conditional simulation
-    xg_cond = comps.get("xg", 0.0) / p_play
-    xa_cond = comps.get("xa", 0.0) / p_play
+    # Un-discount rates for the conditional simulation (clamp p_play to avoid exploding)
+    xg_cond = comps.get("xg", 0.0) / max(0.01, p_play)
+    xa_cond = comps.get("xa", 0.0) / max(0.01, p_play)
     
     # 1. Simulate Appearance
-    played = np.random.rand(n_sims) < p_play
-    played_60 = played & (np.random.rand(n_sims) < (p_60 / (p_play + 1e-6)))
+    played = rng.random(n_sims) < p_play
+    played_60 = played & (rng.random(n_sims) < (p_60 / max(1e-6, p_play)))
     
     # 2. Simulate Goals and Assists (Poisson)
-    goals = np.random.poisson(lam=xg_cond, size=n_sims) * played
-    assists = np.random.poisson(lam=xa_cond, size=n_sims) * played
+    goals = rng.poisson(lam=xg_cond, size=n_sims) * played
+    assists = rng.poisson(lam=xa_cond, size=n_sims) * played
     
     # 3. Simulate Clean Sheets
-    cs = np.random.rand(n_sims) < p_cs
+    cs = rng.random(n_sims) < p_cs
     cs = cs & played_60
     
     # 4. Points calculation

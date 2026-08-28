@@ -3,19 +3,19 @@
     "team_id": 4309239,
     "transfers_in": [
         {
-            "id": 1,
-            "web_name": "Raya",
-            "cost": 6.0
-        },
-        {
-            "id": 4,
-            "web_name": "Gabriel",
-            "cost": 8.0
+            "id": 12,
+            "web_name": "Saka",
+            "cost": 9.5
         },
         {
             "id": 84,
             "web_name": "Collins",
             "cost": 5.5
+        },
+        {
+            "id": 115,
+            "web_name": "De Cuyper",
+            "cost": 4.6
         },
         {
             "id": 40,
@@ -28,23 +28,18 @@
             "cost": 7.6
         },
         {
-            "id": 200,
-            "web_name": "Lacroix",
-            "cost": 6.0
+            "id": 171,
+            "web_name": "Dovin",
+            "cost": 4.0
         },
         {
-            "id": 192,
-            "web_name": "Andrews",
-            "cost": 4.5
+            "id": 226,
+            "web_name": "Pickford",
+            "cost": 5.5
         },
         {
             "id": 279,
             "web_name": "Ajayi",
-            "cost": 4.0
-        },
-        {
-            "id": 355,
-            "web_name": "Davies",
             "cost": 4.0
         },
         {
@@ -63,9 +58,9 @@
             "cost": 6.0
         },
         {
-            "id": 428,
-            "web_name": "Cunha",
-            "cost": 8.0
+            "id": 399,
+            "web_name": "Cherki",
+            "cost": 7.5
         }
     ],
     "transfers_out": [
@@ -83,11 +78,6 @@
             "id": 155,
             "web_name": "Enzo",
             "cost": 7.0
-        },
-        {
-            "id": 201,
-            "web_name": "Mu\u00f1oz",
-            "cost": 5.5
         },
         {
             "id": 229,
@@ -143,7 +133,7 @@
         "element_type": 4,
         "team": 14,
         "cost": 9.0,
-        "xp": 4.19,
+        "xp": 5.78,
         "p_play": 1.0,
         "is_captain": true,
         "is_vice_captain": false,
@@ -151,43 +141,30 @@
         "status": "a"
     },
     "vice_captain": {
-        "id": 165,
-        "web_name": "Jo\u00e3o Pedro",
-        "element_type": 4,
+        "id": 40,
+        "web_name": "Rogers",
+        "element_type": 3,
         "team": 6,
-        "cost": 7.6,
-        "xp": 3.79,
+        "cost": 7.5,
+        "xp": 5.47,
         "p_play": 1.0,
         "is_captain": false,
         "is_vice_captain": true,
-        "now_cost": 7.6,
+        "now_cost": 7.5,
         "status": "a"
     },
     "starters": [
         {
-            "id": 1,
-            "web_name": "Raya",
-            "element_type": 1,
+            "id": 12,
+            "web_name": "Saka",
+            "element_type": 3,
             "team": 1,
-            "cost": 6.0,
-            "xp": 1.65,
+            "cost": 9.5,
+            "xp": 3.74,
             "p_play": 1.0,
             "is_captain": false,
             "is_vice_captain": false,
-            "now_cost": 6.0,
-            "status": "a"
-        },
-        {
-            "id": 4,
-            "web_name": "Gabriel",
-            "element_type": 2,
-            "team": 1,
-            "cost": 8.0,
-            "xp": 2.44,
-            "p_play": 1.0,
-            "is_captain": false,
-            "is_vice_captain": false,
-            "now_cost": 8.0,
+            "now_cost": 9.5,
             "status": "a"
         },
         {
@@ -196,11 +173,24 @@
             "element_type": 4,
             "team": 4,
             "cost": 8.0,
-            "xp": 3.44,
+            "xp": 4.55,
             "p_play": 1.0,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 8.0,
+            "status": "a"
+        },
+        {
+            "id": 115,
+            "web_name": "De Cuyper",
+            "element_type": 2,
+            "team": 5,
+            "cost": 4.6,
+            "xp": 2.24,
+            "p_play": 1.0,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 4.6,
             "status": "a"
         },
         {
@@ -209,10 +199,10 @@
             "element_type": 3,
             "team": 6,
             "cost": 7.5,
-            "xp": 3.31,
+            "xp": 5.47,
             "p_play": 1.0,
             "is_captain": false,
-            "is_vice_captain": false,
+            "is_vice_captain": true,
             "now_cost": 7.5,
             "status": "a"
         },
@@ -222,24 +212,37 @@
             "element_type": 4,
             "team": 6,
             "cost": 7.6,
-            "xp": 3.79,
+            "xp": 4.53,
             "p_play": 1.0,
             "is_captain": false,
-            "is_vice_captain": true,
+            "is_vice_captain": false,
             "now_cost": 7.6,
             "status": "a"
         },
         {
-            "id": 200,
-            "web_name": "Lacroix",
+            "id": 201,
+            "web_name": "Mu\u00f1oz",
             "element_type": 2,
-            "team": 6,
-            "cost": 6.0,
-            "xp": 2.21,
+            "team": 8,
+            "cost": 5.5,
+            "xp": 2.16,
             "p_play": 1.0,
             "is_captain": false,
             "is_vice_captain": false,
-            "now_cost": 6.0,
+            "now_cost": 5.5,
+            "status": "a"
+        },
+        {
+            "id": 226,
+            "web_name": "Pickford",
+            "element_type": 1,
+            "team": 9,
+            "cost": 5.5,
+            "xp": 1.93,
+            "p_play": 1.0,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 5.5,
             "status": "a"
         },
         {
@@ -248,7 +251,7 @@
             "element_type": 3,
             "team": 14,
             "cost": 7.5,
-            "xp": 2.64,
+            "xp": 3.33,
             "p_play": 1.0,
             "is_captain": false,
             "is_vice_captain": false,
@@ -261,7 +264,7 @@
             "element_type": 4,
             "team": 14,
             "cost": 9.0,
-            "xp": 4.19,
+            "xp": 5.78,
             "p_play": 1.0,
             "is_captain": true,
             "is_vice_captain": false,
@@ -274,7 +277,7 @@
             "element_type": 2,
             "team": 15,
             "cost": 6.0,
-            "xp": 2.31,
+            "xp": 3.09,
             "p_play": 1.0,
             "is_captain": false,
             "is_vice_captain": false,
@@ -287,20 +290,7 @@
             "element_type": 3,
             "team": 16,
             "cost": 8.0,
-            "xp": 2.89,
-            "p_play": 1.0,
-            "is_captain": false,
-            "is_vice_captain": false,
-            "now_cost": 8.0,
-            "status": "a"
-        },
-        {
-            "id": 428,
-            "web_name": "Cunha",
-            "element_type": 3,
-            "team": 16,
-            "cost": 8.0,
-            "xp": 2.65,
+            "xp": 4.01,
             "p_play": 1.0,
             "is_captain": false,
             "is_vice_captain": false,
@@ -310,16 +300,29 @@
     ],
     "bench": [
         {
-            "id": 355,
-            "web_name": "Davies",
+            "id": 171,
+            "web_name": "Dovin",
             "element_type": 1,
-            "team": 14,
+            "team": 7,
             "cost": 4.0,
-            "xp": 0.94,
+            "xp": 0.81,
             "p_play": 1.0,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 4.0,
+            "status": "a"
+        },
+        {
+            "id": 399,
+            "web_name": "Cherki",
+            "element_type": 3,
+            "team": 15,
+            "cost": 7.5,
+            "xp": 3.05,
+            "p_play": 1.0,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 7.5,
             "status": "a"
         },
         {
@@ -328,24 +331,11 @@
             "element_type": 2,
             "team": 4,
             "cost": 5.5,
-            "xp": 1.86,
+            "xp": 1.83,
             "p_play": 1.0,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 5.5,
-            "status": "a"
-        },
-        {
-            "id": 192,
-            "web_name": "Andrews",
-            "element_type": 3,
-            "team": 7,
-            "cost": 4.5,
-            "xp": 1.23,
-            "p_play": 1.0,
-            "is_captain": false,
-            "is_vice_captain": false,
-            "now_cost": 4.5,
             "status": "a"
         },
         {
@@ -354,7 +344,7 @@
             "element_type": 2,
             "team": 11,
             "cost": 4.0,
-            "xp": 1.05,
+            "xp": 0.91,
             "p_play": 1.0,
             "is_captain": false,
             "is_vice_captain": false,
@@ -362,6 +352,6 @@
             "status": "a"
         }
     ],
-    "expected_score": 36.15,
-    "remaining_bank": 0.4
+    "expected_score": 47.21,
+    "remaining_bank": 0.3
 }

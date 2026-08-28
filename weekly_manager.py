@@ -39,7 +39,7 @@ def get_manager_team_state(team_id: int, current_gw: int):
                         sell_prices[p["element"]] = p["selling_price"] / 10.0
                 return squad_ids, bank, ft, sell_prices
             except Exception as auth_err:
-                pass
+                logging.warning(f"Failed to fetch authenticated my-team endpoint: {auth_err}")
                 
         # Public fallback
         picks_data = fpl_api.get_manager_picks(team_id, current_gw - 1 if current_gw > 1 else 1)
