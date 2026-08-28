@@ -181,7 +181,14 @@ def run_backtest(weights: tuple = None, df_gw=None, df_players=None, df_teams=No
         df_target = df_gw[df_gw['GW'] == target_gw]
         
         actuals = df_target.groupby('element')['total_points'].sum().to_dict()
-        baseline_xp_map = df_target.groupby('element')['xP'].sum().to_dict()
+        
+        # guard the baseline
+        valid = df_target.groupby('element')['xP'].sum()
+        if (valid == 0).all():
+            logger.warning(f"GW{target_gw}: xP column empty, skipping baseline")
+            baseline_xp_map = None
+        else:
+            baseline_xp_map = df_target.groupby('element')['xP'].sum().to_dict()
         
         # Population Restriction
         df_prev = df_gw[df_gw['GW'] == target_gw - 1]
@@ -216,8 +223,12 @@ def run_backtest(weights: tuple = None, df_gw=None, df_players=None, df_teams=No
         
         for pid in valid_pids:
             points = actuals[pid]
-            baseline_xp = baseline_xp_map.get(pid, 2.0)
             predicted_xp = xp_matrix.get(pid, {}).get(target_gw, 0.0)
+            
+            if baseline_xp_map is None:
+                baseline_xp = 0.0
+            else:
+                baseline_xp = baseline_xp_map.get(pid, 2.0)
             
             dev = max(0.0, 2 * (points * math.log(points / max(1e-4, predicted_xp)) - (points - predicted_xp)) if points > 0 else 2 * predicted_xp)
             b_dev = max(0.0, 2 * (points * math.log(points / max(1e-4, baseline_xp)) - (points - baseline_xp)) if points > 0 else 2 * baseline_xp)
@@ -243,19 +254,23 @@ def run_backtest(weights: tuple = None, df_gw=None, df_players=None, df_teams=No
         import scipy.stats as stats
         gw_spearman = 0.0
         gw_b_spearman = 0.0
-        pos_count = 0
+        pos_count_s = 0
+        pos_count_bs = 0
         for pos in [1, 2, 3, 4]:
             if len(pos_actuals[pos]) > 2:
                 s, _ = stats.spearmanr(pos_actuals[pos], pos_preds[pos])
                 bs, _ = stats.spearmanr(pos_actuals[pos], pos_baseline[pos])
                 if not math.isnan(s):
                     gw_spearman += s
+                    pos_count_s += 1
+                if not math.isnan(bs) and baseline_xp_map is not None:
                     gw_b_spearman += bs
-                    pos_count += 1
+                    pos_count_bs += 1
         
-        if pos_count > 0:
-            all_spearman.append(gw_spearman / pos_count)
-            all_baseline_spearman.append(gw_b_spearman / pos_count)
+        if pos_count_s > 0:
+            all_spearman.append(gw_spearman / pos_count_s)
+        if pos_count_bs > 0:
+            all_baseline_spearman.append(gw_b_spearman / pos_count_bs)
             
         # Top-k Metrics
         gw_ranked_actual.sort(key=lambda x: x[1], reverse=True)

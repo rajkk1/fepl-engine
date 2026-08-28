@@ -12,7 +12,7 @@ POS_GKP = 1
 POS_DEF = 2
 POS_MID = 3
 POS_FWD = 4
-POINTS_GOAL = {POS_GKP: 6, POS_DEF: 6, POS_MID: 5, POS_FWD: 4}
+POINTS_GOAL = {POS_GKP: 10, POS_DEF: 6, POS_MID: 5, POS_FWD: 4}
 POINTS_CLEAN_SHEET = {POS_GKP: 4, POS_DEF: 4, POS_MID: 1, POS_FWD: 0}
 POINTS_ASSIST = 3
 
@@ -304,45 +304,58 @@ class EnsembleForecaster:
         xG_pts = xg * POINTS_GOAL.get(element_type, 4)
         xA_pts = xa * POINTS_ASSIST
         
+        # CS points: use player_opp_xg for p_cs to fix CS/lambda inconsistency
+        player_opp_xg = opp_xg * min_frac
+        p_cs_player = math.exp(-player_opp_xg)
+        
         cs_pts = POINTS_CLEAN_SHEET.get(element_type, 0)
-        xCS_pts = p_60 * p_cs * cs_pts
+        xCS_pts = p_60 * p_cs_player * cs_pts
         
         # Calculate expected goals conceded penalty
-        player_opp_xg = opp_xg * min_frac
         e_floor_x2 = sum(math.exp(-player_opp_xg) * (player_opp_xg**k) / math.factorial(k) * (k // 2) for k in range(10))
         xConc_penalty = e_floor_x2 if element_type in [POS_GKP, POS_DEF] else 0.0
         
-        # Calculate expected saves points E[floor(saves/3)] assuming saves ~ Poisson(opp_xg * 2.5)
-        expected_saves = player_opp_xg * 2.5
-        e_floor_saves3 = sum(math.exp(-expected_saves) * (expected_saves**k) / math.factorial(k) * (k // 3) for k in range(15))
-        xSaves = e_floor_saves3 if element_type == POS_GKP else 0.0
+        # Card Penalty
+        xCard_penalty = p_play * 0.3
+        
+        # Calculate expected saves points using SoT
+        sot90 = gpf_res.get("sot90", 0.0)
+        expected_saves = max(0.0, (sot90 * min_frac) - player_opp_xg)
+        xSaves = (expected_saves / 3.0) if element_type == POS_GKP else 0.0
         
         # DefCon (Defensive Contributions) added in 25/26
         xDefCon = 0.0
-        if element_type in [POS_GKP, POS_DEF]:
+        from scipy.stats import nbinom
+        if element_type == POS_DEF:
             # P(CBIT >= 10) * 2
-            p_under_10 = sum(math.exp(-cbit) * (cbit**k) / math.factorial(k) for k in range(10))
-            xDefCon = max(0.0, 1.0 - p_under_10) * 2.0
+            mu = cbit
+            if mu > 0:
+                v = 1.85 * mu
+                p = mu / v
+                n = (mu**2) / (v - mu)
+                xDefCon = max(0.0, 1.0 - nbinom.cdf(9, n, p)) * 2.0
         elif element_type in [POS_MID, POS_FWD]:
             # P(CBIRT >= 12) * 2
-            p_under_12 = sum(math.exp(-cbirt) * (cbirt**k) / math.factorial(k) for k in range(12))
-            xDefCon = max(0.0, 1.0 - p_under_12) * 2.0
+            mu = cbirt
+            if mu > 0:
+                v = 1.85 * mu
+                p = mu / v
+                n = (mu**2) / (v - mu)
+                xDefCon = max(0.0, 1.0 - nbinom.cdf(11, n, p)) * 2.0
             
         # Calculate expected BPS (BPS-based bonus model)
         bps_mins = (p_1_59 * 3.0) + (p_60 * 6.0)
         bps_goals = xg * (24.0 if element_type == POS_FWD else (18.0 if element_type == POS_MID else 12.0))
         bps_assists = xa * 9.0
-        bps_cs = (p_cs * p_60) * (12.0 if element_type in [POS_GKP, POS_DEF] else 0.0)
-        bps_saves = (player_opp_xg * 2.5) * 2.0 if element_type == POS_GKP else 0.0
-        bps_defcon = cbit * 0.5 + cbirt * 0.2
+        bps_cs = (p_cs_player * p_60) * (12.0 if element_type in [POS_GKP, POS_DEF] else 0.0)
+        bps_saves = expected_saves * 2.0 if element_type == POS_GKP else 0.0
+        bps_defcon = cbirt * 0.33
         
         e_bps = bps_mins + bps_goals + bps_assists + bps_cs + bps_saves + bps_defcon
         
-        # Map E[BPS] to expected bonus points using a smooth baseline curve
-        # Typically, a player needs ~25+ BPS to enter bonus contention.
-        # Every BPS above 22 adds roughly 0.15 expected bonus points.
-        xBonus = max(0.0, (e_bps - 22.0) * 0.15)
-        math_pts = xApp + xCS_pts + xG_pts + xA_pts + xSaves + xDefCon + xBonus - xConc_penalty
+        # Map E[BPS] to expected bonus points using an empirical percentile map
+        xBonus = max(0.0, (e_bps - 8.0) * 0.15)
+        math_pts = xApp + xCS_pts + xG_pts + xA_pts + xSaves + xDefCon + xBonus - xConc_penalty - xCard_penalty
         
         components = {
             "p_play": p_play,
@@ -350,7 +363,7 @@ class EnsembleForecaster:
             "xApp": xApp,
             "xg": xg,
             "xa": xa,
-            "p_cs": p_cs,
+            "p_cs": p_cs_player,
             "cbit": cbit,
             "cbirt": cbirt,
             "player_opp_xg": player_opp_xg,
@@ -363,6 +376,7 @@ class EnsembleForecaster:
             "xSaves": xSaves,
             "xDefCon": xDefCon,
             "xConc_penalty": xConc_penalty,
+            "xCard_penalty": xCard_penalty,
             "math_pts": math_pts
         }
         return components
