@@ -119,7 +119,11 @@ class MarketOddsModel:
         a_att = self.team_ratings.get(away_id, {}).get("scored", 1.4)
         h_def = self.team_ratings.get(home_id, {}).get("conceded", 1.4)
         
-        mu_home = math.sqrt(h_att * a_def) * 1.10
-        mu_away = math.sqrt(a_att * h_def) * 0.90
+        L = np.mean([r["scored"] for r in self.team_ratings.values()]) if self.team_ratings else 1.4
+        if np.isnan(L) or L <= 0:
+            L = 1.4
+            
+        mu_home = L * (h_att / L) * (a_def / L) * 1.10
+        mu_away = L * (a_att / L) * (h_def / L) * 0.90
         
         return mu_home, mu_away

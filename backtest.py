@@ -115,6 +115,9 @@ def build_mock_api(df_gw, df_players, df_teams, df_fixtures, current_gw: int):
                 "was_home": bool(row.get('was_home', False)),
                 "opponent_team": int(row.get('opponent_team', 1)),
                 "starts": int(row.get('starts', 0)),
+                "clearances_blocks_interceptions": int(row.get('clearances_blocks_interceptions', 0) or 0),
+                "recoveries": int(row.get('recoveries', 0) or 0),
+                "tackles": int(row.get('tackles', 0) or 0),
                 "fixture_difficulty": 3
             }
             history.append(h)
@@ -125,20 +128,33 @@ def build_mock_api(df_gw, df_players, df_teams, df_fixtures, current_gw: int):
 
     return bootstrap, fixtures, all_history
 
-def run_backtest(weights: tuple = None, df_gw=None, df_players=None, df_teams=None, df_fixtures=None) -> float:
+def run_backtest(weights: tuple = None, df_gw=None, df_players=None, df_teams=None, df_fixtures=None, season_str="2025-26") -> float:
     if df_gw is None:
-        logger.info("Initializing Backtester...")
+        logger.info(f"Initializing Backtester for {season_str}...")
         try:
-            df_gw, df_players, df_teams, df_fixtures = fetch_data()
+            df_gw, df_players, df_teams, df_fixtures = fetch_data(season_str)
         except Exception as e:
             logger.error(f"Failed to fetch Vaastav data: {e}")
             return 999.0
 
-    TEST_GWS = range(15, 21)
+    TEST_GWS = range(5, 11)
     
     total_error = 0.0
     total_baseline_error = 0.0
     total_predictions = 0
+
+    all_spearman = []
+    all_baseline_spearman = []
+    
+    # Calibration and precision metrics
+    all_actuals = []
+    all_preds = []
+    all_baseline_preds = []
+    
+    captain_hits = 0
+    baseline_captain_hits = 0
+    top15_hits = 0
+    baseline_top15_hits = 0
 
     if not weights:
         logger.info(f"Starting Walk-Forward Time Machine from GW {TEST_GWS.start} to {TEST_GWS.stop - 1}")
@@ -152,28 +168,103 @@ def run_backtest(weights: tuple = None, df_gw=None, df_players=None, df_teams=No
         
         df_target = df_gw[df_gw['GW'] == target_gw]
         
-        # E-03: Use groupby to properly sum double gameweeks instead of overwriting the dict
         actuals = df_target.groupby('element')['total_points'].sum().to_dict()
-        minutes_played = df_target.groupby('element')['minutes'].sum().to_dict()
+        baseline_xp_map = df_target.groupby('element')['xP'].sum().to_dict()
+        
+        # Population Restriction
+        df_prev = df_gw[df_gw['GW'] == target_gw - 1]
+        top_selected = set(df_prev.groupby('element')['selected'].max().sort_values(ascending=False).head(150).index.tolist())
+        
+        player_dict = {p["id"]: p for p in bootstrap.get("elements", [])}
+        player_ids = list(player_dict.keys())
+        pruned_ids = set()
+        
+        for pos in [1, 2, 3, 4]:
+            pos_players = [pid for pid in player_ids if player_dict.get(pid, {}).get("element_type") == pos]
+            pos_players.sort(key=lambda pid: xp_matrix.get(pid, {}).get(target_gw, 0.0), reverse=True)
+            pruned_ids.update(pos_players[:30])
+            pos_players.sort(key=lambda pid: player_dict.get(pid, {}).get("now_cost", 1000))
+            pruned_ids.update(pos_players[:10])
+            
+        pruned_ids.update(top_selected)
+        valid_pids = [pid for pid in actuals.keys() if pid in pruned_ids]
         
         gw_dev = 0.0
         gw_baseline_dev = 0.0
         gw_count = 0
         
-        for pid, points in actuals.items():
-            history = all_history.get(pid, [])
-            baseline_xp = sum([float(h.get("total_points", 0)) for h in history[-5:]]) / min(5, max(1, len(history))) if history else 2.0
-            
+        # Positional Spearman tracking
+        pos_actuals = {1: [], 2: [], 3: [], 4: []}
+        pos_preds = {1: [], 2: [], 3: [], 4: []}
+        pos_baseline = {1: [], 2: [], 3: [], 4: []}
+        
+        gw_ranked_actual = []
+        gw_ranked_pred = []
+        gw_ranked_baseline = []
+        
+        for pid in valid_pids:
+            points = actuals[pid]
+            baseline_xp = baseline_xp_map.get(pid, 2.0)
             predicted_xp = xp_matrix.get(pid, {}).get(target_gw, 0.0)
             
-            # Use Poisson Deviance instead of Absolute Error
             dev = max(0.0, 2 * (points * math.log(points / max(1e-4, predicted_xp)) - (points - predicted_xp)) if points > 0 else 2 * predicted_xp)
             b_dev = max(0.0, 2 * (points * math.log(points / max(1e-4, baseline_xp)) - (points - baseline_xp)) if points > 0 else 2 * baseline_xp)
             
             gw_dev += dev
             gw_baseline_dev += b_dev
             gw_count += 1
+            
+            pos = player_dict.get(pid, {}).get("element_type", 3)
+            pos_actuals[pos].append(points)
+            pos_preds[pos].append(predicted_xp)
+            pos_baseline[pos].append(baseline_xp)
+            
+            gw_ranked_actual.append((pid, points))
+            gw_ranked_pred.append((pid, predicted_xp))
+            gw_ranked_baseline.append((pid, baseline_xp))
+            
+            all_actuals.append(points)
+            all_preds.append(predicted_xp)
+            all_baseline_preds.append(baseline_xp)
                 
+        # GW Metrics
+        import scipy.stats as stats
+        gw_spearman = 0.0
+        gw_b_spearman = 0.0
+        pos_count = 0
+        for pos in [1, 2, 3, 4]:
+            if len(pos_actuals[pos]) > 2:
+                s, _ = stats.spearmanr(pos_actuals[pos], pos_preds[pos])
+                bs, _ = stats.spearmanr(pos_actuals[pos], pos_baseline[pos])
+                if not math.isnan(s):
+                    gw_spearman += s
+                    gw_b_spearman += bs
+                    pos_count += 1
+        
+        if pos_count > 0:
+            all_spearman.append(gw_spearman / pos_count)
+            all_baseline_spearman.append(gw_b_spearman / pos_count)
+            
+        # Top-k Metrics
+        gw_ranked_actual.sort(key=lambda x: x[1], reverse=True)
+        gw_ranked_pred.sort(key=lambda x: x[1], reverse=True)
+        gw_ranked_baseline.sort(key=lambda x: x[1], reverse=True)
+        
+        top1_actual = gw_ranked_actual[0][0] if gw_ranked_actual else None
+        top15_actuals = set(p[0] for p in gw_ranked_actual[:15])
+        
+        top5_pred = set(p[0] for p in gw_ranked_pred[:5])
+        top15_pred = set(p[0] for p in gw_ranked_pred[:15])
+        
+        top5_baseline = set(p[0] for p in gw_ranked_baseline[:5])
+        top15_baseline = set(p[0] for p in gw_ranked_baseline[:15])
+        
+        if top1_actual in top5_pred: captain_hits += 1
+        if top1_actual in top5_baseline: baseline_captain_hits += 1
+        
+        top15_hits += len(top15_actuals & top15_pred)
+        baseline_top15_hits += len(top15_actuals & top15_baseline)
+            
         if gw_count > 0:
             dev = gw_dev / gw_count
             b_dev = gw_baseline_dev / gw_count
@@ -186,10 +277,26 @@ def run_backtest(weights: tuple = None, df_gw=None, df_players=None, df_teams=No
     if total_predictions > 0:
         final_dev = total_error / total_predictions
         final_b_dev = total_baseline_error / total_predictions
+        
+        final_spearman = sum(all_spearman) / len(all_spearman) if all_spearman else 0.0
+        final_b_spearman = sum(all_baseline_spearman) / len(all_baseline_spearman) if all_baseline_spearman else 0.0
+        
+        # Calibration (actual = m * pred + c)
+        import numpy as np
+        m, c = np.polyfit(all_preds, all_actuals, 1) if len(all_preds) > 1 else (0, 0)
+        bm, bc = np.polyfit(all_baseline_preds, all_actuals, 1) if len(all_baseline_preds) > 1 else (0, 0)
+        
         if not weights:
             logger.info(f"\n==========================================")
             logger.info(f"FINAL BACKTEST DEVIANCE: {final_dev:.2f} (Baseline: {final_b_dev:.2f})")
+            logger.info(f"SPEARMAN RHO (Positional): {final_spearman:.3f} (Baseline: {final_b_spearman:.3f})")
+            logger.info(f"CALIBRATION: actual = {m:.2f} * pred + {c:.2f} (Baseline: {bm:.2f} * pred + {bc:.2f})")
+            logger.info(f"PRECISION@15: {top15_hits / len(TEST_GWS):.1f}/15 (Baseline: {baseline_top15_hits / len(TEST_GWS):.1f}/15)")
+            logger.info(f"CAPTAIN STRIKE (Top 1 in Top 5): {captain_hits}/{len(TEST_GWS)} (Baseline: {baseline_captain_hits}/{len(TEST_GWS)})")
             logger.info(f"==========================================")
+        
+        # For grid search, we want to maximize Spearman or minimize Deviance
+        # Let's return Deviance for the grid search optimization
         return final_dev
     return 999.0
 

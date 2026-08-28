@@ -92,9 +92,10 @@ def main():
         ft = 100
 
     print()
-    print(f"⏳ Generating Expected Points (xP) for GW{current_gw} to GW{current_gw + args.horizon - 1}...")
+    print(f"⏳ Generating Marginal Expected Rank Value (MERV) for GW{current_gw} to GW{current_gw + args.horizon - 1}...")
     horizon_gws = list(range(current_gw, current_gw + args.horizon))
-    xp_matrix = generate_xp_matrix(horizon_gws, bootstrap=bootstrap, fixtures=fixtures)
+    from xp_model import generate_merv_matrix
+    xp_matrix = generate_merv_matrix(horizon_gws, bootstrap=bootstrap, fixtures=fixtures)
 
     active_chip = args.chip if args.chip else ""
     
@@ -113,8 +114,18 @@ def main():
         )
         base_xp = base_res.get("total_xp", 0.0)
         
-        # 2. Test Chips
-        chip_thresholds = {"tc": 10.0, "bb": 12.0, "fh": 15.0, "wc": 20.0}
+        # 2. Test Chips using dynamic Value-Of-Waiting thresholds
+        # FPL 26/27 rules: Two wildcards (GW19 expiry for WC1).
+        gws_until_wc1_expiry = max(1, 19 - current_gw) if current_gw <= 19 else max(1, 38 - current_gw)
+        gws_until_season_end = max(1, 38 - current_gw)
+        
+        chip_thresholds = {
+            "tc": 10.0 * (gws_until_season_end / 38.0), 
+            "bb": 12.0 * (gws_until_season_end / 38.0), 
+            "fh": 15.0 * (gws_until_season_end / 38.0), 
+            "wc": 20.0 * (gws_until_wc1_expiry / 19.0)
+        }
+        
         chip_results = {"": base_res}
         
         for c, threshold in chip_thresholds.items():

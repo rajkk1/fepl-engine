@@ -117,17 +117,28 @@ def solve_fpl_optimization(
         for pid in player_ids:
             xp_val = xp_matrix.get(pid, {}).get(t, 0.0)
             
-            is_gk = (element_type[pid] == POS_GKP)
-            b_weight = 1.0 if (is_chip_active_now and active_chip == "bb") else (0.01 if is_gk else 0.05)
+            # Retrieve chance of playing for captaincy risk modeling
+            chance_raw = player_dict[pid].get("chance_of_playing_next_round")
+            p_play = (chance_raw / 100.0) if chance_raw is not None else 1.0
+            if player_dict[pid].get("status") in ["i", "s", "u", "n"]: p_play = 0.0
+            
+            b_weight = 1.0 if (is_chip_active_now and active_chip == "bb") else 0.05
             
             starter_pts = x[pid, t] * xp_val
             bench_pts = (s[pid, t] - x[pid, t]) * xp_val * b_weight
-            captain_pts = c[pid, t] * xp_val * tc_mult
             
-            # Model vice captaincy risk (~5% chance captain doesn't play)
-            vc_pts = vc[pid, t] * (xp_val * 0.05 * tc_mult)
+            # Restore the Vice-Captain safety net using a realistic 2.5 MERV proxy to fix risk-aversion 
+            # without reintroducing the 6.0 mathematical exploit.
+            captain_pts = c[pid, t] * (xp_val + (1 - p_play) * 2.5) * tc_mult
+            
+            # We don't need a separate VC reward term in the objective anymore, but we'll leave it to force a VC choice
+            vc_pts = vc[pid, t] * (0.001)
             
             obj_terms.append(starter_pts + bench_pts + captain_pts + vc_pts)
+            
+            # Terminal Squad Value (Add small incentive to hold squad value at end of horizon)
+            if idx == len(gws) - 1:
+                obj_terms.append(s[pid, t] * (now_cost[pid] * 0.01))
         
         # Subtract hit penalties (-4 points per hit, 0 if Wildcard/Free Hit chip active)
         if is_chip_active_now and active_chip in ["wc", "fh"]:
@@ -246,10 +257,9 @@ def solve_fpl_optimization(
         else:
             prob += hits[t] <= max_hits_per_gw, f"Max_Hits_{t}"
 
-    import multiprocessing
     # Solve the model using default PuLP solver (PULP_CBC_CMD)
-    # Give the solver up to 5 minutes to find the optimal transfer sequence
-    solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=300, gapRel=0.0, threads=multiprocessing.cpu_count())
+    # Removing threads to prevent Windows CBC deadlocks, but keeping timeLimit at 300s to ensure true optimality.
+    solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=300, gapRel=0.0)
     status = prob.solve(solver)
     status_str = pulp.LpStatus[status]
 
@@ -277,6 +287,11 @@ def solve_fpl_optimization(
             if s_val > 0.5:
                 vc_val = pulp.value(vc[pid, t]) or 0
                 
+                p_play = 1.0
+                chance_raw = player_dict[pid].get("chance_of_playing_next_round")
+                if chance_raw is not None: p_play = chance_raw / 100.0
+                if player_dict[pid].get("status") in ["i", "s", "u", "n"]: p_play = 0.0
+
                 p_info = {
                     "id": pid,
                     "web_name": player_dict[pid]["web_name"],
@@ -284,6 +299,7 @@ def solve_fpl_optimization(
                     "team": team_id[pid],
                     "cost": now_cost[pid],
                     "xp": xp_matrix.get(pid, {}).get(t, 0.0),
+                    "p_play": p_play,
                     "is_captain": bool(c_val > 0.5),
                     "is_vice_captain": bool(vc_val > 0.5)
                 }
@@ -305,6 +321,11 @@ def solve_fpl_optimization(
             for pid in player_ids if (pulp.value(tout[pid, t]) or 0) > 0.5
         ]
 
+        # Sort bench by expected autosub value: p_play * xp
+        # GKs are always subbed for GKs, so keep them separate or just sort everyone and let FPL formation rules apply
+        # We will sort all bench players by p_play * xp descending
+        bench.sort(key=lambda p: p["p_play"] * p["xp"], reverse=True)
+        
         # Compute true expected points for the gameweek
         is_chip_active_now = (active_chip is not None and t == gws[0])
         tc_mult = 2.0 if (is_chip_active_now and active_chip == "tc") else 1.0
@@ -313,12 +334,15 @@ def solve_fpl_optimization(
         for p in starters:
             gw_xp += p["xp"]
             if p["is_captain"]:
+                # Captain already accounted for 1x in starter, add the extra mult, discount by their p_play
                 gw_xp += p["xp"] * tc_mult
             if p["is_vice_captain"]:
-                gw_xp += p["xp"] * 0.10 * tc_mult
+                # If captain blanks (1 - captain's p_play), VC gets the multiplier bonus
+                c_p_play = next((s["p_play"] for s in starters if s["is_captain"]), 1.0)
+                gw_xp += p["xp"] * tc_mult * (1 - c_p_play)
                 
         # Add heuristic bench contribution to gw_xp if BB is active or using autosub weight
-        b_weight = 1.0 if (is_chip_active_now and active_chip == "bb") else bench_weight
+        b_weight = 1.0 if (is_chip_active_now and active_chip == "bb") else 0.05
         for p in bench:
             gw_xp += p["xp"] * b_weight
 

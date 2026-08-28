@@ -56,6 +56,20 @@ def run_season_simulation(season_str="2024-25", horizon=5):
             season=season_int
         )
         
+        # Compute actual sell prices for the optimizer
+        actual_sell_prices = {}
+        if squad_ids:
+            for pid, buy_price in sell_prices.items():
+                now_cost = 50
+                for p_dict in bootstrap["elements"]:
+                    if p_dict["id"] == pid:
+                        now_cost = p_dict["now_cost"]
+                        break
+                if now_cost > buy_price:
+                    actual_sell_prices[pid] = buy_price + (now_cost - buy_price) // 2
+                else:
+                    actual_sell_prices[pid] = now_cost
+        
         # 3. Optimize Transfers
         # Initial bank is provided. If GW1, squad_ids is None (Wildcard)
         results = solve_fpl_optimization(
@@ -64,7 +78,7 @@ def run_season_simulation(season_str="2024-25", horizon=5):
             horizon_gws,
             initial_squad_ids=squad_ids,
             initial_bank=bank,
-            initial_sell_prices=sell_prices,
+            initial_sell_prices=actual_sell_prices if squad_ids else {},
             initial_ft=free_transfers
         )
         
@@ -100,8 +114,26 @@ def run_season_simulation(season_str="2024-25", horizon=5):
         else:
             free_transfers = max(1, min(5, free_transfers + 1 - len(gw_plan["transfers_in"])))
             
-        # Update sell prices (for simplicity, we track buy prices. If current price > buy price, sell price = buy + (cur-buy)//2)
-        # Actually, we can just use the solver's resulting bank. But the solver's bank assumes the current GW's prices.
+        # Update sell prices based on 50% profit rule
+        # sell_cost = buy_price + (now_cost - buy_price) // 2
+        for pid in squad_ids:
+            now_cost = 50
+            for p_dict in bootstrap["elements"]:
+                if p_dict["id"] == pid:
+                    now_cost = p_dict["now_cost"]
+                    break
+                    
+            if pid not in sell_prices:
+                # If newly bought (or GW1), buy price is now_cost
+                sell_prices[pid] = now_cost
+                
+        # Remove sold players from sell_prices
+        for pid in list(sell_prices.keys()):
+            if pid not in squad_ids:
+                del sell_prices[pid]
+                
+        # Construct the actual sell prices dictionary for the optimizer
+        # (This is now done before the solver, we just update the bank here)
         bank = gw_plan["bank"]
         
         # 5. Evaluate ACTUAL Points

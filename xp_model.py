@@ -58,44 +58,43 @@ class MarketOddsPredictor:
         }
 
 
-class KalmanFormFilter:
-    def __init__(self, process_variance=0.05, measurement_variance=0.3):
-        self.q = process_variance
-        self.r = measurement_variance
+class GammaPoissonFilter:
+    def __init__(self, half_life=5.0, prior_weight=5.0):
+        self.half_life = half_life
+        self.prior_weight = prior_weight
+        
+        self.pos_priors = {
+            POS_GKP: {"xg": 0.00, "xa": 0.01, "cbit": 0.5, "cbirt": 0.5},
+            POS_DEF: {"xg": 0.05, "xa": 0.08, "cbit": 3.0, "cbirt": 3.0},
+            POS_MID: {"xg": 0.15, "xa": 0.15, "cbit": 1.0, "cbirt": 2.0},
+            POS_FWD: {"xg": 0.40, "xa": 0.15, "cbit": 0.5, "cbirt": 1.0}
+        }
 
-    def filter_series(self, observations, fallback_prior):
-        if not observations: return fallback_prior
+    def predict_match(self, player, history, market_predictor, current_gw):
+        pos = player.get("element_type", POS_MID)
+        prior = self.pos_priors.get(pos, self.pos_priors[POS_MID])
         
-        estimate = fallback_prior
-        error_cov = 1.0
+        a0_xg = prior["xg"] * self.prior_weight
+        a0_xa = prior["xa"] * self.prior_weight
+        a0_cbit = prior["cbit"] * self.prior_weight
+        a0_cbirt = prior["cbirt"] * self.prior_weight
+        b0 = self.prior_weight
         
-        for obs, var_multiplier in observations:
-            error_cov += self.q
-            current_r = self.r * var_multiplier
-            kalman_gain = error_cov / (error_cov + current_r)
-            estimate = estimate + kalman_gain * (obs - estimate)
-            error_cov = (1 - kalman_gain) * error_cov
-            
-        return estimate
-
-    def predict_match(self, player, history, market_predictor):
-        raw_xg90 = float(player.get("expected_goals_per_90", 0.0) or 0)
-        raw_xa90 = float(player.get("expected_assists_per_90", 0.0) or 0)
+        sum_xg, sum_xa, sum_cbit, sum_cbirt, sum_w = 0.0, 0.0, 0.0, 0.0, 0.0
         
-        if not history:
-            return {"xg": raw_xg90, "xa": raw_xa90}
-            
-        xg_obs = []
-        xa_obs = []
         player_team = player.get("team")
         
-        for h in history[-5:]:
+        # Sort history to be safe
+        history = sorted(history, key=lambda x: x.get("round", 0))
+        
+        for h in history:
             mins = h.get("minutes", 0)
-            if mins >= 10:
-                # 1. Measurement variance is inversely proportional to minutes played
-                var_multiplier = 90.0 / mins
+            if mins > 0:
+                gw = h.get("round", current_gw - 1)
+                age = max(1, current_gw - gw)
+                w_i = 0.5 ** (age / self.half_life)
                 
-                # 2. Condition on fixture multiplier
+                # Condition on fixture multiplier to extract raw form
                 was_home = h.get("was_home")
                 opp_id = h.get("opponent_team")
                 home_id = player_team if was_home else opp_id
@@ -105,19 +104,32 @@ class KalmanFormFilter:
                 team_xg = lam if was_home else mu
                 
                 team_att_baseline = market_predictor.market.team_ratings.get(player_team, {}).get("scored", 1.4)
-                team_baseline = team_att_baseline * 1.0
+                team_baseline = team_att_baseline * 1.0 if team_att_baseline > 0 else 1.4
                 fixture_multiplier = team_xg / team_baseline if team_baseline > 0 else 1.0
                 
-                obs_xg90 = (float(h.get("expected_goals", 0) or 0) / (mins / 90.0)) / fixture_multiplier
-                obs_xa90 = (float(h.get("expected_assists", 0) or 0) / (mins / 90.0)) / fixture_multiplier
+                # Raw accumulated metrics in the match
+                obs_xg = float(h.get("expected_goals", 0) or 0) / fixture_multiplier
+                obs_xa = float(h.get("expected_assists", 0) or 0) / fixture_multiplier
                 
-                xg_obs.append((obs_xg90, var_multiplier))
-                xa_obs.append((obs_xa90, var_multiplier))
+                # DefCon metrics
+                cbi = int(h.get("clearances_blocks_interceptions", 0) or 0)
+                tackles = int(h.get("tackles", 0) or 0)
+                recoveries = int(h.get("recoveries", 0) or 0)
+                cbit = cbi + tackles
+                cbirt = cbit + recoveries
                 
-        filt_xg = self.filter_series(xg_obs, raw_xg90)
-        filt_xa = self.filter_series(xa_obs, raw_xa90)
+                sum_xg += w_i * obs_xg
+                sum_xa += w_i * obs_xa
+                sum_cbit += w_i * cbit
+                sum_cbirt += w_i * cbirt
+                sum_w += w_i * (mins / 90.0)
+                
+        xg90 = (a0_xg + sum_xg) / (b0 + sum_w)
+        xa90 = (a0_xa + sum_xa) / (b0 + sum_w)
+        cbit90 = (a0_cbit + sum_cbit) / (b0 + sum_w)
+        cbirt90 = (a0_cbirt + sum_cbirt) / (b0 + sum_w)
         
-        return {"xg": filt_xg, "xa": filt_xa}
+        return {"xg": xg90, "xa": xa90, "cbit90": cbit90, "cbirt90": cbirt90}
 
 
 
@@ -159,17 +171,47 @@ class MinutesClassifier:
             self.model.fit(X, y)
             self.is_trained = True
 
-    def predict_proba(self, player, history):
+    def predict_proba(self, player, history, fixture=None, current_gw=1):
         if not self.is_trained:
             return [0.1, 0.1, 0.1, 0.7] # Default fallback
             
         status = player.get("status", "a")
         chance_raw = player.get("chance_of_playing_next_round")
         
-        if status in ["i", "s", "u"] or chance_raw == 0:
-            return [1.0, 0.0, 0.0, 0.0]
+        if status in ["i", "s", "u", "n"] or chance_raw == 0:
+            chance = 0.0
+        else:
+            chance = float(chance_raw) if chance_raw is not None else 100.0
             
-        chance = float(chance_raw) if chance_raw is not None else 100.0
+        # Parse return date from news
+        news = player.get("news", "")
+        import re
+        import datetime
+        match = re.search(r"Expected back (\d{1,2} [a-zA-Z]{3})", news)
+        if match and fixture and fixture.get("kickoff_time"):
+            try:
+                date_str = match.group(1)
+                # Assume current year
+                curr_year = datetime.datetime.now().year
+                ret_date = datetime.datetime.strptime(f"{date_str} {curr_year}", "%d %b %Y")
+                kickoff = pd.to_datetime(fixture["kickoff_time"]).tz_localize(None)
+                
+                # If return date is month 1-5 and kickoff is month 8-12, return date is next year
+                if ret_date.month < 6 and kickoff.month > 7:
+                    ret_date = ret_date.replace(year=curr_year + 1)
+                    
+                if ret_date.date() <= kickoff.date():
+                    chance = 100.0
+                else:
+                    chance = 0.0
+            except Exception:
+                pass
+        elif chance < 100.0 and fixture:
+            # Linear decay towards 100% over the horizon if no exact date given
+            gw = fixture.get("event", current_gw)
+            offset = max(0, gw - current_gw)
+            # Ramp by 15% per gameweek
+            chance = min(100.0, chance + (15.0 * offset))
         cost = float(player.get("now_cost", 50))
         
         starts_w = [float(h.get("starts", 0)) for h in history[-4:]] if history else [0.0]
@@ -190,13 +232,8 @@ class MinutesClassifier:
 
 class EnsembleForecaster:
     def __init__(self, weights: tuple = None):
-        pv = 0.01
-        mv = 0.50
-        if weights is not None:
-            pv, mv = weights
-            
         self.dc = MarketOddsPredictor()
-        self.kf = KalmanFormFilter(process_variance=pv, measurement_variance=mv)
+        self.gpf = GammaPoissonFilter(half_life=5.0, prior_weight=5.0)
         self.mc = MinutesClassifier()
 
     def fit(self, teams, past_fixtures, current_gw, all_history, fpl_players=None, season=None):
@@ -212,8 +249,8 @@ class EnsembleForecaster:
         self.dc.fit_team_ratings(teams, current_gw_date=current_gw_date, season_str=season_str)
         self.mc.train(all_history)
             
-    def _predict_uncalibrated(self, player, fixture, history, dgw_idx=0):
-        p_states = self.mc.predict_proba(player, history)
+    def _predict_uncalibrated(self, player, fixture, history, dgw_idx=0, current_gw=1):
+        p_states = self.mc.predict_proba(player, history, fixture, current_gw)
         p_0, p_1_59, p_60_89, p_90 = p_states
         
         # Base probabilities from the classifier
@@ -227,17 +264,24 @@ class EnsembleForecaster:
             p_play *= (xMin / ((p_1_59 * 30.0) + (p_60_89 * 75.0) + (p_90 * 90.0) + 1e-6))
             p_60 = max(0.0, min(1.0, (xMin - 30) / 45.0))
         
-        if xMin <= 0: return 0.0
+        if xMin <= 0:
+            return {
+                "p_play": 0.0, "p_60": 0.0, "xApp": 0.0, "xg": 0.0, "xa": 0.0, "p_cs": 0.0,
+                "cbit": 0.0, "cbirt": 0.0, "player_opp_xg": 0.0, "element_type": player.get("element_type", 3),
+                "e_bps": 0.0, "xBonus": 0.0, "xCS_pts": 0.0, "xG_pts": 0.0, "xA_pts": 0.0,
+                "xSaves": 0.0, "xDefCon": 0.0, "xConc_penalty": 0.0, "math_pts": 0.0
+            }
         
         xApp = (p_60 * 2.0) + ((p_play - p_60) * 1.0)
         
-        # 1. Base Rate Estimation (Kalman)
-        kf_res = self.kf.predict_match(player, history, self.dc)
+        # 1. Base Rate Estimation (GammaPoisson)
+        gw = fixture.get("event", 1)
+        gpf_res = self.gpf.predict_match(player, history, self.dc, gw)
         
-        # 2. Override FPL dictionary so downstream component uses the Kalman shrunk rates
+        # 2. Override FPL dictionary so downstream component uses shrunk rates
         player_copy = dict(player)
-        player_copy["expected_goals_per_90"] = kf_res["xg"]
-        player_copy["expected_assists_per_90"] = kf_res["xa"]
+        player_copy["expected_goals_per_90"] = gpf_res["xg"]
+        player_copy["expected_assists_per_90"] = gpf_res["xa"]
         
         # 3. Fixture Multiplier (MarketOdds)
         dc_res = self.dc.predict_match(player_copy, fixture)
@@ -252,6 +296,9 @@ class EnsembleForecaster:
         xg *= min_frac
         xa *= min_frac
         
+        cbit = gpf_res["cbit90"] * min_frac
+        cbirt = gpf_res["cbirt90"] * min_frac
+        
         element_type = player.get("element_type", POS_MID)
         
         xG_pts = xg * POINTS_GOAL.get(element_type, 4)
@@ -260,8 +307,7 @@ class EnsembleForecaster:
         cs_pts = POINTS_CLEAN_SHEET.get(element_type, 0)
         xCS_pts = p_60 * p_cs * cs_pts
         
-        # Calculate expected goals conceded penalty E[floor(X/2)] using Poisson PMF
-        # Fix: Scale lambda (opp_xg) by minutes fraction BEFORE computing PMF
+        # Calculate expected goals conceded penalty
         player_opp_xg = opp_xg * min_frac
         e_floor_x2 = sum(math.exp(-player_opp_xg) * (player_opp_xg**k) / math.factorial(k) * (k // 2) for k in range(10))
         xConc_penalty = e_floor_x2 if element_type in [POS_GKP, POS_DEF] else 0.0
@@ -270,16 +316,60 @@ class EnsembleForecaster:
         expected_saves = player_opp_xg * 2.5
         e_floor_saves3 = sum(math.exp(-expected_saves) * (expected_saves**k) / math.factorial(k) * (k // 3) for k in range(15))
         xSaves = e_floor_saves3 if element_type == POS_GKP else 0.0
-        # M-07: Scale xBonus down to approximate the 6-point per-fixture limit
-        xBonus = ((xg * 1.5) + (xa * 1.0) + (p_cs * 0.2 * p_60)) * 0.4
         
-        math_pts = xApp + xCS_pts + xG_pts + xA_pts + xSaves + xBonus - xConc_penalty
+        # DefCon (Defensive Contributions) added in 25/26
+        xDefCon = 0.0
+        if element_type in [POS_GKP, POS_DEF]:
+            # P(CBIT >= 10) * 2
+            p_under_10 = sum(math.exp(-cbit) * (cbit**k) / math.factorial(k) for k in range(10))
+            xDefCon = max(0.0, 1.0 - p_under_10) * 2.0
+        elif element_type in [POS_MID, POS_FWD]:
+            # P(CBIRT >= 12) * 2
+            p_under_12 = sum(math.exp(-cbirt) * (cbirt**k) / math.factorial(k) for k in range(12))
+            xDefCon = max(0.0, 1.0 - p_under_12) * 2.0
+            
+        # Calculate expected BPS (BPS-based bonus model)
+        bps_mins = (p_1_59 * 3.0) + (p_60 * 6.0)
+        bps_goals = xg * (24.0 if element_type == POS_FWD else (18.0 if element_type == POS_MID else 12.0))
+        bps_assists = xa * 9.0
+        bps_cs = (p_cs * p_60) * (12.0 if element_type in [POS_GKP, POS_DEF] else 0.0)
+        bps_saves = (player_opp_xg * 2.5) * 2.0 if element_type == POS_GKP else 0.0
+        bps_defcon = cbit * 0.5 + cbirt * 0.2
         
-        return math_pts
+        e_bps = bps_mins + bps_goals + bps_assists + bps_cs + bps_saves + bps_defcon
+        
+        # Map E[BPS] to expected bonus points using a smooth baseline curve
+        # Typically, a player needs ~25+ BPS to enter bonus contention.
+        # Every BPS above 22 adds roughly 0.15 expected bonus points.
+        xBonus = max(0.0, (e_bps - 22.0) * 0.15)
+        math_pts = xApp + xCS_pts + xG_pts + xA_pts + xSaves + xDefCon + xBonus - xConc_penalty
+        
+        components = {
+            "p_play": p_play,
+            "p_60": p_60,
+            "xApp": xApp,
+            "xg": xg,
+            "xa": xa,
+            "p_cs": p_cs,
+            "cbit": cbit,
+            "cbirt": cbirt,
+            "player_opp_xg": player_opp_xg,
+            "element_type": element_type,
+            "e_bps": e_bps,
+            "xBonus": xBonus,
+            "xCS_pts": xCS_pts,
+            "xG_pts": xG_pts,
+            "xA_pts": xA_pts,
+            "xSaves": xSaves,
+            "xDefCon": xDefCon,
+            "xConc_penalty": xConc_penalty,
+            "math_pts": math_pts
+        }
+        return components
 
-    def predict(self, player, fixture, history, dgw_idx=0):
-        raw_xp = self._predict_uncalibrated(player, fixture, history, dgw_idx)
-        return round(raw_xp, 2)
+    def predict(self, player, fixture, history, dgw_idx=0, current_gw=1):
+        comps = self._predict_uncalibrated(player, fixture, history, dgw_idx, current_gw)
+        return round(comps["math_pts"], 2)
 
 def generate_xp_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None, all_history=None, weights: tuple = None, season: int = None) -> Dict[int, Dict[int, float]]:
     if bootstrap is None: bootstrap = get_bootstrap_static()
@@ -302,7 +392,8 @@ def generate_xp_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None, al
     
     ensemble = EnsembleForecaster(weights=weights)
     past_fixtures = [f for f in fixtures if f.get("finished")]
-    ensemble.fit(teams, past_fixtures, current_gw, all_history, fpl_players=players, season=season)
+    current_gw = horizon_gws[0] if horizon_gws else 1
+    ensemble.fit(teams, past_fixtures, current_gw, all_history, players, season=season)
     
     fixture_map = {}
     for fix in fixtures:
@@ -324,9 +415,63 @@ def generate_xp_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None, al
             else:
                 total_xp = 0.0
                 for idx, f in enumerate(gw_fixes):
-                    total_xp += ensemble.predict(p, f, history, dgw_idx=idx)
+                    total_xp += ensemble.predict(p, f, history, dgw_idx=idx, current_gw=current_gw)
                 xp_matrix[pid][gw] = round(total_xp, 2)
     return xp_matrix
+
+def generate_merv_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None, all_history=None, weights: tuple = None, season: int = None, risk_aversion: float = 0.05) -> Dict[int, Dict[int, float]]:
+    """
+    Generates a matrix of Marginal Expected Rank Value (MERV) instead of raw xP.
+    Rank-Aware objective that penalizes variance for differentials and rewards variance reduction for highly owned players.
+    """
+    from ownership_model import build_eo_matrix
+    from monte_carlo import simulate_player_variance, calculate_merv
+    
+    if bootstrap is None: bootstrap = get_bootstrap_static()
+    if fixtures is None: fixtures = get_fixtures()
+    
+    players = bootstrap.get("elements", [])
+    teams = bootstrap.get("teams", [])
+    eo_matrix = build_eo_matrix(players)
+    
+    current_gw = horizon_gws[0] if horizon_gws else 1
+    ensemble = EnsembleForecaster(weights=weights)
+    past_fixtures = [f for f in fixtures if f.get("finished")]
+    
+    if all_history is None:
+        player_ids = [p["id"] for p in players]
+        summaries = get_all_element_summaries(player_ids)
+        all_history = {pid: summaries.get(pid, {}).get("history", []) for pid in player_ids}
+        
+    ensemble.fit(teams, past_fixtures, current_gw, all_history, players, season=season)
+    
+    fixture_map = {}
+    for fix in fixtures:
+        if fix.get("event") in horizon_gws:
+            fixture_map.setdefault(fix["event"], {})
+            fixture_map[fix["event"]].setdefault(fix["team_h"], []).append(fix)
+            fixture_map[fix["event"]].setdefault(fix["team_a"], []).append(fix)
+
+    merv_matrix = {}
+    for p in players:
+        pid = p["id"]
+        merv_matrix[pid] = {}
+        history = all_history.get(pid, [])
+        eo = eo_matrix.get(pid, 0.0)
+
+        for gw in horizon_gws:
+            gw_fixes = fixture_map.get(gw, {}).get(p["team"], [])
+            if not gw_fixes:
+                merv_matrix[pid][gw] = 0.0
+            else:
+                total_merv = 0.0
+                for idx, f in enumerate(gw_fixes):
+                    comps = ensemble._predict_uncalibrated(p, f, history, dgw_idx=idx, current_gw=current_gw)
+                    xp = comps["math_pts"]
+                    var = simulate_player_variance(comps)
+                    total_merv += calculate_merv(xp, var, eo, risk_aversion)
+                merv_matrix[pid][gw] = round(total_merv, 2)
+    return merv_matrix
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
