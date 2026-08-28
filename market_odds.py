@@ -6,7 +6,6 @@ from scipy.optimize import root_scalar
 from thefuzz import process, fuzz
 
 _GLOBAL_ODDS_CACHE = {}
-
 _GLOBAL_FPL_TO_FD = {}
 _GLOBAL_FD_TO_FPL = {}
 
@@ -14,8 +13,10 @@ class MarketOddsModel:
     def __init__(self):
         self.odds_df = None
         self.team_ratings = {}
-        self.FPL_TO_FD = _GLOBAL_FPL_TO_FD
-        self.FD_TO_FPL = _GLOBAL_FD_TO_FPL
+        self.season_str = None
+        # Maps are now instance variables initialized from globals per season
+        self.FPL_TO_FD = {}
+        self.FD_TO_FPL = {}
 
     def fetch_odds(self, season_str=None):
         import datetime
@@ -24,6 +25,15 @@ class MarketOddsModel:
             y1 = now.year if now.month >= 7 else now.year - 1
             y2 = y1 + 1
             season_str = f"{str(y1)[2:]}{str(y2)[2:]}"
+            
+        self.season_str = season_str
+        
+        # Load maps specific to this season
+        if season_str not in _GLOBAL_FPL_TO_FD:
+            _GLOBAL_FPL_TO_FD[season_str] = {}
+            _GLOBAL_FD_TO_FPL[season_str] = {}
+        self.FPL_TO_FD = _GLOBAL_FPL_TO_FD[season_str]
+        self.FD_TO_FPL = _GLOBAL_FD_TO_FPL[season_str]
             
         if season_str in _GLOBAL_ODDS_CACHE:
             self.odds_df = _GLOBAL_ODDS_CACHE[season_str]
@@ -48,12 +58,34 @@ class MarketOddsModel:
             return 2.5
             
     def split_goals(self, mu_total, p_home, p_away):
+        rho = -0.13 # Dixon-Coles rho
+        def match_probs(mu_h, mu_a):
+            # calculate home win, away win using Skellam-like sum with DC correction
+            max_goals = 10
+            prob_matrix = np.zeros((max_goals, max_goals))
+            for i in range(max_goals):
+                for j in range(max_goals):
+                    prob = poisson.pmf(i, mu_h) * poisson.pmf(j, mu_a)
+                    # Dixon-Coles correction
+                    if i == 0 and j == 0: prob *= max(0, 1 - mu_h * mu_a * rho)
+                    elif i == 0 and j == 1: prob *= max(0, 1 + mu_h * rho)
+                    elif i == 1 and j == 0: prob *= max(0, 1 + mu_a * rho)
+                    elif i == 1 and j == 1: prob *= max(0, 1 - rho)
+                    prob_matrix[i, j] = prob
+            
+            p_h = np.sum(np.tril(prob_matrix, -1))
+            p_a = np.sum(np.triu(prob_matrix, 1))
+            return p_h, p_a
+            
         def obj(f):
             mu_h = f * mu_total
             mu_a = (1 - f) * mu_total
-            return (mu_h / (mu_a + 1e-6)) - (p_home / (p_away + 1e-6))
+            calc_p_h, calc_p_a = match_probs(mu_h, mu_a)
+            # Match the ratio of home to away win probability
+            return (calc_p_h / max(1e-6, calc_p_a)) - (p_home / max(1e-6, p_away))
+            
         try:
-            res = root_scalar(obj, bracket=[0.01, 0.99])
+            res = root_scalar(obj, bracket=[0.1, 0.9])
             f = res.root
             return f * mu_total, (1 - f) * mu_total
         except ValueError:

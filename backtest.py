@@ -128,8 +128,13 @@ def build_mock_api(df_gw, df_players, df_teams, df_fixtures, current_gw: int):
                 "clearances_blocks_interceptions": int(row.get('clearances_blocks_interceptions', 0) or 0),
                 "recoveries": int(row.get('recoveries', 0) or 0),
                 "tackles": int(row.get('tackles', 0) or 0),
+                "saves": int(row.get('saves', 0) or 0),
+                "yellow_cards": int(row.get('yellow_cards', 0) or 0),
+                "red_cards": int(row.get('red_cards', 0) or 0),
                 "fixture_difficulty": 3
             }
+            # Assert mock has fields
+            assert "saves" in h and "yellow_cards" in h
             history.append(h)
         all_history[int(pid)] = history
 

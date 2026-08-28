@@ -24,6 +24,9 @@ jobs:
       - name: Set up Python 3.10
         run: uv python install 3.10
 
+      - name: Run Pytest
+        run: uv run pytest tests/
+
       - name: Run FEPL Weekly Manager
         env:
           FPL_TEAM_ID: ${{ secrets.FPL_TEAM_ID }}

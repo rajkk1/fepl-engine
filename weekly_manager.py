@@ -25,6 +25,7 @@ def get_manager_team_state(team_id: int, current_gw: int):
         bank = 0.0
         ft = 100 if current_gw == 1 else 1
         sell_prices = {}
+        available_chips = ["wc", "fh", "bb", "tc"]
         
         if cookie:
             try:
@@ -37,7 +38,18 @@ def get_manager_team_state(team_id: int, current_gw: int):
                 for p in my_team_data.get("picks", []):
                     if "selling_price" in p:
                         sell_prices[p["element"]] = p["selling_price"] / 10.0
-                return squad_ids, bank, ft, sell_prices
+                
+                if "chips" in my_team_data:
+                    available_chips = []
+                    for c in my_team_data["chips"]:
+                        if c.get("status_for_entry") in ["available", "active"]:
+                            n = c.get("name")
+                            if n == "wildcard": available_chips.append("wc")
+                            if n == "freehit": available_chips.append("fh")
+                            if n == "bboost": available_chips.append("bb")
+                            if n == "3xc": available_chips.append("tc")
+                
+                return squad_ids, bank, ft, sell_prices, available_chips, available_chips
             except Exception as auth_err:
                 logging.warning(f"Failed to fetch authenticated my-team endpoint: {auth_err}")
                 
@@ -46,7 +58,7 @@ def get_manager_team_state(team_id: int, current_gw: int):
         squad_ids = [p["element"] for p in picks_data.get("picks", [])]
         bank = picks_data.get("entry_history", {}).get("bank", 0) / 10.0
         ft = 100 if current_gw == 1 else 1
-        return squad_ids, bank, ft, sell_prices
+        return squad_ids, bank, ft, sell_prices, available_chips
     except Exception:
         # Pre-season or no team found
         return None, 100.0, 100, {}
@@ -90,7 +102,7 @@ def main():
     print(f"🗓️  Current Target Gameweek: GW{current_gw}")
     
     # Get Manager State
-    squad_ids, bank, default_ft, sell_prices = get_manager_team_state(team_id, current_gw)
+    squad_ids, bank, default_ft, sell_prices, available_chips = get_manager_team_state(team_id, current_gw)
     ft = args.ft if args.ft is not None else default_ft
     
     if squad_ids:
@@ -152,7 +164,8 @@ def main():
             
             chip_results[c] = c_res
             
-        active_chip = best_chip
+        active_chip = best_chip.split("_")[0] if best_chip else ""
+        active_chip_gw = int(best_chip.split("_")[1]) if best_chip else horizon_gws[0]
         res = chip_results[active_chip]
         if active_chip:
             print(f"🔥 Automatic Chip Activation: {active_chip.upper()} (Marginal Gain: +{best_gain:.2f} xP)\n")

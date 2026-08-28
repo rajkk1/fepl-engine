@@ -21,7 +21,8 @@ def solve_fpl_optimization(
     banned_player_ids: Optional[List[int]] = None,
     max_hits_per_gw: int = 2,
     bench_weight: float = 0.10,
-    active_chip: Optional[str] = None
+    active_chip: Optional[str] = None,
+    active_chip_gw: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Solve multi-period FPL squad selection, transfer optimization, and chip strategies using PuLP ILP solver.
@@ -111,15 +112,15 @@ def solve_fpl_optimization(
     obj_terms = []
 
     for idx, t in enumerate(gws):
-        is_chip_active_now = (active_chip is not None and idx == 0)
+        chip_target_gw = active_chip_gw if active_chip_gw is not None else gws[0]
+        is_chip_active_now = (active_chip is not None and t == chip_target_gw)
         tc_mult = 2.0 if (is_chip_active_now and active_chip == "tc") else 1.0
 
         for pid in player_ids:
             xp_val = xp_matrix.get(pid, {}).get(t, 0.0)
             
-            # Retrieve chance of playing for captaincy risk modeling
-            chance_raw = player_dict[pid].get("chance_of_playing_next_round")
-            p_play = (chance_raw / 100.0) if chance_raw is not None else 1.0
+                        # Retrieve chance of playing from the engine (xp_matrix should provide it, or fallback)
+            p_play = xp_matrix.get(pid, {}).get(f"{t}_p_play", 1.0)
             if player_dict[pid].get("status") in ["i", "s", "u", "n"]: p_play = 0.0
             
             b_weight = 1.0 if (is_chip_active_now and active_chip == "bb") else 0.05
@@ -172,7 +173,7 @@ def solve_fpl_optimization(
         prob += bank[first_gw] == initial_bank + pulp.lpSum([tout[pid, first_gw] * sell_cost[pid] for pid in player_ids]) - pulp.lpSum([tin[pid, first_gw] * now_cost[pid] for pid in player_ids]), f"Bank_{first_gw}"
         
         # FT Rollover math for first GW
-        if active_chip in ["wc", "fh"]:
+        if active_chip in ["wc", "fh"] and first_gw == (active_chip_gw if active_chip_gw is not None else gws[0]):
             # Free Hit and Wildcard allow unlimited transfers
             prob += ft_carried[first_gw] == 0, f"No_FT_Carry_Chip"
         else:

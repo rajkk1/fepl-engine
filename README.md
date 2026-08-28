@@ -10,7 +10,7 @@ This project uses a **Zero-Server Architecture** to eliminate cloud hosting cost
 2. **ILP Math (PuLP)**: The script queries the official FPL API for player data, injury status, and expected points (xP). It formulates a complex ILP math problem enforcing constraints like a £100.0m budget cap, maximum 3 players per team, and valid formations.
 3. **Static JSON Snapshot**: The optimal team strategy is exported as `weekly_plan.json` and automatically deployed to a `gh-pages` branch, making it publicly available at a static GitHub Pages URL.
 4. **Push Notifications**: 36 hours before an FPL Gameweek deadline, GitHub Actions runs `notify.py` to ping your private Discord server with a beautiful alert!
-5. **React Native Android App**: The companion Android app is a simple, stateless UI viewer that fetches the static JSON file and renders it beautifully without needing to compute the heavy math locally.
+5. **Frontend Web App**: The frontend client is a simple, stateless UI viewer that fetches the static JSON file and renders it beautifully without needing to compute the heavy math locally.
 
 ## Setup Instructions
 
