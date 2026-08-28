@@ -57,34 +57,38 @@ class MarketOddsModel:
         except ValueError:
             return 2.5
             
+    import functools
+    @functools.lru_cache(maxsize=1024)
+    def _match_probs_cached(self, mu_h, mu_a):
+        import numpy as np
+        from scipy.stats import poisson
+        rho = -0.13
+        max_goals = 10
+        # Vectorized outer product
+        i = np.arange(max_goals)
+        pmf_h = poisson.pmf(i, mu_h)
+        pmf_a = poisson.pmf(i, mu_a)
+        prob_matrix = np.outer(pmf_h, pmf_a)
+        
+        # Apply Dixon-Coles correction
+        prob_matrix[0, 0] *= max(0, 1 - mu_h * mu_a * rho)
+        prob_matrix[0, 1] *= max(0, 1 + mu_h * rho)
+        prob_matrix[1, 0] *= max(0, 1 + mu_a * rho)
+        prob_matrix[1, 1] *= max(0, 1 - rho)
+        
+        p_h = np.sum(np.tril(prob_matrix, -1))
+        p_a = np.sum(np.triu(prob_matrix, 1))
+        return p_h, p_a
+
     def split_goals(self, mu_total, p_home, p_away):
-        rho = -0.13 # Dixon-Coles rho
-        def match_probs(mu_h, mu_a):
-            # calculate home win, away win using Skellam-like sum with DC correction
-            max_goals = 10
-            prob_matrix = np.zeros((max_goals, max_goals))
-            for i in range(max_goals):
-                for j in range(max_goals):
-                    prob = poisson.pmf(i, mu_h) * poisson.pmf(j, mu_a)
-                    # Dixon-Coles correction
-                    if i == 0 and j == 0: prob *= max(0, 1 - mu_h * mu_a * rho)
-                    elif i == 0 and j == 1: prob *= max(0, 1 + mu_h * rho)
-                    elif i == 1 and j == 0: prob *= max(0, 1 + mu_a * rho)
-                    elif i == 1 and j == 1: prob *= max(0, 1 - rho)
-                    prob_matrix[i, j] = prob
-            
-            p_h = np.sum(np.tril(prob_matrix, -1))
-            p_a = np.sum(np.triu(prob_matrix, 1))
-            return p_h, p_a
-            
         def obj(f):
             mu_h = f * mu_total
             mu_a = (1 - f) * mu_total
-            calc_p_h, calc_p_a = match_probs(mu_h, mu_a)
-            # Match the ratio of home to away win probability
+            calc_p_h, calc_p_a = self._match_probs_cached(mu_h, mu_a)
             return (calc_p_h / max(1e-6, calc_p_a)) - (p_home / max(1e-6, p_away))
             
         try:
+            from scipy.optimize import root_scalar
             res = root_scalar(obj, bracket=[0.1, 0.9])
             f = res.root
             return f * mu_total, (1 - f) * mu_total

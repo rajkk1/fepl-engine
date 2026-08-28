@@ -49,7 +49,7 @@ def get_manager_team_state(team_id: int, current_gw: int):
                             if n == "bboost": available_chips.append("bb")
                             if n == "3xc": available_chips.append("tc")
                 
-                return squad_ids, bank, ft, sell_prices, available_chips, available_chips
+                return squad_ids, bank, ft, sell_prices, available_chips
             except Exception as auth_err:
                 logging.warning(f"Failed to fetch authenticated my-team endpoint: {auth_err}")
                 
@@ -61,7 +61,7 @@ def get_manager_team_state(team_id: int, current_gw: int):
         return squad_ids, bank, ft, sell_prices, available_chips
     except Exception:
         # Pre-season or no team found
-        return None, 100.0, 100, {}
+        return None, 100.0, 100, {}, ["wc", "fh", "bb", "tc"]
 
 def print_separator(char="=", length=70):
     print(char * length)
