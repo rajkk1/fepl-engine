@@ -246,9 +246,10 @@ def solve_fpl_optimization(
         else:
             prob += hits[t] <= max_hits_per_gw, f"Max_Hits_{t}"
 
+    import multiprocessing
     # Solve the model using default PuLP solver (PULP_CBC_CMD)
     # Give the solver up to 5 minutes to find the optimal transfer sequence
-    solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=300, gapRel=0.0)
+    solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=300, gapRel=0.0, threads=multiprocessing.cpu_count())
     status = prob.solve(solver)
     status_str = pulp.LpStatus[status]
 

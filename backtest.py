@@ -11,19 +11,13 @@ from xp_model import generate_xp_matrix
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
-# Vaastav GitHub URLs for 2023-24 Season
-BASE_URL = "https://raw.githubusercontent.com/vaastav/Fantasy-Premier-League/master/data/2023-24"
-MERGED_GW_URL = f"{BASE_URL}/gws/merged_gw.csv"
-PLAYERS_RAW_URL = f"{BASE_URL}/players_raw.csv"
-TEAMS_URL = f"{BASE_URL}/teams.csv"
-FIXTURES_URL = f"{BASE_URL}/fixtures.csv"
-
-def fetch_data():
-    logger.info("Downloading historical Vaastav data (this will take ~10 seconds)...")
-    df_gw = pd.read_csv(MERGED_GW_URL, low_memory=False)
-    df_players = pd.read_csv(PLAYERS_RAW_URL, low_memory=False)
-    df_teams = pd.read_csv(TEAMS_URL, low_memory=False)
-    df_fixtures = pd.read_csv(FIXTURES_URL, low_memory=False)
+def fetch_data(season_str="2023-24"):
+    base_url = f"https://raw.githubusercontent.com/vaastav/Fantasy-Premier-League/master/data/{season_str}"
+    logger.info(f"Downloading historical Vaastav data for {season_str} (this will take ~10 seconds)...")
+    df_gw = pd.read_csv(f"{base_url}/gws/merged_gw.csv", low_memory=False)
+    df_players = pd.read_csv(f"{base_url}/players_raw.csv", low_memory=False)
+    df_teams = pd.read_csv(f"{base_url}/teams.csv", low_memory=False)
+    df_fixtures = pd.read_csv(f"{base_url}/fixtures.csv", low_memory=False)
     return df_gw, df_players, df_teams, df_fixtures
 
 def build_mock_api(df_gw, df_players, df_teams, df_fixtures, current_gw: int):
@@ -80,6 +74,7 @@ def build_mock_api(df_gw, df_players, df_teams, df_fixtures, current_gw: int):
         
         element = {
             "id": pid,
+            "web_name": str(p.get("web_name", f"Player_{pid}")),
             "element_type": int(p.get("element_type", 3)),
             "team": int(p.get("team", 1)),
             "now_cost": stats["val"],
