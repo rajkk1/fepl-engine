@@ -19,6 +19,19 @@ name: Forecast Accuracy Gate
 # precision@15 and +0.147 [-1.235, +1.353] on captain regret. Both CIs span
 # zero, so gating on them would fail builds at random.
 #
+# Two depths, because they answer different questions:
+#
+#   pull request / push  one season, GW8-16. Fast enough to block a merge on,
+#                        and enough to catch a change that breaks the forecast.
+#   weekly / dispatch    2022-23..2025-26, GW5-38, gated on the POOLED result.
+#                        ~136 gameweeks, which is the sample size at which
+#                        precision@15 and captain regret start to be
+#                        measurable at all. Seasons before 2022-23 are excluded
+#                        deliberately: they carry no expected_goals/assists, so
+#                        they measure a different model. DefCon scoring is
+#                        switched off automatically for seasons before 2025-26,
+#                        when FPL did not award it.
+#
 # FPL's own `xP` column is reported for reference but never gates anything - it is
 # scraped post-gameweek and zeroed for players who did not feature, so it leaks
 # realised minutes.
@@ -38,13 +51,13 @@ on:
     inputs:
       seasons:
         description: 'Seasons to test'
-        default: '2025-26'
+        default: '2022-23 2023-24 2024-25 2025-26'
       from_gw:
         description: 'First gameweek'
-        default: '8'
+        default: '5'
       to_gw:
         description: 'Last gameweek'
-        default: '16'
+        default: '38'
       prior_season:
         description: "history_past source: auto, a season, or none"
         default: 'auto'
@@ -52,7 +65,8 @@ on:
 jobs:
   backtest:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The deep run is ~136 gameweeks; the PR run is ~9.
+    timeout-minutes: ${{ (github.event_name == 'pull_request' || github.event_name == 'push') && 45 || 180 }}
     steps:
       - uses: actions/checkout@v4
 
@@ -62,12 +76,29 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      - name: Choose backtest depth
+        id: depth
+        run: |
+          if [ -n "${{ github.event.inputs.seasons }}" ]; then
+            echo "seasons=${{ github.event.inputs.seasons }}" >> "$GITHUB_OUTPUT"
+            echo "from_gw=${{ github.event.inputs.from_gw }}"  >> "$GITHUB_OUTPUT"
+            echo "to_gw=${{ github.event.inputs.to_gw }}"      >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "seasons=2022-23 2023-24 2024-25 2025-26" >> "$GITHUB_OUTPUT"
+            echo "from_gw=5"  >> "$GITHUB_OUTPUT"
+            echo "to_gw=38"   >> "$GITHUB_OUTPUT"
+          else
+            echo "seasons=2025-26" >> "$GITHUB_OUTPUT"
+            echo "from_gw=8" >> "$GITHUB_OUTPUT"
+            echo "to_gw=16"  >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Walk-forward backtest with accuracy gate
         run: |
           uv run python backtest.py \
-            --seasons ${{ github.event.inputs.seasons || '2025-26' }} \
-            --from-gw ${{ github.event.inputs.from_gw || '8' }} \
-            --to-gw ${{ github.event.inputs.to_gw || '16' }} \
+            --seasons ${{ steps.depth.outputs.seasons }} \
+            --from-gw ${{ steps.depth.outputs.from_gw }} \
+            --to-gw ${{ steps.depth.outputs.to_gw }} \
             --prior-season ${{ github.event.inputs.prior_season || 'auto' }} \
             --gate --gate-metric mae spearman \
             --json-out backtest_results.json

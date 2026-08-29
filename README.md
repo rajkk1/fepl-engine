@@ -90,8 +90,24 @@ before each gameweek, and scores the engine against baselines that are strictly
 computable before the deadline — trailing points-per-game and rolling means.
 
 ```bash
+# fast check, one season
 uv run python backtest.py --seasons 2025-26 --from-gw 8 --to-gw 16 --gate
+
+# the real evaluation: four seasons pooled, gated on the pooled result
+uv run python backtest.py --seasons 2022-23 2023-24 2024-25 2025-26 \
+  --from-gw 5 --to-gw 38 --gate
 ```
+
+Seasons are not interchangeable, and the harness says so rather than quietly
+averaging them. 2020-21 and 2021-22 carry no `expected_goals`/`expected_assists`
+at all, so the attacking model would run on positional priors and measure a
+different engine — they are excluded. FPL introduced **defensive contribution**
+points in 2025-26, and because the Gamma-Poisson filter correctly treats an
+absent column as *missing* rather than zero, it holds the positional prior and
+will happily award DefCon points for a season that had no such rule. Scoring is
+therefore gated by season. Without that gate, backtesting 2024-25 over-predicts
+defenders by **+0.414** points per gameweek and midfielders by **+0.195**, purely
+from a rule that did not exist.
 
 **The gate is not MAE alone, and that matters.** Averaged over ~300 players, MAE
 is dominated by correctly predicting low scores and players who did not start. A
@@ -99,41 +115,56 @@ model can clear every baseline on MAE while being no better than trailing
 points-per-game at the two decisions FPL is actually won on — which fifteen
 players to own, and who to captain. MAE also rewards shrinking the forecast
 toward the mean, which is exactly what blunts the top of the ranking. So the gate
-enforces error *and* within-position rank correlation *and* precision@15.
+enforces error *and* within-position rank correlation, and reports precision@15
+and captain regret alongside them — enforced only where they are stable enough
+to enforce, which the table below settles.
 
-Full 2025-26 season, GW5–38 (34 gameweeks):
+Pooled over 2022-23 to 2025-26, GW5–38 — **135 gameweeks**:
 
 ```
  model                MAE    RMSE    bias     rho    P@15  cap.regret
- fpl_xp_LEAKS       1.384   2.179  +0.066   0.799     5.8        7.25  <- LEAKS
- fepl               1.858   2.749  +0.001   0.597     2.3       10.71
- ppg                2.041   2.926  +0.060   0.467     2.2       10.56
- roll3_mins         2.044   3.116  -0.073   0.537     1.6       12.29
- roll3              2.092   3.124  +0.111   0.528     1.7       12.56
+ fpl_xp_LEAKS       1.548   2.440  +0.176   0.739     5.7        6.15  <- LEAKS
+ fepl               1.789   2.733  -0.078   0.585     2.6       10.83
+ ppg                1.962   2.887  -0.000   0.460     2.4       10.76
+ roll3_mins         1.969   3.072  -0.133   0.526     1.7       12.24
+ roll3              2.017   3.075  +0.047   0.516     1.8       12.24
 ```
 
 **Which of those differences are real.** Paired per-gameweek bootstrap, FEPL
-minus the trailing points-per-game baseline, 95% CI over the 34 gameweeks:
+minus each clean baseline, 95% CI over the 135 gameweeks:
 
-| metric | difference | 95% CI | verdict |
+| metric | vs `ppg` | vs `roll3` | vs `roll3_mins` |
 |---|---|---|---|
-| MAE | −0.183 | [−0.210, −0.157] | significant |
-| rank correlation | +0.130 | [+0.106, +0.155] | significant |
-| precision@15 | +0.059 | [−0.382, +0.500] | not significant |
-| captain regret | +0.147 | [−1.235, +1.353] | not significant |
+| MAE | **−0.173** [−0.188, −0.158] | **−0.228** [−0.246, −0.211] | **−0.180** [−0.197, −0.164] |
+| rank correlation | **+0.124** [+0.111, +0.137] | **+0.069** [+0.060, +0.077] | **+0.058** [+0.050, +0.066] |
+| precision@15 | +0.156 [−0.096, +0.407] | **+0.763** [+0.467, +1.067] | **+0.859** [+0.570, +1.163] |
+| captain regret | +0.074 [−0.978, +1.133] | **−1.415** [−2.533, −0.289] | **−1.407** [−2.563, −0.230] |
 
-So the engine's edge on error and on ranking is solid and repeatable. Its edge at
-the very top of the ranking is **unmeasurable with one season of data** — not
-demonstrably present, but not demonstrably absent either. That is why the gate
-enforces MAE and rank correlation and reports the other two as advisory: gating
-on a statistic whose CI spans zero fails builds at random.
+Bold is significant. The honest summary: against the rolling-mean baselines the
+engine wins on everything, including the two decision metrics. Against **trailing
+points-per-game it wins decisively on error and ranking and ties at the top of
+the table** — precision@15 and captain regret both still straddle zero after four
+seasons. Points-per-game is a much better baseline than it looks: "who has been
+scoring" already encodes form and role, which is most of what picks out the
+elite.
+
+That tie is the single most useful thing this harness has established. It is not
+a gap that one season could have revealed — over 2025-26 alone, precision@15 vs
+`ppg` came out at +0.059 [−0.382, +0.500], which is uninformative in both
+directions. It is also why the gate enforces MAE and rank correlation only, and
+reports the rest as advisory: gating on a statistic whose CI spans zero fails
+builds at random, and this repo has already watched that happen — a change whose
+true effect on precision@15 was −0.118 [−0.324, +0.059] drifted the metric below
+the baseline on noise alone.
 
 **How much room is actually left.** FPL points are extremely noisy, so a perfect
 forecast still misses. Estimated from the model's own (well-calibrated)
 predictive distribution, the irreducible MAE floor is ≈1.72 — a forecaster who
 knew every player's true distribution would still score ~1.72. Against that
 floor the baseline's total closable gap is ~0.33 and the engine has taken ~0.18
-of it. The remaining headroom in MAE is about 0.15, not 0.5.
+of it. The remaining headroom in MAE is about 0.15, not 0.5. (That floor is
+measured on 2025-26, so it is the right yardstick for that season's 1.858 rather
+than the four-season pooled 1.789 — seasons differ in how predictable they are.)
 
 **Where that remaining headroom lives.** Replacing the minutes model with a
 perfect oracle of who starts (GW8–16):

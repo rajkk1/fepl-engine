@@ -30,6 +30,7 @@ from match_sim import (
     MatchSimulator, POINTS_GOAL, POINTS_CLEAN_SHEET, POINTS_ASSIST,
     POINTS_RED, POINTS_OWN_GOAL, POINTS_PENALTY_MISS, POINTS_PENALTY_SAVE,
     POS_GKP, POS_DEF, POS_MID, POS_FWD, DEFCON_THRESHOLD, MODELLED_POSITIONS,
+    defcon_active,
 )
 from calibration import PointsCalibrator
 
@@ -767,7 +768,7 @@ class MinutesClassifier:
 class EnsembleForecaster:
     def __init__(self, half_life: float = 5.0, prior_weight: float = 1.0,
                  stat_settings=None, n_bonus_sims: int = 800,
-                 calibration_method: str = "linear"):
+                 calibration_method: str = "linear", defcon_enabled: bool = True):
         self.dc = MarketOddsPredictor()
         self.gpf = GammaPoissonFilter(half_life=half_life, prior_weight=prior_weight,
                                       stat_settings=stat_settings)
@@ -776,6 +777,8 @@ class EnsembleForecaster:
         self.calibrator = PointsCalibrator(method=calibration_method)
         self.prior_seasons: Dict[int, Dict[str, float]] = {}
         self.defcon_dispersion: Dict[int, float] = {POS_DEF: 1.85, POS_MID: 1.85, POS_FWD: 1.85}
+        # False for seasons before FPL awarded defensive contribution points.
+        self.defcon_enabled = bool(defcon_enabled)
         self._minutes_cache: Dict[tuple, List[float]] = {}
         self.calendar = FixtureCalendar()
         self._fit_teams = None
@@ -1172,7 +1175,7 @@ class EnsembleForecaster:
         # Defensive volume rises when the opponent carries more threat; the
         # previous model applied no fixture conditioning to these at all.
         xDefCon, defcon_mu = 0.0, 0.0
-        if element_type in DEFCON_THRESHOLD:
+        if self.defcon_enabled and element_type in DEFCON_THRESHOLD:
             base = rates["cbit90"] if element_type == POS_DEF else rates["cbirt90"]
             defcon_mu = base * ctx["def_mult"] * play_frac
             if defcon_mu > 0:
@@ -1286,8 +1289,14 @@ def _prepare(horizon_gws, bootstrap, fixtures, all_history, season,
         for p in players:
             p.setdefault("history_past", summaries.get(p["id"], {}).get("history_past", []))
 
+    # `season` is the starting year, so 2025 is the 2025-26 season. A live run
+    # leaves it None, which means "current rules".
     ensemble = EnsembleForecaster(half_life=half_life, prior_weight=prior_weight,
-                                  calibration_method=calibration_method)
+                                  calibration_method=calibration_method,
+                                  defcon_enabled=defcon_active(season))
+    if not ensemble.defcon_enabled:
+        logger.info("Defensive contribution points did not exist in %s-%s; "
+                    "scoring them off.", season, (season or 0) + 1)
     past_fixtures = [f for f in fixtures if f.get("finished")]
     results_df = pd.DataFrame([
         {"team_h": f["team_h"], "team_a": f["team_a"],

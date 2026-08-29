@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import backtest
 from calibration import PointsCalibrator
 from market_odds import MarketOddsModel
 from backtest import build_baselines, build_eval_population, check_gate, evaluate_gameweek
@@ -301,3 +302,84 @@ def test_gate_enforces_decision_metrics_not_just_error():
     ok, msg = check_gate(summary)
     assert ok is False
     assert "spearman" in msg
+
+
+# ------------------------------------------------------- multi-season pooling
+
+
+def _gw(gw, fepl_mae, ppg_mae, season="2025-26"):
+    def m(mae):
+        return {"mae": mae, "rmse": mae * 1.4, "bias": 0.0, "spearman": 0.5,
+                "precision_at_15": 2.0, "captain_regret": 10.0,
+                "by_position": {}, "by_price": {}}
+    return {"gw": gw, "n": 100, "season": season,
+            "models": {"fepl": m(fepl_mae), "ppg": m(ppg_mae),
+                       "roll3": m(ppg_mae), "roll3_mins": m(ppg_mae)}}
+
+
+def test_pooling_concatenates_every_seasons_gameweeks():
+    a = {"season": "2024-25", "per_gameweek": [_gw(1, 1.8, 2.0), _gw(2, 1.9, 2.1)]}
+    b = {"season": "2025-26", "per_gameweek": [_gw(1, 1.7, 2.0)]}
+    assert len(backtest.pool_gameweeks([a, b])) == 3
+
+
+def test_paired_ci_separates_a_real_gap_from_noise():
+    """The entire reason for running more than one season."""
+    consistent = [_gw(i, 1.8, 2.0) for i in range(20)]      # always 0.2 better
+    ci = backtest.paired_ci(consistent, "fepl", "ppg", "mae")
+    assert ci["significant"] is True and ci["diff"] == pytest.approx(-0.2)
+
+    noisy = [_gw(i, 2.0 + (0.9 if i % 2 else -0.9), 2.0) for i in range(20)]
+    ci = backtest.paired_ci(noisy, "fepl", "ppg", "mae")
+    assert ci["significant"] is False, "alternating +-0.9 must not read as real"
+
+
+def test_paired_ci_needs_a_minimum_sample():
+    assert backtest.paired_ci([_gw(1, 1.8, 2.0)], "fepl", "ppg", "mae") is None
+
+
+def test_defcon_scoring_is_off_before_fpl_introduced_it():
+    """
+    2022-23..2024-25 have no CBIT columns, and the Gamma-Poisson filter treats a
+    missing column as missing rather than zero - so it holds the positional
+    prior and would happily predict DefCon points for seasons in which FPL
+    awarded none. Backtesting those seasons without this gate scores every
+    defender under rules that did not exist.
+    """
+    from match_sim import defcon_active
+    assert defcon_active(2024) is False
+    assert defcon_active(2025) is True
+    assert defcon_active(None) is True, "a live run must use current rules"
+
+
+def test_season_caveats_flag_seasons_that_cannot_be_pooled():
+    assert any("expected_goals" in c for c in backtest.season_caveats("2021-22"))
+    assert not any("expected_goals" in c for c in backtest.season_caveats("2023-24"))
+    assert any("defensive contribution" in c for c in backtest.season_caveats("2023-24"))
+    assert backtest.season_caveats("2025-26") == []
+
+
+def test_each_season_resolves_its_own_prior(monkeypatch):
+    """
+    The bug this guards: the prior season was resolved once from seasons[0] and
+    reused, so a 2022-23 + 2025-26 run gave 2025-26 the 2021-22 priors.
+    """
+    asked = []
+
+    def fake_fetch(season_str):
+        asked.append(season_str)
+        return (object(), None, None, None)
+
+    monkeypatch.setattr(backtest, "fetch_data", fake_fetch)
+    backtest._load_prior_season("2025-26", "auto")
+    backtest._load_prior_season("2022-23", "auto")
+    assert asked == ["2024-25", "2021-22"]
+
+
+def test_missing_prior_season_degrades_rather_than_raising(monkeypatch):
+    def boom(season_str):
+        raise OSError("offline")
+
+    monkeypatch.setattr(backtest, "fetch_data", boom)
+    assert backtest._load_prior_season("2025-26", "auto") is None
+    assert backtest._load_prior_season("2025-26", "none") is None

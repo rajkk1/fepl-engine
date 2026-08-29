@@ -66,6 +66,19 @@ POINTS_PENALTY_SAVE = 5
 
 DEFCON_THRESHOLD = {POS_DEF: 10, POS_MID: 12, POS_FWD: 12}
 
+# FPL introduced defensive contribution points in 2025-26. Earlier seasons did
+# not award them, and the Gamma-Poisson filter correctly treats the absent CBIT
+# columns as *missing* rather than zero - so it falls back to the positional
+# prior and happily predicts DefCon points for a season in which none existed.
+# Backtesting before 2025-26 without this gate scores every defender and
+# midfielder under rules FPL was not playing by.
+DEFCON_FIRST_SEASON = 2025
+
+
+def defcon_active(season: Optional[int]) -> bool:
+    """Whether defensive-contribution points existed in a given season."""
+    return season is None or int(season) >= DEFCON_FIRST_SEASON
+
 # Representative length of a sub appearance, used to size a short appearance's
 # exposure to goals conceded. Matches the 1-59 bucket's midpoint in xp_model.
 SHORT_APPEARANCE_MINUTES = 30.0
