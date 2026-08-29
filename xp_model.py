@@ -53,6 +53,19 @@ MIN_MATCHES_FOR_RATINGS = 40
 PRIOR_SEASON_HALF_MINUTES = 1200.0
 
 
+# Assists track chance creation, which responds to fixture strength more softly
+# than goals do. The damping must be applied *symmetrically*: the same factor
+# that scales a prediction up must be the one that normalises history back down.
+# Dividing history by the full attacking multiplier while multiplying predictions
+# by a damped one shaved 6-13% off the assist rate of every strong-attack team --
+# which is exactly where premium players are.
+ASSIST_FIXTURE_DAMPING = 0.65
+
+
+def assist_multiplier(att_mult: float) -> float:
+    return 1.0 + ASSIST_FIXTURE_DAMPING * (att_mult - 1.0)
+
+
 def _current_season_start_year(reference_date=None) -> int:
     """The year a Premier League season starting in July/August belongs to."""
     import datetime
@@ -209,7 +222,7 @@ class GammaPoissonFilter:
             # source did not report the field, which is not the same as zero.
             obs = {
                 "xg": (_maybe(h, "expected_goals"), att_mult),
-                "xa": (_maybe(h, "expected_assists"), att_mult),
+                "xa": (_maybe(h, "expected_assists"), assist_multiplier(att_mult)),
                 "saves": (_maybe(h, "saves"), def_mult),
                 "yc": (_maybe(h, "yellow_cards"), 1.0),
                 "recoveries": (_maybe(h, "recoveries"), def_mult),
@@ -780,7 +793,7 @@ class EnsembleForecaster:
 
         xg = (open_play_xg90 * ctx["att_mult"] + pen_xg90) * min_frac
         # Assists track chance creation, which scales more softly than goals.
-        xa = rates["xa90"] * (1.0 + 0.65 * (ctx["att_mult"] - 1.0)) * min_frac
+        xa = rates["xa90"] * assist_multiplier(ctx["att_mult"]) * min_frac
 
         xg_cond = xg / max(1e-6, p_play)
         xa_cond = xa / max(1e-6, p_play)
