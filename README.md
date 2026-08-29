@@ -137,7 +137,7 @@ Pooled over 2022-23 to 2025-26, GW5–38 — **135 gameweeks**:
 ```
  model                MAE    RMSE    bias     rho    P@15  cap.regret
  fpl_xp_LEAKS       1.548   2.440  +0.176   0.739     5.7        6.15  <- LEAKS
- fepl               1.789   2.733  -0.078   0.585     2.6       10.83
+ fepl               1.777   2.736  -0.115   0.586     2.5       10.77
  ppg                1.962   2.887  -0.000   0.460     2.4       10.76
  roll3_mins         1.969   3.072  -0.133   0.526     1.7       12.24
  roll3              2.017   3.075  +0.047   0.516     1.8       12.24
@@ -148,10 +148,10 @@ minus each clean baseline, 95% CI over the 135 gameweeks:
 
 | metric | vs `ppg` | vs `roll3` | vs `roll3_mins` |
 |---|---|---|---|
-| MAE | **−0.173** [−0.188, −0.158] | **−0.228** [−0.246, −0.211] | **−0.180** [−0.197, −0.164] |
-| rank correlation | **+0.124** [+0.111, +0.137] | **+0.069** [+0.060, +0.077] | **+0.058** [+0.050, +0.066] |
-| precision@15 | +0.156 [−0.096, +0.407] | **+0.763** [+0.467, +1.067] | **+0.859** [+0.570, +1.163] |
-| captain regret | +0.074 [−0.978, +1.133] | **−1.415** [−2.533, −0.289] | **−1.407** [−2.563, −0.230] |
+| MAE | **−0.185** [−0.199, −0.170] | **−0.240** [−0.257, −0.223] | **−0.192** [−0.209, −0.176] |
+| rank correlation | **+0.126** [+0.112, +0.139] | **+0.070** [+0.062, +0.078] | **+0.059** [+0.052, +0.067] |
+| precision@15 | +0.111 [−0.148, +0.370] | **+0.719** [+0.422, +1.022] | **+0.815** [+0.519, +1.119] |
+| captain regret | +0.015 [−1.081, +1.119] | **−1.474** [−2.600, −0.348] | **−1.467** [−2.644, −0.274] |
 
 Bold is significant. The honest summary: against the rolling-mean baselines the
 engine wins on everything, including the two decision metrics. Against **trailing
@@ -169,6 +169,15 @@ reports the rest as advisory: gating on a statistic whose CI spans zero fails
 builds at random, and this repo has already watched that happen — a change whose
 true effect on precision@15 was −0.118 [−0.324, +0.059] drifted the metric below
 the baseline on noise alone.
+
+**Known bias.** The engine now under-predicts by 0.115 points per player per
+gameweek, and unevenly: on 2025-26 keepers run +0.168 while midfielders run
+−0.135. Most of that is the single per-team minutes tilt, which cannot correct
+the fringe and nailed bands at once — it leaves fringe players slightly
+under-allocated and nailed players slightly over. A uniform bias would matter
+little to a solver that only ranks, but a *per-position* one distorts choices
+between positions, so this is a real open defect rather than a rounding
+detail.
 
 **How much room is actually left.** FPL points are extremely noisy, so a perfect
 forecast still misses. Estimated from the model's own (well-calibrated)
