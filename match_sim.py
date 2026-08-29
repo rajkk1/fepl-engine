@@ -27,6 +27,10 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 POS_GKP, POS_DEF, POS_MID, POS_FWD = 1, 2, 3, 4
+# Positions the engine actually models. FPL has shipped others (managers were
+# element_type 5 in 2024-25), and an unmodelled position must be skipped
+# rather than crash a whole gameweek's forecast.
+MODELLED_POSITIONS = frozenset({POS_GKP, POS_DEF, POS_MID, POS_FWD})
 
 POINTS_GOAL = {POS_GKP: 10, POS_DEF: 6, POS_MID: 5, POS_FWD: 4}
 POINTS_CLEAN_SHEET = {POS_GKP: 4, POS_DEF: 4, POS_MID: 1, POS_FWD: 0}
@@ -112,7 +116,7 @@ class MatchSimulator:
             p_play = float(p.get("p_play", 0.0))
             p_60 = float(p.get("p_60", 0.0))
 
-            if p_play <= 0:
+            if p_play <= 0 or et not in MODELLED_POSITIONS:
                 continue
 
             played = rng.random(n) < p_play
@@ -144,8 +148,8 @@ class MatchSimulator:
 
             # ---- FPL points ----
             player_pts = played * 1.0 + played_60 * 1.0
-            player_pts = player_pts + goals * POINTS_GOAL[et] + assists * POINTS_ASSIST
-            player_pts = player_pts + cs * POINTS_CLEAN_SHEET[et]
+            player_pts = player_pts + goals * POINTS_GOAL.get(et, 4) + assists * POINTS_ASSIST
+            player_pts = player_pts + cs * POINTS_CLEAN_SHEET.get(et, 0)
             player_pts = player_pts + defcon_hit * 2.0
             player_pts = player_pts - yc * 1.0
             if et == POS_GKP:
@@ -157,9 +161,9 @@ class MatchSimulator:
             b = np.zeros(n, dtype=float)
             b += played_60 * BPS_PLAYING_60
             b += (played & ~played_60) * BPS_PLAYING_UNDER_60
-            b += goals * BPS_GOAL[et]
+            b += goals * BPS_GOAL.get(et, 18)
             b += assists * BPS_ASSIST
-            b += cs * BPS_CLEAN_SHEET[et]
+            b += cs * BPS_CLEAN_SHEET.get(et, 0)
             b += saves * BPS_SAVE
             b += yc * BPS_YELLOW
             b += defcon_hit * BPS_DEFCON

@@ -56,6 +56,36 @@ def test_a_player_who_cannot_play_scores_nothing(squad):
     assert out["mean_points"][1] == pytest.approx(0.0)
 
 
+def test_unmodelled_position_is_skipped_not_crashed(squad):
+    """
+    Regression: FPL shipped managers as element_type 5 in 2024-25, and the
+    simulator hard-indexed the scoring tables, so a whole gameweek's forecast
+    died with KeyError: 5. An unmodelled position must forecast to nothing.
+    """
+    squad = list(squad) + [_player(99, 1, et=5)]
+    sim = MatchSimulator(n_sims=200, seed=11)
+    out = sim.simulate(squad, {1: 1.2, 2: 1.4})
+    assert out["mean_points"][99] == pytest.approx(0.0)
+    assert out["bonus"][99] == pytest.approx(0.0)
+    # The rest of the match is unaffected.
+    assert sum(out["bonus"].values()) > 0.0
+
+
+def test_forecaster_scores_unmodelled_positions_at_zero(teams):
+    from xp_model import EnsembleForecaster
+
+    ens = EnsembleForecaster()
+    ens.dc.market._fill_missing(teams)
+    ens.dc.market._league_mean = 1.4
+    ens.mc.is_trained = False
+    manager = {"id": 500, "element_type": 5, "team": 1, "now_cost": 15,
+               "status": "a", "chance_of_playing_next_round": None, "news": ""}
+    comps = ens._predict_uncalibrated(
+        manager, {"event": 1, "team_h": 1, "team_a": 2}, [], 0, 1)
+    assert comps["math_pts"] == 0.0
+    assert comps["p_play"] == 0.0
+
+
 # ------------------------------------------------------- correlated variance
 
 

@@ -28,7 +28,7 @@ from fpl_api import get_bootstrap_static, get_fixtures, get_all_element_summarie
 from market_odds import MarketOddsModel, LEAGUE_MEAN_GOALS
 from match_sim import (
     MatchSimulator, POINTS_GOAL, POINTS_CLEAN_SHEET, POINTS_ASSIST,
-    POS_GKP, POS_DEF, POS_MID, POS_FWD, DEFCON_THRESHOLD,
+    POS_GKP, POS_DEF, POS_MID, POS_FWD, DEFCON_THRESHOLD, MODELLED_POSITIONS,
 )
 from calibration import PointsCalibrator
 
@@ -736,6 +736,11 @@ class EnsembleForecaster:
 
     def _predict_uncalibrated(self, player, fixture, history, dgw_idx=0, current_gw=1):
         element_type = player.get("element_type", POS_MID)
+        # FPL has shipped positions this engine does not model (managers were
+        # element_type 5 in 2024-25). Forecast them to zero so they are never
+        # selected, rather than scoring them as if they were outfield players.
+        if element_type not in MODELLED_POSITIONS:
+            return _empty_components(player, element_type)
         p_0, p_1_59, p_60_89, p_90, p_play, p_60, xMin = self._minutes_distribution(
             player, fixture, history, dgw_idx, current_gw
         )
