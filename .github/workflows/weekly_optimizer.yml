@@ -2,14 +2,12 @@ name: FEPL Weekly Optimizer
 
 on:
   schedule:
-    # Run every day at 12:00 UTC. 
-    # It will generate the latest optimization based on current prices and injuries.
+    # Every day at 12:00 UTC, so prices, injuries and news stay current.
     - cron: '0 12 * * *'
   workflow_dispatch:
-    # Allows you to trigger it manually from the GitHub Actions tab
 
 permissions:
-  contents: write # Needed to publish the JSON to GitHub Pages (gh-pages branch)
+  contents: write
 
 jobs:
   optimize:
@@ -21,18 +19,23 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v3
 
-      - name: Set up Python 3.10
-        run: uv python install 3.10
+      - name: Set up Python
+        run: uv python install 3.12
 
-      - name: Run Pytest
-        run: uv run pytest tests/
+      - name: Unit tests
+        # Offline only - the daily job must not fail because an external API
+        # is briefly unavailable.
+        run: uv run pytest tests/ -q
 
       - name: Run FEPL Weekly Manager
         env:
           FPL_TEAM_ID: ${{ secrets.FPL_TEAM_ID }}
+          FPL_COOKIE: ${{ secrets.FPL_COOKIE }}
         run: uv run python weekly_manager.py --export-json public/weekly_plan.json
 
-      - name: Send Discord Notifications
+      - name: Send Discord notification
+        # A failed notification should never block publishing the plan.
+        continue-on-error: true
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: uv run python notify.py
