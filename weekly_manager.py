@@ -74,6 +74,9 @@ def main():
     parser.add_argument("--chip", type=str, default="", help="Chip to activate: wc, fh, tc, bb")
     parser.add_argument("--ft", type=int, default=None, help="Number of free transfers currently available. Defaults to 1.")
     parser.add_argument("--export-json", type=str, default="", help="Path to export the weekly plan as JSON (e.g., plan.json)")
+    parser.add_argument("--risk-aversion", type=float, default=0.0,
+                        help="Rank-aware risk weight. 0 = pure expected points; "
+                             "0.02-0.10 trades points for a better rank distribution.")
     args = parser.parse_args()
 
     team_id = os.getenv("FPL_TEAM_ID") or args.team
@@ -112,73 +115,78 @@ def main():
         ft = 100
 
     print()
-    print(f"⏳ Generating Marginal Expected Rank Value (MERV) for GW{current_gw} to GW{current_gw + args.horizon - 1}...")
+    label = "Marginal Expected Rank Value (MERV)" if args.risk_aversion > 0 else "expected points (xP)"
+    print(f"⏳ Generating {label} for GW{current_gw} to GW{current_gw + args.horizon - 1}...")
     horizon_gws = list(range(current_gw, current_gw + args.horizon))
     from xp_model import generate_merv_matrix
-    xp_matrix = generate_merv_matrix(horizon_gws, bootstrap=bootstrap, fixtures=fixtures)
+    xp_matrix = generate_merv_matrix(
+        horizon_gws, bootstrap=bootstrap, fixtures=fixtures,
+        risk_aversion=args.risk_aversion,
+    )
 
     active_chip = args.chip if args.chip else ""
-    
-    # #9. Automated Chip Comparison
-    if not active_chip:
-        print("🤖 Evaluating all possible Chip Strategies...")
-        best_gain = 0.0
-        best_chip = ""
-        
-        # 1. Get baseline (No Chip)
-        base_res = solve_fpl_optimization(
-            bootstrap=bootstrap, xp_matrix=xp_matrix, horizon_gws=horizon_gws, 
-            initial_squad_ids=squad_ids, initial_bank=bank, initial_ft=ft, 
+    active_chip_gw = horizon_gws[0]
+
+    def _solve(chip=None, chip_gw=None):
+        return solve_fpl_optimization(
+            bootstrap=bootstrap, xp_matrix=xp_matrix, horizon_gws=horizon_gws,
+            initial_squad_ids=squad_ids, initial_bank=bank, initial_ft=ft,
             initial_sell_prices=sell_prices,
-            max_hits_per_gw=2, active_chip=None
+            max_hits_per_gw=2, active_chip=chip, active_chip_gw=chip_gw,
         )
+
+    if not active_chip:
+        # Search chip x gameweek, not just chip. The previous version only ever
+        # evaluated a chip at the first gameweek of the horizon, so "hold it for
+        # a double gameweek" was unreachable, and it crashed on the result:
+        # `int(best_chip.split("_")[1])` raised IndexError for any bare chip code.
+        print("🤖 Evaluating chip strategies across the horizon...")
+
+        base_res = _solve(None, None)
         base_xp = base_res.get("total_xp", 0.0)
-        
-        # 2. Test Chips using dynamic Value-Of-Waiting thresholds
-        # FPL 26/27 rules: Two wildcards (GW19 expiry for WC1).
+
+        # Value of waiting: the later in the season, the lower the bar for using
+        # a chip now, because there are fewer remaining chances to beat it.
         gws_until_wc1_expiry = max(1, 19 - current_gw) if current_gw <= 19 else max(1, 38 - current_gw)
         gws_until_season_end = max(1, 38 - current_gw)
-        
         chip_thresholds = {
-            "tc": 10.0 * (gws_until_season_end / 38.0), 
-            "bb": 12.0 * (gws_until_season_end / 38.0), 
-            "fh": 15.0 * (gws_until_season_end / 38.0), 
-            "wc": 20.0 * (gws_until_wc1_expiry / 19.0)
+            "tc": 10.0 * (gws_until_season_end / 38.0),
+            "bb": 12.0 * (gws_until_season_end / 38.0),
+            "fh": 15.0 * (gws_until_season_end / 38.0),
+            "wc": 20.0 * (gws_until_wc1_expiry / 19.0),
         }
-        
-        chip_results = {"": base_res}
-        
-        for c, threshold in chip_thresholds.items():
-            c_res = solve_fpl_optimization(
-                bootstrap=bootstrap, xp_matrix=xp_matrix, horizon_gws=horizon_gws, 
-                initial_squad_ids=squad_ids, initial_bank=bank, initial_ft=ft, 
-                initial_sell_prices=sell_prices,
-                max_hits_per_gw=2, active_chip=c
-            )
-            c_xp = c_res.get("total_xp", 0.0)
-            gain = c_xp - base_xp
-            
-            if gain > threshold and gain > best_gain:
-                best_gain = gain
-                best_chip = c
-            
-            chip_results[c] = c_res
-            
-        active_chip = best_chip.split("_")[0] if best_chip else ""
-        active_chip_gw = int(best_chip.split("_")[1]) if best_chip else horizon_gws[0]
-        res = chip_results[active_chip]
+
+        # Only consider chips the manager still holds.
+        candidates = [c for c in chip_thresholds if c in available_chips]
+        skipped = [c for c in chip_thresholds if c not in available_chips]
+        if skipped:
+            print(f"   (already used / unavailable: {', '.join(sorted(skipped)).upper()})")
+
+        best = {"chip": "", "gw": horizon_gws[0], "gain": 0.0, "res": base_res}
+        for c in candidates:
+            threshold = chip_thresholds[c]
+            for gw in horizon_gws:
+                try:
+                    c_res = _solve(c, gw)
+                except Exception as e:
+                    logging.warning("Chip %s @ GW%s failed to solve: %s", c, gw, e)
+                    continue
+                gain = c_res.get("total_xp", 0.0) - base_xp
+                if gain > threshold and gain > best["gain"]:
+                    best = {"chip": c, "gw": gw, "gain": gain, "res": c_res}
+
+        active_chip = best["chip"]
+        active_chip_gw = best["gw"]
+        res = best["res"]
         if active_chip:
-            print(f"🔥 Automatic Chip Activation: {active_chip.upper()} (Marginal Gain: +{best_gain:.2f} xP)\n")
+            when = "this gameweek" if active_chip_gw == current_gw else f"GW{active_chip_gw}"
+            print(f"🔥 Chip recommendation: {active_chip.upper()} in {when} "
+                  f"(marginal gain: +{best['gain']:.2f} xP)\n")
         else:
-            print(f"🧠 Solving ILP Optimization Model (Active Chip: None)...\n")
+            print("🧠 Solving ILP Optimization Model (Active Chip: None)...\n")
     else:
         print(f"🧠 Solving ILP Optimization Model (Active Chip: {active_chip})...\n")
-        res = solve_fpl_optimization(
-            bootstrap=bootstrap, xp_matrix=xp_matrix, horizon_gws=horizon_gws, 
-            initial_squad_ids=squad_ids, initial_bank=bank, initial_ft=ft, 
-            initial_sell_prices=sell_prices,
-            max_hits_per_gw=2, active_chip=active_chip
-        )
+        res = _solve(active_chip, active_chip_gw)
 
     if res.get("status") != "Optimal":
         print("⚠️ Warning: ILP Solver did not find a strictly optimal solution.")
@@ -228,7 +236,9 @@ def main():
 
     # Chips
     print("\n🃏 CHIP STRATEGY:")
-    if active_chip == "wc":
+    if active_chip and active_chip_gw != current_gw:
+        print(f"  [→] Hold {active_chip.upper()} for GW{active_chip_gw} (do not play it this week)")
+    elif active_chip == "wc":
         print("  [✓] Play Wildcard (Unlimited Free Transfers active)")
     elif active_chip == "fh":
         print("  [✓] Play Free Hit (1-GW Squad active)")
@@ -274,6 +284,7 @@ def main():
             "transfers_out": t_out,
             "hits": hits,
             "active_chip": active_chip,
+            "active_chip_gw": active_chip_gw if active_chip else None,
             "captain": captain,
             "vice_captain": vice_captain,
             "starters": starters,

@@ -1,0 +1,60 @@
+name: Forecast Accuracy Gate
+
+# The unit suite proves the engine runs. This proves it is still worth running.
+#
+# The gate is: FEPL must beat every clean, point-in-time baseline (trailing
+# points-per-game and rolling means). FPL's own `xP` column is reported for
+# reference but never gates anything - it is scraped post-gameweek and zeroed for
+# players who did not feature, so it leaks realised minutes.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.py'
+      - '.github/workflows/accuracy_gate.yml'
+  pull_request:
+    paths:
+      - '**.py'
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      seasons:
+        description: 'Seasons to test'
+        default: '2025-26'
+      from_gw:
+        description: 'First gameweek'
+        default: '8'
+      to_gw:
+        description: 'Last gameweek'
+        default: '16'
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Walk-forward backtest with accuracy gate
+        run: |
+          uv run python backtest.py \
+            --seasons ${{ github.event.inputs.seasons || '2025-26' }} \
+            --from-gw ${{ github.event.inputs.from_gw || '8' }} \
+            --to-gw ${{ github.event.inputs.to_gw || '16' }} \
+            --gate --gate-metric mae \
+            --json-out backtest_results.json
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-results
+          path: backtest_results.json

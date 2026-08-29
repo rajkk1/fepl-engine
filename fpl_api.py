@@ -83,15 +83,40 @@ async def _fetch_all_summaries_async(player_ids: List[int]) -> Dict[int, Dict[st
         results = await asyncio.gather(*tasks)
         return dict(results)
 
+MIN_COVERAGE_WARN = 0.95
+MIN_COVERAGE_FAIL = 0.70
+
+# Coverage achieved by the most recent call, so callers can record how complete
+# the run's inputs were rather than assuming they were perfect.
+last_summary_coverage: float = 0.0
+
+
 def get_all_element_summaries(player_ids: List[int]) -> Dict[int, Dict[str, Any]]:
-    """Fetch all element summaries concurrently in ~10 seconds with exponential backoff."""
+    """
+    Fetch all element summaries concurrently with exponential backoff.
+
+    Partial rate-limiting used to abort the entire run. A forecast built from 92%
+    of players is far more useful than no forecast at all, so we now degrade and
+    record coverage, failing only when the data is too thin to model.
+    """
+    global last_summary_coverage
     results = asyncio.run(_fetch_all_summaries_async(player_ids))
-    
-    # E-02: Hard failure if coverage drops below 95% due to rate limits
+
+    total = max(1, len(player_ids))
     valid_count = sum(1 for data in results.values() if data)
-    if valid_count < len(player_ids) * 0.95:
-        raise RuntimeError(f"FPL API heavily rate-limited! Only fetched {valid_count}/{len(player_ids)} summaries.")
-        
+    last_summary_coverage = valid_count / total
+
+    if last_summary_coverage < MIN_COVERAGE_FAIL:
+        raise RuntimeError(
+            f"FPL API heavily rate-limited: only {valid_count}/{total} summaries "
+            f"({last_summary_coverage:.1%}). Too sparse to forecast."
+        )
+    if last_summary_coverage < MIN_COVERAGE_WARN:
+        logger.warning(
+            "Incomplete player history: %d/%d summaries (%.1f%%). Players with "
+            "missing history fall back to positional priors.",
+            valid_count, total, 100 * last_summary_coverage,
+        )
     return results
 
 def get_manager_info(team_id: int) -> Dict[str, Any]:

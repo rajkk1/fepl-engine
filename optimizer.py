@@ -116,22 +116,34 @@ def solve_fpl_optimization(
         is_chip_active_now = (active_chip is not None and t == chip_target_gw)
         tc_mult = 2.0 if (is_chip_active_now and active_chip == "tc") else 1.0
 
+        # The vice-captain scores only when the *captain* blanks. Who the captain
+        # is, is itself a decision variable, so referencing their p_play directly
+        # would make the objective bilinear. Instead we estimate P(captain blanks)
+        # once per gameweek from the players actually in contention for the
+        # armband - far better than the flat 0.05 this replaced, and still linear.
+        contenders = sorted(
+            player_ids, key=lambda q: xp_matrix.get(q, {}).get(t, 0.0), reverse=True
+        )[:10]
+        contender_p_play = [
+            xp_matrix.get(q, {}).get(f"{t}_p_play", 1.0) for q in contenders
+        ] or [1.0]
+        p_cap_blank = max(0.0, min(0.5, 1.0 - max(contender_p_play)))
+
         for pid in player_ids:
             xp_val = xp_matrix.get(pid, {}).get(t, 0.0)
             
-                        # Retrieve chance of playing from the engine (xp_matrix should provide it, or fallback)
+            # P(plays) from the engine, used to price the vice-captain fallback.
             p_play = xp_matrix.get(pid, {}).get(f"{t}_p_play", 1.0)
-            if player_dict[pid].get("status") in ["i", "s", "u", "n"]: p_play = 0.0
+            if player_dict[pid].get("status") in ["i", "s", "u", "n"]:
+                p_play = 0.0
             
-            b_weight = 1.0 if (is_chip_active_now and active_chip == "bb") else 0.05
+            b_weight = 1.0 if (is_chip_active_now and active_chip == "bb") else bench_weight
             
             starter_pts = x[pid, t] * xp_val
             bench_pts = (s[pid, t] - x[pid, t]) * xp_val * b_weight
             
-            P_CAP_BLANK = 0.05 # residual chance the chosen captain does not play
-            
             captain_pts = c[pid, t] * xp_val * tc_mult
-            vc_pts = vc[pid, t] * xp_val * P_CAP_BLANK * tc_mult
+            vc_pts = vc[pid, t] * xp_val * p_cap_blank * tc_mult
             
             obj_terms.append(starter_pts + bench_pts + captain_pts + vc_pts)
             
@@ -286,10 +298,12 @@ def solve_fpl_optimization(
             if s_val > 0.5:
                 vc_val = pulp.value(vc[pid, t]) or 0
                 
-                p_play = 1.0
-                chance_raw = player_dict[pid].get("chance_of_playing_next_round")
-                if chance_raw is not None: p_play = chance_raw / 100.0
-                if player_dict[pid].get("status") in ["i", "s", "u", "n"]: p_play = 0.0
+                p_play = xp_matrix.get(pid, {}).get(f"{t}_p_play")
+                if p_play is None:
+                    chance_raw = player_dict[pid].get("chance_of_playing_next_round")
+                    p_play = 1.0 if chance_raw is None else chance_raw / 100.0
+                if player_dict[pid].get("status") in ["i", "s", "u", "n"]:
+                    p_play = 0.0
 
                 p_info = {
                     "id": pid,
@@ -326,7 +340,8 @@ def solve_fpl_optimization(
         bench.sort(key=lambda p: p["p_play"] * p["xp"], reverse=True)
         
         # Compute true expected points for the gameweek
-        is_chip_active_now = (active_chip is not None and t == gws[0])
+        chip_gw = active_chip_gw if active_chip_gw is not None else gws[0]
+        is_chip_active_now = (active_chip is not None and t == chip_gw)
         tc_mult = 2.0 if (is_chip_active_now and active_chip == "tc") else 1.0
         
         gw_xp = 0.0
@@ -336,10 +351,11 @@ def solve_fpl_optimization(
                 # Captain already accounted for 1x in starter, add the extra mult, discount by their p_play
                 gw_xp += p["xp"] * tc_mult
             if p["is_vice_captain"]:
-                gw_xp += p["xp"] * tc_mult * 0.05 # P_CAP_BLANK
+                cap_p_play = next((q["p_play"] for q in starters if q["is_captain"]), 1.0)
+                gw_xp += p["xp"] * tc_mult * max(0.0, min(0.5, 1.0 - cap_p_play))
                 
         # Add heuristic bench contribution to gw_xp if BB is active or using autosub weight
-        b_weight = 1.0 if (is_chip_active_now and active_chip == "bb") else 0.05
+        b_weight = 1.0 if (is_chip_active_now and active_chip == "bb") else bench_weight
         for p in bench:
             gw_xp += p["xp"] * b_weight
 

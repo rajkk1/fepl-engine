@@ -88,6 +88,84 @@ def test_budget_constraints(base_bootstrap):
     gw1_squad = set(p["id"] for p in res["gameweeks"][1]["starters"] + res["gameweeks"][1]["bench"])
     assert 99 not in gw1_squad
 
+def test_bench_weight_parameter_is_honoured(base_bootstrap):
+    """
+    Regression: `bench_weight` was a documented parameter but 0.05 was hardcoded
+    in both the objective and the reporting path, so it did nothing.
+    """
+    initial = list(range(1, 16))
+    xp_matrix = {pid: {1: 5.0} for pid in range(1, 31)}
+
+    low = solve_fpl_optimization(
+        bootstrap=base_bootstrap, xp_matrix=xp_matrix, horizon_gws=[1],
+        initial_squad_ids=initial, initial_bank=10.0, initial_ft=1,
+        max_hits_per_gw=0, bench_weight=0.0)
+    high = solve_fpl_optimization(
+        bootstrap=base_bootstrap, xp_matrix=xp_matrix, horizon_gws=[1],
+        initial_squad_ids=initial, initial_bank=10.0, initial_ft=1,
+        max_hits_per_gw=0, bench_weight=0.5)
+
+    assert high["gameweeks"][1]["gw_xp"] > low["gameweeks"][1]["gw_xp"]
+
+
+def test_vice_captain_priced_by_modelled_blank_probability(base_bootstrap):
+    """
+    Regression: the VC term used a flat P_CAP_BLANK = 0.05 rather than the
+    captain's own blank probability, which the matrix already carries.
+    """
+    initial = list(range(1, 16))
+    reliable = {pid: {1: 5.0, "1_p_play": 1.0} for pid in range(1, 31)}
+    flaky = {pid: {1: 5.0, "1_p_play": 0.5} for pid in range(1, 31)}
+
+    r_rel = solve_fpl_optimization(
+        bootstrap=base_bootstrap, xp_matrix=reliable, horizon_gws=[1],
+        initial_squad_ids=initial, initial_bank=10.0, initial_ft=1, max_hits_per_gw=0)
+    r_fla = solve_fpl_optimization(
+        bootstrap=base_bootstrap, xp_matrix=flaky, horizon_gws=[1],
+        initial_squad_ids=initial, initial_bank=10.0, initial_ft=1, max_hits_per_gw=0)
+
+    assert r_fla["gameweeks"][1]["gw_xp"] > r_rel["gameweeks"][1]["gw_xp"]
+
+
+def test_vice_captain_value_tracks_the_captain_not_itself(base_bootstrap):
+    """
+    The VC scores when the *captain* blanks. Pricing it off the VC's own blank
+    probability would reward picking an unreliable vice-captain, which is
+    backwards. The captain is a decision variable, so the objective estimates
+    P(captain blanks) from the players in contention for the armband.
+    """
+    initial = list(range(1, 16))
+    # One clearly best captain who is a certain starter; everyone else is flaky.
+    matrix = {pid: {1: 3.0, "1_p_play": 0.5} for pid in range(1, 31)}
+    matrix[8] = {1: 12.0, "1_p_play": 1.0}
+
+    res = solve_fpl_optimization(
+        bootstrap=base_bootstrap, xp_matrix=matrix, horizon_gws=[1],
+        initial_squad_ids=initial, initial_bank=10.0, initial_ft=1, max_hits_per_gw=0)
+
+    starters = res["gameweeks"][1]["starters"]
+    vc = next(p for p in starters if p["is_vice_captain"])
+    others = [p for p in starters if not p["is_captain"] and not p["is_vice_captain"]]
+    # With a reliable captain the VC is nearly worthless, so it should go to a
+    # high-xP starter rather than being used to chase an unreliable player.
+    assert vc["xp"] >= max([p["xp"] for p in others], default=0.0)
+
+
+def test_chip_can_target_a_later_gameweek(base_bootstrap):
+    """
+    Regression: weekly_manager never passed active_chip_gw, so a chip could only
+    ever be evaluated in the first gameweek of the horizon.
+    """
+    initial = list(range(1, 16))
+    xp_matrix = {pid: {1: 1.0, 2: 8.0} for pid in range(1, 31)}
+    res = solve_fpl_optimization(
+        bootstrap=base_bootstrap, xp_matrix=xp_matrix, horizon_gws=[1, 2],
+        initial_squad_ids=initial, initial_bank=10.0, initial_ft=1,
+        max_hits_per_gw=0, active_chip="bb", active_chip_gw=2)
+    assert res["status"] == "Optimal"
+    assert res["gameweeks"][2]["gw_xp"] > res["gameweeks"][1]["gw_xp"] * 2
+
+
 def test_bench_boost_active(base_bootstrap):
     initial_squad_ids = list(range(1, 16))
     
