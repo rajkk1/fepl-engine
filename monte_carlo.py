@@ -1,70 +1,62 @@
+"""
+Rank-aware valuation.
+
+The per-player Monte Carlo that used to live here has moved into `match_sim`,
+where draws are generated jointly across a fixture. Summing independent
+per-player variances treated three team-mates as three independent bets, which
+is exactly backwards: clean sheets and goals inside a team are correlated, and
+team stacking is the case rank-awareness exists to price.
+
+What remains here is the valuation function itself.
+"""
+import logging
+from typing import Dict, Any, Optional
+
 import numpy as np
-from typing import Dict, Any
 
-def simulate_player_variance(comps: dict, n_sims=10000) -> float:
-    """
-    Simulates a player's gameweek 10,000 times using numpy to find their variance.
-    """
-    if comps.get("math_pts", 0) == 0:
-        return 0.0
-        
-    seed = int(comps.get("id", 42) + (comps.get("math_pts", 0) * 100))
-    rng = np.random.default_rng(seed)
-        
-    p_play = comps.get("p_play", 0.0)
-    p_60 = comps.get("p_60", 0.0)
-    element_type = comps.get("element_type", 3)
-    p_cs = comps.get("p_cs", 0.0)
-    
-    if p_play <= 0:
-        return 0.0
-        
-    # Un-discount rates for the conditional simulation (clamp p_play to avoid exploding)
-    xg_cond = comps.get("xg", 0.0) / max(0.01, p_play)
-    xa_cond = comps.get("xa", 0.0) / max(0.01, p_play)
-    
-    # 1. Simulate Appearance
-    played = rng.random(n_sims) < p_play
-    played_60 = played & (rng.random(n_sims) < (p_60 / max(1e-6, p_play)))
-    
-    # 2. Simulate Goals and Assists (Poisson)
-    goals = rng.poisson(lam=xg_cond, size=n_sims) * played
-    assists = rng.poisson(lam=xa_cond, size=n_sims) * played
-    
-    # 3. Simulate Clean Sheets
-    cs = rng.random(n_sims) < p_cs
-    cs = cs & played_60
-    
-    # 4. Points calculation
-    pts = played * 1.0 + played_60 * 1.0
-    
-    if element_type == 1:
-        pts += goals * 6 + assists * 3 + cs * 4
-    elif element_type == 2:
-        pts += goals * 6 + assists * 3 + cs * 4
-    elif element_type == 3:
-        pts += goals * 5 + assists * 3 + cs * 1
-    elif element_type == 4:
-        pts += goals * 4 + assists * 3
-        
-    static_extras = comps.get("xSaves", 0) + comps.get("xDefCon", 0) + comps.get("xBonus", 0) - comps.get("xConc_penalty", 0)
-    pts = pts + (static_extras * played)
-    
-    return float(np.var(pts))
+logger = logging.getLogger(__name__)
 
-def calculate_merv(xp: float, variance: float, eo: float, risk_aversion: float = 0.05) -> float:
+
+def simulate_player_variance(comps: dict, n_sims: int = 2000) -> float:
     """
-    Calculates Marginal Expected Rank Value (MERV).
-    Uses Mean-Variance optimization for Rank-Awareness (Probability of a Green Arrow).
-    
-    If risk_aversion > 0: We penalize variance.
-    Delta Variance of picking a player vs field = (1 - 2 * EO) * Var.
-    If EO > 0.5, picking them REDUCES variance (defensive shield).
-    If EO < 0.5, picking them INCREASES variance (differential).
+    Variance of a single player's gameweek score.
+
+    Retained for callers that have components but no match context. Prefer the
+    correlated draws from `match_sim.MatchSimulator.simulate`, which this
+    delegates to so the two paths cannot drift apart in their scoring rules.
     """
-    # Bound the EO term so it doesn't cross 1.0 and flip the sign to reward variance
-    eo_bounded = min(0.5, eo)
+    from match_sim import MatchSimulator
+
+    if comps.get("p_play", 0.0) <= 0:
+        return 0.0
+
+    seed = int(abs(hash((comps.get("id", 42), round(comps.get("math_pts", 0.0), 3)))) % (2 ** 31))
+    sim = MatchSimulator(n_sims=n_sims, seed=seed)
+    player = dict(comps)
+    player.setdefault("team", 0)
+    team_lambdas = {player["team"]: comps.get("opp_xg", 1.4)}
+    out = sim.simulate([player], team_lambdas)
+    return float(out["variance"].get(player.get("id"), 0.0))
+
+
+def calculate_merv(xp: float, variance: float, eo: float,
+                   risk_aversion: float = 0.05) -> float:
+    """
+    Marginal Expected Rank Value.
+
+    Owning a player changes your variance *relative to the field* by
+    (1 - 2 * EO) * Var:
+
+      * EO < 0.5  -> a differential. Owning them adds variance versus the field.
+      * EO > 0.5  -> template. Owning them *removes* variance, because the field
+                     already carries it and not owning them is the risky choice.
+
+    The previous implementation clamped EO at 0.5, which made the second branch
+    unreachable: it only ever penalised differentials and never rewarded template
+    cover, biasing squads toward the field in the way that guarantees an average
+    rank. EO is now bounded only to a sane [0, 2] range (it can exceed 1 because
+    it includes captaincy).
+    """
+    eo_bounded = float(np.clip(eo, 0.0, 2.0))
     delta_variance = (1.0 - 2.0 * eo_bounded) * variance
-    merv = xp - (risk_aversion * delta_variance)
-    return float(merv)
-
+    return float(xp - risk_aversion * delta_variance)
