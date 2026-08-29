@@ -79,9 +79,24 @@ def defcon_active(season: Optional[int]) -> bool:
     """Whether defensive-contribution points existed in a given season."""
     return season is None or int(season) >= DEFCON_FIRST_SEASON
 
+# Mean minutes actually played inside each of the minutes model's appearance
+# buckets, measured over 2025-26 (n = 11,498 appearances):
+#
+#     bucket   assumed   actual
+#     1-59        30.0    22.23
+#     60-89       75.0    74.83
+#     90          90.0    90.00
+#
+# The 1-59 midpoint was assumed to be the arithmetic middle of the bucket, but
+# substitute appearances are skewed short. Overstating every cameo by ~8 minutes
+# accounted for more than half of a 74-minute-per-team-match over-allocation,
+# and it inflated every rate-driven term for exactly the fringe players whose
+# minutes are least certain.
+BUCKET_MINUTES = (22.2, 74.8, 90.0)
+
 # Representative length of a sub appearance, used to size a short appearance's
-# exposure to goals conceded. Matches the 1-59 bucket's midpoint in xp_model.
-SHORT_APPEARANCE_MINUTES = 30.0
+# exposure to goals conceded.
+SHORT_APPEARANCE_MINUTES = BUCKET_MINUTES[0]
 
 # P(a goal carries an FPL assist). FPL's assist rule is more generous than
 # Opta's, and the ratio is stable: 0.896 (2023-24), 0.905 (2024-25), 0.934

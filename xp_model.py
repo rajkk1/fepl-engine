@@ -30,7 +30,7 @@ from match_sim import (
     MatchSimulator, POINTS_GOAL, POINTS_CLEAN_SHEET, POINTS_ASSIST,
     POINTS_RED, POINTS_OWN_GOAL, POINTS_PENALTY_MISS, POINTS_PENALTY_SAVE,
     POS_GKP, POS_DEF, POS_MID, POS_FWD, DEFCON_THRESHOLD, MODELLED_POSITIONS,
-    defcon_active,
+    defcon_active, BUCKET_MINUTES,
 )
 from calibration import PointsCalibrator
 
@@ -351,6 +351,55 @@ def load_lineup_overrides(source: Optional[str] = None) -> Dict[int, float]:
             continue
     logger.info("Loaded %d predicted-lineup entries from %s", len(out), path)
     return out
+
+
+# Minutes a team actually plays in one match. Not 11 x 90 = 990: red cards cost
+# a team the balance, and the measured mean over 2025-26 single fixtures is 985.
+TEAM_MATCH_MINUTES = 985.0
+# Bucket midpoints live in match_sim so both paths cannot drift apart.
+_BUCKET_MINUTES = BUCKET_MINUTES
+
+
+def _appearance_minutes(probs: List[float]) -> float:
+    return sum(p * m for p, m in zip(probs[1:], _BUCKET_MINUTES))
+
+
+def _tilt_one(probs: List[float], lam: float) -> List[float]:
+    """
+    Scale a player's odds of appearing by `lam`, keeping the shape of the
+    appearance intact.
+
+    Working in odds rather than probability is what makes this self-targeting:
+    a player at 0.99 has odds of 99 and is essentially immovable, while one at
+    0.50 has odds of 1 and takes the correction. Rescaling probabilities
+    directly would drag the nailed starters down with everyone else.
+    """
+    _, p1, p2, p3 = probs
+    m = min(1.0 - 1e-9, max(1e-9, p1 + p2 + p3))
+    odds = (m / (1.0 - m)) * lam
+    m2 = odds / (1.0 + odds)
+    scale = m2 / m
+    return [1.0 - m2, p1 * scale, p2 * scale, p3 * scale]
+
+
+def _tilt_to_team_minutes(dists: List[List[float]],
+                          target: float = TEAM_MATCH_MINUTES) -> List[List[float]]:
+    """Find the one tilt that makes a team's expected minutes sum to `target`."""
+    if not dists:
+        return dists
+    total = sum(_appearance_minutes(d) for d in dists)
+    # Nothing to solve for, and nothing to solve *with* if no one can play.
+    if total <= 0 or abs(total - target) < 1.0:
+        return dists
+    lo, hi = 1e-6, 1e6
+    for _ in range(60):
+        mid = math.sqrt(lo * hi)
+        if sum(_appearance_minutes(_tilt_one(d, mid)) for d in dists) > target:
+            hi = mid
+        else:
+            lo = mid
+    lam = math.sqrt(lo * hi)
+    return [_tilt_one(d, lam) for d in dists]
 
 
 def _maybe(row: Dict[str, Any], key: str):
@@ -768,7 +817,8 @@ class MinutesClassifier:
 class EnsembleForecaster:
     def __init__(self, half_life: float = 5.0, prior_weight: float = 1.0,
                  stat_settings=None, n_bonus_sims: int = 800,
-                 calibration_method: str = "linear", defcon_enabled: bool = True):
+                 calibration_method: str = "linear", defcon_enabled: bool = True,
+                 normalise_team_minutes: bool = True):
         self.dc = MarketOddsPredictor()
         self.gpf = GammaPoissonFilter(half_life=half_life, prior_weight=prior_weight,
                                       stat_settings=stat_settings)
@@ -779,6 +829,8 @@ class EnsembleForecaster:
         self.defcon_dispersion: Dict[int, float] = {POS_DEF: 1.85, POS_MID: 1.85, POS_FWD: 1.85}
         # False for seasons before FPL awarded defensive contribution points.
         self.defcon_enabled = bool(defcon_enabled)
+        # Constrain each team's predicted minutes to a real team-match.
+        self.normalise_team_minutes = bool(normalise_team_minutes)
         self._minutes_cache: Dict[tuple, List[float]] = {}
         self.calendar = FixtureCalendar()
         self._fit_teams = None
@@ -815,10 +867,42 @@ class EnsembleForecaster:
             rows.append(self.mc.build_row(
                 player, history, fixture, self.prior_seasons.get(player.get("id"))))
             keys.append(key)
-        if not rows:
-            return
-        for key, probs in zip(keys, self.mc.predict_proba_batch(rows)):
-            self._minutes_cache[key] = probs
+        if rows:
+            for key, probs in zip(keys, self.mc.predict_proba_batch(rows)):
+                self._minutes_cache[key] = probs
+        if self.normalise_team_minutes:
+            self._normalise_team_minutes(jobs)
+
+    def _normalise_team_minutes(self, jobs):
+        """
+        Make each team's predicted minutes add up to a team-match.
+
+        The classifier scores players one at a time and has no idea that a team
+        fields eleven of them. Measured on 2025-26 it hands out 1059 minutes per
+        team-match against a true 985 - a 7% over-allocation. It is not inventing
+        extra starters (10.50 players predicted to reach 60+ against a true
+        10.28); the excess is cameo mass smeared across fringe players who will
+        not actually get on.
+
+        Tilting the odds of appearing by one shared factor per team fixes the
+        total while preserving the ordering, and it self-targets: a nailed
+        starter's odds are enormous and barely move, while a fringe player at
+        even money absorbs almost all of the correction. That is exactly the
+        0.6-0.8 band where P(plays) was most over-confident.
+        """
+        groups: Dict[tuple, List[tuple]] = {}
+        for player, fixture, history, dgw_idx in jobs:
+            key = self._minutes_key(player, fixture, dgw_idx)
+            if key not in self._minutes_cache:
+                continue
+            groups.setdefault(
+                (fixture.get("event"), fixture.get("team_h"), fixture.get("team_a"),
+                 player.get("team"), dgw_idx), []).append(key)
+
+        for keys in groups.values():
+            dists = [self._minutes_cache[k] for k in keys]
+            for k, d in zip(keys, _tilt_to_team_minutes(dists)):
+                self._minutes_cache[k] = d
 
     def clear_minutes_cache(self):
         self._minutes_cache.clear()
@@ -1041,7 +1125,8 @@ class EnsembleForecaster:
 
         p_play = p_1_59 + p_60_89 + p_90
         p_60 = p_60_89 + p_90
-        xMin = p_1_59 * 30.0 + p_60_89 * 75.0 + p_90 * 90.0
+        xMin = (p_1_59 * BUCKET_MINUTES[0] + p_60_89 * BUCKET_MINUTES[1]
+                + p_90 * BUCKET_MINUTES[2])
         return p_0, p_1_59, p_60_89, p_90, p_play, p_60, xMin
 
     def _predict_uncalibrated(self, player, fixture, history, dgw_idx=0, current_gw=1):
@@ -1067,7 +1152,8 @@ class EnsembleForecaster:
 
         min_frac = xMin / 90.0
         # E[minutes | played 60+] / 90, for quantities that require a long shift.
-        cond_frac = ((p_60_89 * 75.0 + p_90 * 90.0) / (p_60 * 90.0)) if p_60 > 0 else 0.0
+        cond_frac = ((p_60_89 * BUCKET_MINUTES[1] + p_90 * BUCKET_MINUTES[2])
+                     / (p_60 * 90.0)) if p_60 > 0 else 0.0
         # E[minutes | played at all] / 90. Every *nonlinear* term below has to
         # use this rather than min_frac: a floor or a threshold applied to a
         # Poisson mean scaled by unconditional minutes conflates "half a chance

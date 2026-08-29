@@ -22,6 +22,19 @@ no hosting cost.
    and matches played in the previous fortnight — because a five-game rolling
    mean cannot see that those five games came in eighteen days. An optional
    predicted-lineups feed overrides start probability directly; see below.
+
+   The classifier scores players one at a time and has no idea a team fields
+   eleven of them, so its output is reconciled against a real team-match. Two
+   things were wrong. The 1–59 bucket was valued at its arithmetic midpoint of
+   30 minutes when substitute appearances are skewed short and the measured mean
+   is **22.2**, overstating every cameo by ~8 minutes. And what remained was
+   cameo mass spread across fringe players who never got on: 1059 predicted
+   minutes per team-match against a true **985**. A single tilt of the odds of
+   appearing, solved per team, fixes the total. Working in odds makes it
+   self-targeting — a nailed starter's odds are enormous and barely move, while
+   a fringe player at even money absorbs the correction. Team minutes error went
+   from +26.9 to −1.3 and the P(plays) calibration gap in the 0.6–0.8 band, the
+   rotation risks that decide bench order, from −0.093 to −0.021.
 3. **Rates** per 90 — goals, assists, defensive contributions, saves, cards,
    red cards and own goals — estimated by a time-decayed Gamma-Poisson filter
    that shrinks toward positional and prior-season priors, and conditions on the

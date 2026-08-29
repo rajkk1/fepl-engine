@@ -473,3 +473,83 @@ def test_missing_lineups_feed_is_not_an_error():
     from xp_model import load_lineup_overrides
     assert load_lineup_overrides(None) == {} or True   # env may be unset
     assert load_lineup_overrides("/nonexistent/lineups.json") == {}
+
+
+# ------------------------------------------------- team-level minutes budget
+
+
+def test_bucket_midpoints_match_measured_appearance_lengths():
+    """
+    The 1-59 bucket was assumed to sit at its arithmetic middle, 30 minutes.
+    Substitute appearances are skewed short and the measured mean is 22.2, so
+    every cameo was overstated by ~8 minutes. That alone accounted for more than
+    half of a 74-minute-per-team-match over-allocation.
+    """
+    from match_sim import BUCKET_MINUTES
+
+    assert BUCKET_MINUTES[0] == pytest.approx(22.2, abs=0.5)
+    assert BUCKET_MINUTES[1] == pytest.approx(74.8, abs=0.5)
+    assert BUCKET_MINUTES[2] == 90.0
+
+
+def test_team_minutes_are_normalised_to_a_real_team_match():
+    from xp_model import _tilt_to_team_minutes, _appearance_minutes, TEAM_MATCH_MINUTES
+
+    squad = ([[0.02, 0.03, 0.15, 0.80] for _ in range(11)]
+             + [[0.55, 0.20, 0.15, 0.10] for _ in range(9)])
+    assert sum(_appearance_minutes(d) for d in squad) > TEAM_MATCH_MINUTES + 50
+    out = _tilt_to_team_minutes(squad)
+    assert sum(_appearance_minutes(d) for d in out) == pytest.approx(
+        TEAM_MATCH_MINUTES, abs=1.0)
+    for d in out:
+        assert sum(d) == pytest.approx(1.0)
+        assert all(x >= 0.0 for x in d)
+
+
+def test_the_correction_falls_on_fringe_players_not_nailed_starters():
+    """
+    Working in odds is what makes the tilt self-targeting. A player at 0.99 has
+    odds of 99 and barely moves; one at 0.50 has odds of 1 and absorbs the
+    correction. Rescaling probabilities directly would drag the nailed starters
+    down with everyone else, which is the opposite of what the data says: the
+    over-allocation is cameo mass on players who will not get on.
+    """
+    from xp_model import _tilt_to_team_minutes, _appearance_minutes
+
+    nailed, fringe = [0.02, 0.03, 0.15, 0.80], [0.55, 0.20, 0.15, 0.10]
+    squad = [list(nailed) for _ in range(11)] + [list(fringe) for _ in range(9)]
+    out = _tilt_to_team_minutes(squad)
+    nailed_drop = 1 - _appearance_minutes(out[0]) / _appearance_minutes(nailed)
+    fringe_drop = 1 - _appearance_minutes(out[-1]) / _appearance_minutes(fringe)
+    assert fringe_drop > 4 * nailed_drop
+
+
+def test_normalisation_preserves_ordering():
+    from xp_model import _tilt_to_team_minutes, _appearance_minutes
+
+    squad = [[0.9, 0.05, 0.03, 0.02], [0.5, 0.2, 0.2, 0.1],
+             [0.1, 0.1, 0.2, 0.6], [0.02, 0.03, 0.15, 0.80]] * 5
+    before = [_appearance_minutes(d) for d in squad]
+    after = [_appearance_minutes(d) for d in _tilt_to_team_minutes(squad)]
+    assert [i for _, i in sorted(zip(before, range(len(before))))] == \
+           [i for _, i in sorted(zip(after, range(len(after))))]
+
+
+def test_normalisation_is_a_no_op_when_the_team_already_adds_up():
+    from xp_model import _tilt_to_team_minutes, _appearance_minutes, TEAM_MATCH_MINUTES
+
+    squad = [[0.0, 0.0, 0.0, 1.0] for _ in range(11)]
+    total = sum(_appearance_minutes(d) for d in squad)
+    assert total == pytest.approx(990.0)
+    out = _tilt_to_team_minutes(squad, target=990.0)
+    assert out == squad
+
+
+def test_normalisation_survives_a_team_that_cannot_field_anyone():
+    """An all-injured squad has zero odds to tilt; it must not divide by zero."""
+    from xp_model import _tilt_to_team_minutes
+
+    squad = [[1.0, 0.0, 0.0, 0.0] for _ in range(5)]
+    out = _tilt_to_team_minutes(squad)
+    assert out == squad
+    assert _tilt_to_team_minutes([]) == []
