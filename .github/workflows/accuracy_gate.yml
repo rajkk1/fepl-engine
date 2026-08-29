@@ -29,6 +29,9 @@ on:
       to_gw:
         description: 'Last gameweek'
         default: '16'
+      prior_season:
+        description: "history_past source: auto, a season, or none"
+        default: 'auto'
 
 jobs:
   backtest:
@@ -49,6 +52,7 @@ jobs:
             --seasons ${{ github.event.inputs.seasons || '2025-26' }} \
             --from-gw ${{ github.event.inputs.from_gw || '8' }} \
             --to-gw ${{ github.event.inputs.to_gw || '16' }} \
+            --prior-season ${{ github.event.inputs.prior_season || 'auto' }} \
             --gate --gate-metric mae \
             --json-out backtest_results.json
 

@@ -576,17 +576,33 @@ def main():
     ap.add_argument("--calibration-method", default="linear",
                     choices=["linear", "isotonic", "none"])
     ap.add_argument("--risk-aversion", type=float, default=0.0)
-    ap.add_argument("--prior-season", default="",
-                    help="Previous season (e.g. 2024-25) to load as history_past")
+    ap.add_argument("--prior-season", default="auto",
+                    help="Season to load as history_past: 'auto' (previous season), "
+                         "an explicit season like 2024-25, or 'none'")
     ap.add_argument("--gate", action="store_true",
                     help="Exit non-zero unless FEPL beats every clean baseline")
     ap.add_argument("--gate-metric", default="mae")
     ap.add_argument("--json-out", default="")
     args = ap.parse_args()
 
+    # Production always has `history_past` from the API, so a backtest without it
+    # measures a weaker model than the one that actually runs. Load the previous
+    # season by default and say plainly when we could not.
     prior_gw = None
-    if args.prior_season:
-        prior_gw = fetch_data(args.prior_season)[0]
+    prior_choice = args.prior_season
+    if prior_choice != "none":
+        if prior_choice == "auto":
+            start = int(args.seasons[0].split("-")[0]) - 1
+            prior_choice = f"{start}-{str(start + 1)[2:]}"
+        try:
+            prior_gw = fetch_data(prior_choice)[0]
+            logger.info("Loaded %s as history_past for cross-season priors.", prior_choice)
+        except Exception as e:
+            logger.warning(
+                "Could not load %s for history_past (%s). This run measures the "
+                "model WITHOUT the prior-season priors it has in production, so "
+                "results understate it.", prior_choice, e,
+            )
 
     all_summaries = []
     for season in args.seasons:

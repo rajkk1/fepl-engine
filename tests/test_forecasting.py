@@ -203,6 +203,48 @@ def test_penalty_duty_raises_expected_goals(player, teams, fixture):
     assert taker["xg"] > non_taker["xg"]
 
 
+def test_assist_fixture_multiplier_is_symmetric(player, teams):
+    """
+    Regression: history was normalised by the full attacking multiplier while
+    predictions were scaled by a damped one, shaving 6-13% off the assist rate of
+    every strong-attack team -- precisely where premium players are, and the
+    single largest contributor to their under-prediction.
+
+    A player whose past fixtures match the upcoming one must come back with the
+    rate they actually demonstrated.
+    """
+    from xp_model import assist_multiplier
+
+    gpf = GammaPoissonFilter()
+    dc = MarketOddsPredictor()
+    dc.market._fill_missing(teams)
+    dc.market._league_mean = 1.4
+    # A strong attack: every fixture carries att_mult > 1.
+    for tid in dc.market.team_ratings:
+        dc.market.team_ratings[tid].update(att_home=2.2, att_away=2.0,
+                                           def_home=1.2, def_away=1.2)
+
+    hist = [{"round": gw, "minutes": 90, "was_home": True, "opponent_team": 2,
+             "expected_assists": 0.40, "expected_goals": 0.10} for gw in range(1, 13)]
+    rates = gpf.predict_match({**player, "team": 1}, hist, dc, 13)
+
+    ctx = dc.fixture_context(1, {"event": 13, "team_h": 1, "team_a": 2})
+    recovered = rates["xa90"] * assist_multiplier(ctx["att_mult"])
+    assert recovered == pytest.approx(0.40, rel=0.12), (
+        f"demonstrated 0.40 xA90 came back as {recovered:.3f}"
+    )
+
+
+def test_assist_multiplier_is_softer_than_the_goal_multiplier():
+    from xp_model import assist_multiplier
+
+    for m in (1.2, 1.5):
+        assert 1.0 < assist_multiplier(m) < m
+    for m in (0.7, 0.9):
+        assert m < assist_multiplier(m) < 1.0
+    assert assist_multiplier(1.0) == pytest.approx(1.0)
+
+
 # ------------------------------------------------------------------ integrity
 
 
