@@ -186,6 +186,25 @@ def test_unfitted_calibrator_is_the_identity():
     assert cal_none.apply(4.2, 3) == 4.2
 
 
+def test_season_is_derived_when_the_caller_omits_it():
+    """
+    Regression: the prior-season carry-forward was gated on an explicit `season`
+    argument, and weekly_manager does not pass one. In production the fallback
+    silently never fired, leaving the live forecast on a much weaker fit during
+    exactly the early-season window it exists to cover.
+    """
+    from xp_model import _current_season_start_year
+
+    # A season runs Jul-Jun, so both sides of the new year map to the same start.
+    assert _current_season_start_year("2026-08-15") == 2026
+    assert _current_season_start_year("2027-01-15") == 2026
+    assert _current_season_start_year("2026-06-30") == 2025
+    assert _current_season_start_year("2026-07-01") == 2026
+    # Falls back to the clock rather than raising on unusable input.
+    assert isinstance(_current_season_start_year(None), int)
+    assert isinstance(_current_season_start_year("not a date"), int)
+
+
 # --------------------------------------------------------------- market odds
 
 

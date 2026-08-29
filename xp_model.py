@@ -53,6 +53,20 @@ MIN_MATCHES_FOR_RATINGS = 40
 PRIOR_SEASON_HALF_MINUTES = 1200.0
 
 
+def _current_season_start_year(reference_date=None) -> int:
+    """The year a Premier League season starting in July/August belongs to."""
+    import datetime
+
+    if reference_date is not None:
+        try:
+            ref = pd.to_datetime(reference_date)
+            return int(ref.year if ref.month >= 7 else ref.year - 1)
+        except Exception:
+            pass
+    now = datetime.datetime.now()
+    return now.year if now.month >= 7 else now.year - 1
+
+
 def _f(value, default=0.0) -> float:
     """Coerce possibly-None / possibly-string numerics without lying about missing."""
     if value is None:
@@ -561,9 +575,12 @@ class EnsembleForecaster:
             times = [t.tz_convert(None) if getattr(t, "tzinfo", None) else t for t in times]
             current_gw_date = max(times) if times else None
 
-        season_str = None
-        if season:
-            season_str = f"{str(season)[2:]}{str(season + 1)[2:]}"
+        # Callers that omit `season` (the CLI does) must still get the
+        # prior-season fallback, so derive it from the calendar rather than
+        # letting the carry-forward silently switch itself off.
+        if not season:
+            season = _current_season_start_year(current_gw_date)
+        season_str = f"{str(season)[2:]}{str(season + 1)[2:]}"
 
         status = self.dc.fit_team_ratings(
             teams, current_gw_date=current_gw_date, season_str=season_str,
