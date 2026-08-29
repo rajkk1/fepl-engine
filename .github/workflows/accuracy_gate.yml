@@ -3,9 +3,25 @@ name: Forecast Accuracy Gate
 # The unit suite proves the engine runs. This proves it is still worth running.
 #
 # The gate is: FEPL must beat every clean, point-in-time baseline (trailing
-# points-per-game and rolling means). FPL's own `xP` column is reported for
-# reference but never gates anything - it is scraped post-gameweek and zeroed for
-# players who did not feature, so it leaks realised minutes.
+# points-per-game and rolling means) on error AND on the decision metrics.
+#
+# MAE alone is not enough, and passing it means less than it looks. Averaged over
+# ~300 players it is dominated by correctly predicting low scores and players who
+# did not start, so a model can clear every baseline on MAE while being no better
+# than trailing points-per-game at the two things FPL is actually won on: which
+# fifteen players to own, and who to captain. MAE also rewards shrinking the
+# forecast toward the mean, which is exactly what blunts the top of the ranking.
+# So the gate also enforces within-position rank correlation.
+#
+# precision@15 and captain regret are reported as warnings but do NOT fail the
+# build. That is a measured decision, not a hedge: over a full 2025-26 season a
+# paired bootstrap puts FEPL-minus-baseline at +0.059 [-0.382, +0.500] on
+# precision@15 and +0.147 [-1.235, +1.353] on captain regret. Both CIs span
+# zero, so gating on them would fail builds at random.
+#
+# FPL's own `xP` column is reported for reference but never gates anything - it is
+# scraped post-gameweek and zeroed for players who did not feature, so it leaks
+# realised minutes.
 
 on:
   push:
@@ -53,7 +69,7 @@ jobs:
             --from-gw ${{ github.event.inputs.from_gw || '8' }} \
             --to-gw ${{ github.event.inputs.to_gw || '16' }} \
             --prior-season ${{ github.event.inputs.prior_season || 'auto' }} \
-            --gate --gate-metric mae \
+            --gate --gate-metric mae spearman \
             --json-out backtest_results.json
 
       - name: Upload results

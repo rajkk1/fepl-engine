@@ -9,6 +9,22 @@ POS_DEF = 2
 POS_MID = 3
 POS_FWD = 4
 
+# Expected points several gameweeks out are not worth the same as this week's.
+# Injuries, rotation, form, price changes and fixture reschedules all accumulate,
+# and beyond that the plan will simply be re-solved next week with better
+# information -- so a distant gameweek is a hint about direction, not a
+# commitment. Weighting every gameweek equally made the ILP trade a real point
+# now for a speculative point in GW+4 at par, which over-commits the squad to
+# fixtures that have not been priced yet.
+HORIZON_DECAY = 0.86
+
+# Bench value is not one number. An outfield sub scores when a starter in the
+# same position blanks, which is common; the backup keeper only ever plays if
+# the first-choice keeper does not, which is rare and already priced by owning
+# him at all. A flat weight over-valued the bench keeper and under-valued the
+# first outfield sub.
+BENCH_WEIGHT_BY_POSITION = {POS_GKP: 0.02, POS_DEF: 0.12, POS_MID: 0.12, POS_FWD: 0.10}
+
 def solve_fpl_optimization(
     bootstrap: Dict[str, Any],
     xp_matrix: Dict[int, Dict[int, float]],
@@ -20,13 +36,19 @@ def solve_fpl_optimization(
     locked_player_ids: Optional[List[int]] = None,
     banned_player_ids: Optional[List[int]] = None,
     max_hits_per_gw: int = 2,
-    bench_weight: float = 0.10,
+    bench_weight: Optional[float] = None,
     active_chip: Optional[str] = None,
-    active_chip_gw: Optional[int] = None
+    active_chip_gw: Optional[int] = None,
+    horizon_decay: float = HORIZON_DECAY,
 ) -> Dict[str, Any]:
     """
     Solve multi-period FPL squad selection, transfer optimization, and chip strategies using PuLP ILP solver.
     Supported chips: 'wc' (Wildcard), 'fh' (Free Hit), 'tc' (Triple Captain), 'bb' (Bench Boost).
+
+    `horizon_decay` discounts each gameweek past the first by that factor, so a
+    forecast four weeks out is worth roughly half a forecast for this week. Pass
+    1.0 to weight the whole horizon equally (the previous behaviour).
+    `bench_weight` overrides the per-position bench values with a single number.
     """
     elements = bootstrap.get("elements", [])
     teams = bootstrap.get("teams", [])
@@ -115,6 +137,8 @@ def solve_fpl_optimization(
         chip_target_gw = active_chip_gw if active_chip_gw is not None else gws[0]
         is_chip_active_now = (active_chip is not None and t == chip_target_gw)
         tc_mult = 2.0 if (is_chip_active_now and active_chip == "tc") else 1.0
+        # Confidence in a gameweek's forecast decays with how far away it is.
+        decay = horizon_decay ** idx
 
         # The vice-captain scores only when the *captain* blanks. Who the captain
         # is, is itself a decision variable, so referencing their p_play directly
@@ -137,25 +161,35 @@ def solve_fpl_optimization(
             if player_dict[pid].get("status") in ["i", "s", "u", "n"]:
                 p_play = 0.0
             
-            b_weight = 1.0 if (is_chip_active_now and active_chip == "bb") else bench_weight
-            
+            if is_chip_active_now and active_chip == "bb":
+                b_weight = 1.0
+            elif bench_weight is not None:
+                b_weight = bench_weight
+            else:
+                b_weight = BENCH_WEIGHT_BY_POSITION.get(
+                    player_dict[pid].get("element_type"), 0.10)
+
             starter_pts = x[pid, t] * xp_val
             bench_pts = (s[pid, t] - x[pid, t]) * xp_val * b_weight
-            
+
             captain_pts = c[pid, t] * xp_val * tc_mult
             vc_pts = vc[pid, t] * xp_val * p_cap_blank * tc_mult
-            
-            obj_terms.append(starter_pts + bench_pts + captain_pts + vc_pts)
-            
+
+            obj_terms.append(decay * (starter_pts + bench_pts + captain_pts + vc_pts))
+
             # Terminal Squad Value (Add small incentive to hold squad value at end of horizon)
             if idx == len(gws) - 1:
                 obj_terms.append(s[pid, t] * (now_cost[pid] * 0.01))
-        
-        # Subtract hit penalties (-4 points per hit, 0 if Wildcard/Free Hit chip active)
+
+        # Subtract hit penalties (-4 points per hit, 0 if Wildcard/Free Hit chip
+        # active). Discounted alongside the points they buy: a hit taken in a
+        # later gameweek is as speculative as the gain it is chasing, and
+        # charging it at full price while discounting the reward would make the
+        # solver structurally refuse every future transfer.
         if is_chip_active_now and active_chip in ["wc", "fh"]:
             pass
         else:
-            obj_terms.append(-4.0 * hits[t])
+            obj_terms.append(-4.0 * decay * hits[t])
 
     # Add terminal value for remaining free transfers at the end of the horizon (+1.5 expected points per FT)
     if len(gws) > 0:
@@ -355,8 +389,14 @@ def solve_fpl_optimization(
                 gw_xp += p["xp"] * tc_mult * max(0.0, min(0.5, 1.0 - cap_p_play))
                 
         # Add heuristic bench contribution to gw_xp if BB is active or using autosub weight
-        b_weight = 1.0 if (is_chip_active_now and active_chip == "bb") else bench_weight
+        bb_active = is_chip_active_now and active_chip == "bb"
         for p in bench:
+            if bb_active:
+                b_weight = 1.0
+            elif bench_weight is not None:
+                b_weight = bench_weight
+            else:
+                b_weight = BENCH_WEIGHT_BY_POSITION.get(p.get("element_type"), 0.10)
             gw_xp += p["xp"] * b_weight
 
         results["gameweeks"][t] = {

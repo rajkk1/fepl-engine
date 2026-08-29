@@ -258,3 +258,46 @@ def test_home_advantage_is_not_applied_twice(teams):
     mu_h, mu_a = m.get_match_lambdas(1, 2)
     assert mu_h == pytest.approx(1.4, abs=1e-6)
     assert mu_a == pytest.approx(1.4, abs=1e-6)
+
+
+# ------------------------------------------------------------- calibration
+
+
+def test_calibration_applies_the_intercept_once_per_fixture():
+    """
+    Regression: a double gameweek's two fixtures were summed and then calibrated
+    once, so the intercept was applied a single time instead of twice. That
+    systematically underrated exactly the DGW players the optimiser makes its
+    biggest calls on.
+    """
+    from calibration import PointsCalibrator
+
+    cal = PointsCalibrator(method="linear")
+    cal._models = {3: (0.9, 0.5)}
+    cal._kind = {3: "linear"}
+    cal.is_fitted = True
+
+    single = cal.apply(5.0, 3, n_fixtures=1)
+    double = cal.apply(10.0, 3, n_fixtures=2)
+    assert single == pytest.approx(0.9 * 5.0 + 0.5)
+    assert double == pytest.approx(0.9 * 10.0 + 2 * 0.5)
+    assert double == pytest.approx(2 * cal.apply(5.0, 3, n_fixtures=1))
+
+
+def test_gate_enforces_decision_metrics_not_just_error():
+    """
+    MAE alone is dominated by correctly predicting low scores, so a model can
+    clear it while being no better than the baseline at picking a squad.
+    """
+    from backtest import check_gate
+
+    summary = {"models": {
+        "fepl": {"mae": 1.5, "spearman": 0.40, "precision_at_15": 1.5},
+        "ppg": {"mae": 2.0, "spearman": 0.55, "precision_at_15": 2.0},
+        "roll3": {"mae": 2.1, "spearman": 0.50, "precision_at_15": 1.9},
+        "roll3_mins": {"mae": 2.1, "spearman": 0.50, "precision_at_15": 1.9},
+    }}
+    assert check_gate(summary, ("mae",))[0] is True
+    ok, msg = check_gate(summary)
+    assert ok is False
+    assert "spearman" in msg

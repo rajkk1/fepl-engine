@@ -31,11 +31,38 @@ def squad():
 
 
 def test_bonus_is_awarded_by_rank_within_the_match(squad):
-    """Bonus is 3/2/1 to the top three BPS scorers, so it cannot exceed 6 a match."""
+    """
+    Bonus is 3/2/1 to the top three BPS scorers in a match.
+
+    It is *at least* 6 whenever three players appear, and more than 6 whenever
+    there is a tie, because FPL shares tied places rather than breaking them
+    (3+3+1, 3+2+2, 3+3+3). This squad is 22 identical players, which is the
+    maximum-tie case, so the total sits well above 6.
+    """
     sim = MatchSimulator(n_sims=400, seed=1)
     out = sim.simulate(squad, {1: 1.2, 2: 1.4})
     total = sum(out["bonus"].values())
-    assert 0.0 < total <= 6.0 + 1e-6, f"total expected bonus {total} is not rank-consistent"
+    assert 6.0 - 1e-6 <= total <= 12.0, f"total expected bonus {total} is not rank-consistent"
+
+
+def test_tied_players_share_bonus_rather_than_the_tie_being_broken_by_position():
+    """
+    Regression: BPS was simulated as a continuous quantity, so exact ties never
+    occurred and `argsort` silently resolved every one of them by array index.
+    Real BPS is an integer and ties are common, so the first-listed of two
+    identical players was quietly handed the better award.
+    """
+    a, b, c = _player(1, 1), _player(2, 1), _player(3, 2)
+    out = MatchSimulator(n_sims=8000, seed=5).simulate([a, b, c], {1: 1.4, 2: 1.4})
+    assert out["bonus"][1] == pytest.approx(out["bonus"][2], abs=0.06)
+
+
+def test_bonus_ordering_survives_reversing_the_player_list(squad):
+    """The award must depend on BPS, never on where a player sits in the list."""
+    sim = MatchSimulator(n_sims=800, seed=9)
+    forward = sim.simulate(squad, {1: 1.2, 2: 1.4})["bonus"]
+    backward = sim.simulate(list(reversed(squad)), {1: 1.2, 2: 1.4})["bonus"]
+    assert sum(forward.values()) == pytest.approx(sum(backward.values()), rel=0.1)
 
 
 def test_better_players_earn_more_bonus():
@@ -149,3 +176,112 @@ def test_eo_handles_missing_and_malformed_input():
     assert project_effective_ownership({"selected_by_percent": None}) == pytest.approx(0.0)
     assert project_effective_ownership({"selected_by_percent": "n/a"}) == pytest.approx(0.0)
     assert build_eo_matrix([{"id": 1, "selected_by_percent": "10.0"}])[1] > 0
+
+
+def test_rare_events_are_scored():
+    """Red cards, own goals and penalty misses/saves all move the score."""
+    clean = _player(1, 1)
+    carded = _player(2, 1, rc90=0.9)
+    keeper = _player(3, 1, et=1, saves90=3.0, defcon_mu=0.0, pen_save90=0.9)
+    plain_keeper = _player(4, 1, et=1, saves90=3.0, defcon_mu=0.0)
+    for p in (clean, carded, keeper, plain_keeper):
+        p["play_frac"] = 0.9
+    out = MatchSimulator(n_sims=6000, seed=4).simulate(
+        [clean, carded, keeper, plain_keeper], {1: 1.3})
+    assert out["mean_points"][2] < out["mean_points"][1], "a red card must cost points"
+    assert out["mean_points"][3] > out["mean_points"][4], "a penalty save must pay"
+
+
+def test_players_in_different_fixtures_are_uncorrelated():
+    """
+    Regression: every fixture built its own generator from a fixed seed, so two
+    matches drew from an identical random stream and unrelated players came out
+    correlated - the one artefact a correlated simulation must not have.
+    """
+    import numpy as np
+    rng = np.random.default_rng(0)
+    a = [_player(i, 1 if i < 4 else 2, play_frac=0.9) for i in range(1, 7)]
+    b = [_player(i, 3 if i < 14 else 4, play_frac=0.9) for i in range(11, 17)]
+    sim = MatchSimulator(n_sims=6000)
+    out_a = sim.simulate(a, {1: 1.3, 2: 1.4}, rng=rng)
+    out_b = sim.simulate(b, {3: 1.3, 4: 1.4}, rng=rng)
+    corr = abs(np.corrcoef(out_a["points"][1], out_b["points"][11])[0, 1])
+    assert corr < 0.10, f"unrelated fixtures correlated at {corr:.3f}"
+
+
+# --------------------------------------------------- shared team goal totals
+
+
+def _attacker(pid, team, xg=0.5, xa=0.3, et=4, p_play=1.0):
+    return dict(id=pid, team=team, element_type=et, p_play=p_play,
+                p_60=p_play * 0.95, xg_cond=xg, xa_cond=xa, saves90=0.0,
+                yc90=0.1, play_frac=1.0, cond_frac=1.0, defcon_mu=0.0,
+                defcon_dispersion=1.85, xmin=90.0, recoveries90=2.0,
+                tackles90=0.8, key_passes90=1.4)
+
+
+def _two_team_match(n_sims=60000, seed=3):
+    squad = ([_attacker(1, 1, 0.55, 0.30), _attacker(2, 1, 0.50, 0.35),
+              _attacker(3, 1, 0.50, 0.25)]
+             + [_attacker(i, 2, 0.30, 0.20) for i in range(5, 10)])
+    # team_lambdas maps team -> goals it CONCEDES, so team 1 scores 1.60.
+    return squad, MatchSimulator(n_sims=n_sims, seed=seed).simulate(
+        squad, {1: 1.20, 2: 1.60})
+
+
+def test_shared_team_total_preserves_each_players_marginal():
+    """
+    Allocating one shared team total must not change what a player is expected
+    to score - only the joint distribution. If this drifts, every xP in the
+    engine drifts with it, because the analytic path still uses xg directly.
+    """
+    squad, out = _two_team_match()
+    for p in squad[:3]:
+        assert out["mean_goals"][p["id"]] == pytest.approx(
+            p["xg_cond"] * p["p_play"], abs=0.02)
+        assert out["mean_assists"][p["id"]] == pytest.approx(
+            p["xa_cond"] * p["p_play"], abs=0.02)
+
+
+def test_club_mates_attacking_returns_are_positively_correlated():
+    """
+    The regression this guards: goals used to come from an independent Poisson
+    per player, so three club-mates correlated at -0.07 - indistinguishable from
+    opposition players, and negative only because they compete for bonus.
+    Measured ground truth over 2023-24..2025-26 is +0.098 between two
+    same-club attackers who both played 60+.
+    """
+    _, out = _two_team_match()
+    d = out["points"]
+    same_club = np.mean([np.corrcoef(d[a], d[b])[0, 1]
+                         for a, b in ((1, 2), (1, 3), (2, 3))])
+    opposition = np.mean([np.corrcoef(d[1], d[i])[0, 1] for i in (5, 6, 7)])
+    assert same_club > 0.02, f"club-mates uncorrelated: {same_club:+.4f}"
+    assert same_club > opposition
+
+
+def test_stacking_club_mates_increases_variance():
+    """A stack must be riskier than the same players spread across clubs -
+    that is the whole premise of the rank-aware (MERV) valuation."""
+    _, out = _two_team_match()
+    d = out["points"]
+    stack = d[1] + d[2] + d[3]
+    if_independent = np.sqrt(sum(np.var(d[i]) for i in (1, 2, 3)))
+    assert stack.std() > if_independent
+
+
+def test_a_team_never_scores_more_than_its_match_total():
+    """Listed players share one team total, so they cannot collectively
+    out-score the team - the incoherence independent Poissons allowed."""
+    squad, out = _two_team_match()
+    listed = sum(out["mean_goals"][p["id"]] for p in squad if p["team"] == 1)
+    assert listed <= 1.60 + 1e-6
+
+
+def test_single_team_input_falls_back_to_independent_draws():
+    """A caller passing one side has no opponent to take a total from; it must
+    still produce sane per-player goals rather than dividing by nothing."""
+    squad = [_attacker(1, 1, 0.5, 0.3), _attacker(2, 1, 0.4, 0.2)]
+    out = MatchSimulator(n_sims=20000, seed=1).simulate(squad, {1: 1.3})
+    assert out["mean_goals"][1] == pytest.approx(0.5, abs=0.05)
+    assert out["mean_goals"][2] == pytest.approx(0.4, abs=0.05)
