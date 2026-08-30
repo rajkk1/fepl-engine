@@ -23,6 +23,8 @@ import math
 from typing import Dict, Any, List, Optional, Tuple
 
 import numpy as np
+from functools import lru_cache
+from scipy.special import gammaln
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +52,6 @@ BPS_OWN_GOAL = -6
 BPS_PENALTY_MISS = -6
 BPS_GOALS_CONCEDED_PER_2 = -4   # GK/DEF only
 BPS_DEFCON = 3                  # hitting the defensive-contribution threshold
-# Volume terms, approximated from per-90 rates.
 # Volume BPS: everything FPL awards for actions the data does not itemise -
 # passes completed, crosses, dribbles, big chances created, clearances. It is
 # the whole of the difference between the exactly-specified half of BPS and a
@@ -167,30 +168,106 @@ SHORT_APPEARANCE_MINUTES = BUCKET_MINUTES[0]
 # (2025-26) league-wide assists per goal.
 ASSISTS_PER_GOAL = 0.90
 
-# Variance/mean of a team's goals in a match. Left at Poisson, deliberately.
+# A team's goals in a match are NOT Poisson given the market's expectation, and
+# the correction is a Dixon-Coles-style reweighting of the low scores rather than
+# a change of dispersion parameter.
 #
-# Splitting a Poisson total multinomially returns *independent* Poissons, so in
-# theory only an over-dispersed total can correlate team-mates, and the measured
-# Pearson dispersion over 2280 market-priced team-matches is 1.09 - which looks
-# like a mandate to raise this. It is not. Comparing the whole goal distribution
-# against 2023-24..2025-26 shows the 1.09 is not a fat tail at all:
+# The measurement that matters, over 2280 market-priced team-matches from
+# 2023-24 to 2025-26. Raw variance/mean is 1.031, which reads as mild
+# over-dispersion - but lambda itself varies across matches with variance 0.249,
+# and that spread alone contributes 0.167 of it. Net of the lambda spread the
+# *conditional* dispersion is 0.864: given what the market expected, team goals
+# are UNDER-dispersed. An earlier version of this comment read the raw Pearson
+# statistic of 1.09 as over-dispersion and reasoned from it; that was lambda
+# estimation error, not a fat tail.
 #
-#     goals        0       1       2       3       4      >=6
-#     actual  0.2320  0.3268  0.2513  0.1215  0.0478   0.0044
-#     phi=1.00  0.2469  0.3285  0.2268  0.1215  0.0509   0.0075
-#     phi=1.09  0.2570  0.3215  0.2219  0.1162  0.0535   0.0114
+# Under-dispersion is exactly the shape the cell-by-cell comparison shows -
+# fewer 0s, fewer blowouts, a bulge at 2:
 #
-# Reality has *less* mass at 0 than Poisson and *less* at 6+, with the excess
-# piled on 2. That is the Dixon-Coles low-score pattern, not a Gamma mixture, so
-# a negative binomial moves 0 and 6+ the wrong way and makes the clean-sheet
-# rate worse: P(concede nothing) errs +0.0163 at phi=1.00 and +0.0304 at 1.09.
-# Buying +0.028 of team-mate correlation by degrading every defender's and
-# keeper's clean sheet is a bad trade.
+#     goals    0       1       2       3       4       5       6      >=8
+#     actual  .2320   .3268   .2513   .1215   .0478   .0162   .0035   .0004
+#     Poisson .2483   .3220   .2297   .1201   .0515   .0193   .0065   .0008
+#     tilted  .2315   .3264   .2511   .1214   .0479   .0164   .0039   .0005
 #
-# The fix that would improve both at once is a Dixon-Coles adjustment to this
-# marginal (shift mass 0 -> 2), which raises correlation *and* corrects P(0).
-# Until that exists, this stays Poisson. Raise it only to experiment.
-GOAL_DISPERSION = 1.0
+# so P(k) is reweighted by TAU below and renormalised per lambda, fitted to that
+# marginal while holding the mean where the market put it. It matters most for
+# the cell it fixes: Poisson over-states P(concede nothing) by +0.016, which is
+# a clean sheet the model hands to every keeper and defender and reality does
+# not, and it over-states blowouts, which inflates concession penalties.
+#
+# Note the cost, because it is real. Splitting a total multinomially gives
+# team-mates Cov = p_i p_j (Var(N) - E[N]), so an under-dispersed total makes
+# their goals slightly *negatively* correlated, pulling against the +0.098
+# team-mate correlation measured in the data. Correcting a marginal every
+# defender is scored on beats improving a correlation that only the optional
+# rank-aware valuation consumes, but this is a trade, not a free win.
+GOAL_PMF_TILT = (0.91876, 1.0, 1.07865, 0.99678, 0.91363,
+                 0.83672, 0.5834, 0.46363, 0.66441)
+# Goals above this are folded into the last tilt cell.
+GOAL_PMF_MAX = len(GOAL_PMF_TILT) - 1
+
+
+_GOAL_K = np.arange(GOAL_PMF_MAX + 1, dtype=float)
+_GOAL_TAU = np.asarray(GOAL_PMF_TILT, dtype=float)
+
+
+def _tilted_pmf(lam: float) -> np.ndarray:
+    """Tilted pmf built on a Poisson of rate `lam`, before any mean correction."""
+    lam = max(1e-9, float(lam))
+    # Poisson pmf without scipy.stats: exp(k*log(lam) - lam - log(k!)).
+    pmf = np.exp(_GOAL_K * math.log(lam) - lam - gammaln(_GOAL_K + 1.0))
+    # The final cell carries the whole remaining tail before tilting.
+    pmf[-1] = max(0.0, 1.0 - pmf[:-1].sum())
+    pmf = pmf * _GOAL_TAU
+    total = pmf.sum()
+    return pmf / total if total > 0 else pmf
+
+
+@lru_cache(maxsize=8192)
+def _base_rate_for_mean(target: float) -> float:
+    """
+    The Poisson rate whose *tilted* distribution has mean `target`.
+
+    Reweighting the cells moves the mean: the fit held it only in aggregate, so
+    per lambda it drifted +7% at 0.4 and -11% at 5.0. A team's expected goals
+    have to be what the market says they are - that number is the whole input -
+    so the rate is solved rather than used directly. The map is monotone, so
+    bisection is enough.
+    """
+    if target <= 0:
+        return 0.0
+    lo, hi = 1e-6, 30.0
+    for _ in range(60):
+        mid = 0.5 * (lo + hi)
+        if float((_tilted_pmf(mid) * _GOAL_K).sum()) < target:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+def team_goal_pmf(lam: float) -> np.ndarray:
+    """
+    Distribution of one team's goals, tilted to the measured shape and carrying
+    exactly the mean it was asked for.
+    """
+    lam = max(0.0, float(lam))
+    if lam <= 0:
+        pmf = np.zeros(GOAL_PMF_MAX + 1)
+        pmf[0] = 1.0
+        return pmf
+    return _tilted_pmf(_base_rate_for_mean(round(lam, 4)))
+
+
+def p_no_goals(lam: float) -> float:
+    """
+    P(a team fails to score), under the same distribution the simulation draws
+    from. This is the clean sheet, so the analytic path and the simulation must
+    read it from one place or they will disagree about every defender.
+    """
+    if lam <= 0:
+        return 1.0
+    return float(team_goal_pmf(lam)[0])
 
 
 def _nb_params(mu: float, dispersion: float) -> Tuple[float, float]:
@@ -247,28 +324,18 @@ def _allocate(rng, totals: np.ndarray, weights: np.ndarray, denom) -> np.ndarray
 class MatchSimulator:
     """Simulates one fixture jointly across all supplied players."""
 
-    def __init__(self, n_sims: int = 2000, seed: int = 0,
-                 goal_dispersion: float = GOAL_DISPERSION):
+    def __init__(self, n_sims: int = 2000, seed: int = 0):
         self.n_sims = n_sims
         self.seed = seed
-        self.goal_dispersion = float(goal_dispersion)
 
     def _team_goals(self, rng, lam: float, n: int) -> np.ndarray:
         """
-        One team's goals in one match, drawn `n` times.
-
-        Poisson at dispersion 1.0. Above that, a negative binomial with the same
-        mean: real team goals are over-dispersed (measured Pearson dispersion
-        1.09 over 2280 team-matches priced by the market), and that
-        over-dispersion is the *only* thing that can correlate team-mates'
-        attacking returns. Splitting a Poisson total multinomially returns
-        independent Poissons - the classic thinning result - so a shared total
-        alone buys nothing. The variance of the total is what couples them.
+        One team's goals in one match, drawn `n` times from the tilted
+        distribution rather than a plain Poisson. Inverse-CDF sampling: the pmf
+        is a nine-element vector, so one searchsorted covers every draw.
         """
-        if self.goal_dispersion <= 1.0:
-            return rng.poisson(lam=lam, size=n)
-        nb_n, nb_p = _nb_params(lam, self.goal_dispersion)
-        return rng.negative_binomial(max(1e-3, nb_n), min(0.999, max(1e-6, nb_p)), size=n)
+        cdf = np.cumsum(team_goal_pmf(lam))
+        return np.searchsorted(cdf, rng.random(n)).astype(np.int64)
 
     def simulate(
         self,

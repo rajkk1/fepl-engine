@@ -345,3 +345,66 @@ def test_unmodelled_position_earns_no_volume_bps():
     from match_sim import volume_bps90
 
     assert volume_bps90(5, {"recoveries90": 9.0, "xa90": 1.0}) == 0.0
+
+
+# ------------------------------------------------- tilted team-goal marginal
+
+
+def test_team_goal_pmf_is_a_distribution_with_the_right_mean():
+    from match_sim import team_goal_pmf
+
+    for lam in (0.4, 1.0, 1.5, 2.2, 3.5):
+        pmf = team_goal_pmf(lam)
+        assert pmf.sum() == pytest.approx(1.0)
+        assert (pmf >= 0).all()
+        mean = float((pmf * np.arange(len(pmf))).sum())
+        assert mean == pytest.approx(lam, rel=0.06), lam
+
+
+def test_clean_sheet_probability_matches_the_league(monkeypatch):
+    """
+    The cell this exists to fix. Plain Poisson over-states P(concede nothing) by
+    +0.0163 against 2280 market-priced team-matches - a clean sheet handed to
+    every keeper and defender that reality does not award. Mixed over a
+    realistic spread of lambda the tilted version lands on the measured 0.2320.
+    """
+    from match_sim import p_no_goals
+
+    rng = np.random.default_rng(0)
+    lam = np.clip(rng.normal(1.50, 0.50, 40000), 0.15, 5.0)
+    tilted = float(np.mean([p_no_goals(l) for l in lam]))
+    poisson = float(np.mean(np.exp(-lam)))
+    assert abs(tilted - 0.2320) < abs(poisson - 0.2320)
+    assert tilted == pytest.approx(0.2320, abs=0.012)
+
+
+def test_p_no_goals_is_monotone_and_total_at_zero():
+    from match_sim import p_no_goals
+
+    assert p_no_goals(0.0) == 1.0
+    vals = [p_no_goals(l) for l in (0.3, 0.8, 1.5, 2.5, 4.0)]
+    assert vals == sorted(vals, reverse=True)
+
+
+def test_analytic_clean_sheet_reads_the_same_distribution_as_the_simulation():
+    """
+    The analytic path scores the clean sheet and the simulation scores the bonus
+    that depends on it. If they draw from different distributions they disagree
+    about every defender, so both must go through `p_no_goals`.
+    """
+    import inspect
+    import xp_model
+
+    src = inspect.getsource(xp_model.EnsembleForecaster._predict_uncalibrated)
+    assert "p_no_goals(" in src
+    assert "math.exp(-opp_xg" not in src
+
+
+def test_sampling_follows_the_tilted_pmf():
+    from match_sim import MatchSimulator, team_goal_pmf
+
+    sim = MatchSimulator(n_sims=1)
+    draws = sim._team_goals(np.random.default_rng(0), 1.5, 200000)
+    pmf = team_goal_pmf(1.5)
+    for k in range(5):
+        assert (draws == k).mean() == pytest.approx(pmf[k], abs=0.005)
