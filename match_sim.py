@@ -51,9 +51,73 @@ BPS_PENALTY_MISS = -6
 BPS_GOALS_CONCEDED_PER_2 = -4   # GK/DEF only
 BPS_DEFCON = 3                  # hitting the defensive-contribution threshold
 # Volume terms, approximated from per-90 rates.
-BPS_PER_RECOVERY = 1 / 3.0
-BPS_PER_TACKLE_WON = 2.0
-BPS_PER_KEY_PASS = 1.0
+# Volume BPS: everything FPL awards for actions the data does not itemise -
+# passes completed, crosses, dribbles, big chances created, clearances. It is
+# the whole of the difference between the exactly-specified half of BPS and a
+# real one, and it is *not* the same size for every position.
+#
+# Why this is per position, and fitted. Bonus is a rank statistic over BPS, so
+# an error in one position's BPS relative to another's converts directly into a
+# bonus bias. Keepers were the exactly-modelled position - clean sheet 12, saves
+# 2 each, 60 minutes 6, all official - while outfielders were proxied by three
+# global constants, one of them resting on `key_passes = xa90 * 4`. The
+# exactly-modelled position duly won a rank contest it should not have:
+#
+#     pos    BPS pred  BPS act    diff   bonus pred  bonus act    diff
+#     GKP       15.46    12.73   +2.73        0.312      0.178  +0.134
+#     MID       12.88    13.62   -0.74        0.183      0.248  -0.065
+#
+# Subtracting the exactly-specified terms from realised `bps` leaves the volume
+# BPS per 90 directly measurable. It is stable across the two seasons under the
+# current rules - DEF 4.71 / 4.69, MID 6.62 / 6.73 - and quite different under
+# the old ones (2023-24: DEF 9.39, MID 4.62), so FPL revised BPS for 2024-25 and
+# only those two seasons may be used.
+#
+#     per 90        GKP    DEF    MID    FWD
+#     2024-25     -0.49   4.71   6.62   1.09
+#     2025-26      1.51   4.69   6.73   0.18
+#     model         1.33   5.36   5.52   3.31   <- before this table
+#
+# `base`/`rec`/`tak`/`cbi`/`xa` are least-squares fits of that residual on the
+# *actual* per-match volume stats (2025-26; 5-fold CV R^2 0.16 / 0.28 / 0.47 /
+# 0.16). Fitting them on the model's own predicted rates instead was tried and
+# rejected: shrunk rate estimates carry too little within-position variation, so
+# they collide with the intercept and the fit returns negative coefficients for
+# recoveries and tackles - a defender making more tackles would earn less BPS.
+# `scale` then absorbs the bias between predicted and actual rates (predicted
+# CBI runs ~1.35x actual, forward recoveries ~1.5x), and is solved so that
+# applying this to predicted rates reproduces the measured per-90 level above.
+#
+# xA is dropped for keepers: it adds nothing (CV R^2 0.157 -> 0.156) and the
+# fitted sign is noise. For outfielders it is the single most valuable term
+# (MID 0.362 -> 0.471), and it is weighted ~14 against the old model's effective
+# 4.0 - creative players were badly under-credited, and midfielders are the
+# creative position, which is exactly where the bonus was going missing.
+BPS_VOLUME = {
+    POS_GKP: {"base": -3.00, "rec": 0.518, "tak": 0.575, "cbi": 0.228,
+              "xa": 0.00, "scale": 2.008},
+    POS_DEF: {"base": -0.23, "rec": 0.477, "tak": 0.665, "cbi": 0.248,
+              "xa": 14.17, "scale": 0.749},
+    POS_MID: {"base": 0.73, "rec": 0.400, "tak": 0.953, "cbi": 0.443,
+              "xa": 14.32, "scale": 0.910},
+    POS_FWD: {"base": -3.11, "rec": 0.524, "tak": 1.184, "cbi": 0.508,
+              "xa": 9.92, "scale": 0.459},
+}
+
+
+def volume_bps90(element_type: int, comps: Dict[str, Any]) -> float:
+    """Unitemised BPS a player of this position earns per 90 minutes played."""
+    c = BPS_VOLUME.get(element_type)
+    if c is None:
+        return 0.0
+    raw = (c["base"]
+           + float(comps.get("recoveries90", 0.0)) * c["rec"]
+           + float(comps.get("tackles90", 0.0)) * c["tak"]
+           + float(comps.get("cbi90", 0.0)) * c["cbi"]
+           + float(comps.get("xa90", 0.0)) * c["xa"])
+    # The intercept is negative for keepers and forwards, whose rate terms
+    # over-explain; a low-volume player must floor at zero, not go negative.
+    return max(0.0, raw) * c["scale"]
 
 # FPL match points for the rare events. These are individually small, but they
 # are the whole of the BPS table's negative half, and leaving them out biased
@@ -409,9 +473,7 @@ class MatchSimulator:
                 b += (team_conceded // 2) * BPS_GOALS_CONCEDED_PER_2
             # Volume terms scaled by minutes actually played.
             min_frac = (played_60 * 1.0 + (played & ~played_60) * 0.4)
-            b += min_frac * float(p.get("recoveries90", 0.0)) * BPS_PER_RECOVERY
-            b += min_frac * float(p.get("tackles90", 0.0)) * BPS_PER_TACKLE_WON
-            b += min_frac * float(p.get("key_passes90", 0.0)) * BPS_PER_KEY_PASS
+            b += min_frac * volume_bps90(et, p)
 
             bps[i] = b
             pts[i] = player_pts

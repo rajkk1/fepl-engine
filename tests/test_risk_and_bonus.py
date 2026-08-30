@@ -14,7 +14,7 @@ def _player(pid, team, et=3, **kw):
         "id": pid, "team": team, "element_type": et,
         "p_play": 0.9, "p_60": 0.8, "xmin": 80.0,
         "xg_cond": 0.3, "xa_cond": 0.2, "saves90": 0.0, "yc90": 0.1,
-        "recoveries90": 5.0, "tackles90": 1.5, "key_passes90": 1.0,
+        "recoveries90": 5.0, "tackles90": 1.5, "cbi90": 2.0, "xa90": 0.15,
         "defcon_mu": 6.0, "defcon_dispersion": 1.85,
     }
     base.update(kw)
@@ -217,7 +217,7 @@ def _attacker(pid, team, xg=0.5, xa=0.3, et=4, p_play=1.0):
                 p_60=p_play * 0.95, xg_cond=xg, xa_cond=xa, saves90=0.0,
                 yc90=0.1, play_frac=1.0, cond_frac=1.0, defcon_mu=0.0,
                 defcon_dispersion=1.85, xmin=90.0, recoveries90=2.0,
-                tackles90=0.8, key_passes90=1.4)
+                tackles90=0.8, cbi90=1.5, xa90=0.3)
 
 
 def _two_team_match(n_sims=60000, seed=3):
@@ -285,3 +285,63 @@ def test_single_team_input_falls_back_to_independent_draws():
     out = MatchSimulator(n_sims=20000, seed=1).simulate(squad, {1: 1.3})
     assert out["mean_goals"][1] == pytest.approx(0.5, abs=0.05)
     assert out["mean_goals"][2] == pytest.approx(0.4, abs=0.05)
+
+
+# ------------------------------------------------------- volume BPS by position
+
+
+def test_volume_bps_is_position_specific():
+    """
+    Bonus is a rank statistic over BPS, so BPS accurate for one position and
+    approximated for another hands the accurate one bonus it did not earn.
+    Keepers were exactly modelled (clean sheet 12, saves 2 each) while
+    outfielders ran on three global constants, and keepers duly won: predicted
+    bonus 0.312 against a realised 0.178.
+    """
+    from match_sim import volume_bps90, BPS_VOLUME, POS_GKP, POS_MID
+
+    comps = {"recoveries90": 4.5, "tackles90": 1.8, "cbi90": 3.0, "xa90": 0.15}
+    assert volume_bps90(POS_MID, comps) > volume_bps90(POS_GKP, comps)
+    assert set(BPS_VOLUME) == {1, 2, 3, 4}
+
+
+def test_volume_bps_never_goes_negative():
+    """The fitted intercept is negative for keepers and forwards, whose rate
+    terms over-explain. A low-volume player must floor at zero."""
+    from match_sim import volume_bps90, POS_GKP, POS_FWD
+
+    empty = {"recoveries90": 0.0, "tackles90": 0.0, "cbi90": 0.0, "xa90": 0.0}
+    assert volume_bps90(POS_GKP, empty) == 0.0
+    assert volume_bps90(POS_FWD, empty) == 0.0
+
+
+def test_volume_bps_rewards_creativity_for_outfielders_only():
+    """
+    xA is the single most valuable volume term for an outfielder (midfield CV
+    R^2 0.362 -> 0.471) and worth nothing for a keeper, where the fitted sign is
+    noise. The old model priced it through `key_passes = xa90 * 4` at 1 BPS
+    each, under-crediting creators by roughly 3.5x.
+    """
+    from match_sim import volume_bps90, POS_GKP, POS_MID
+
+    base = {"recoveries90": 4.0, "tackles90": 1.5, "cbi90": 2.5, "xa90": 0.05}
+    creative = dict(base, xa90=0.45)
+    assert volume_bps90(POS_MID, creative) > volume_bps90(POS_MID, base) + 1.0
+    assert volume_bps90(POS_GKP, creative) == pytest.approx(
+        volume_bps90(POS_GKP, base))
+
+
+def test_volume_bps_is_monotone_in_each_volume_term():
+    from match_sim import volume_bps90, POS_DEF
+
+    base = {"recoveries90": 4.0, "tackles90": 1.5, "cbi90": 2.5, "xa90": 0.08}
+    for term in ("recoveries90", "tackles90", "cbi90", "xa90"):
+        more = dict(base)
+        more[term] = base[term] + 1.0
+        assert volume_bps90(POS_DEF, more) > volume_bps90(POS_DEF, base), term
+
+
+def test_unmodelled_position_earns_no_volume_bps():
+    from match_sim import volume_bps90
+
+    assert volume_bps90(5, {"recoveries90": 9.0, "xa90": 1.0}) == 0.0

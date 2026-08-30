@@ -74,8 +74,6 @@ SP_FIXTURE_DAMPING = 0.3
 # BPS credits key passes, which FPL does not report per player. Assists are
 # the only observable proxy, and roughly four key passes precede one expected
 # assist. This only ever shifts a player within a bonus race, never their base
-# points, so a coarse ratio is acceptable -- but it is a real assumption.
-KEY_PASSES_PER_XA = 4.0
 # Below this many priced matches, this season's odds cannot support ratings
 # on their own and we fall back to carrying the previous season forward.
 MIN_MATCHES_FOR_RATINGS = 40
@@ -1401,7 +1399,12 @@ class EnsembleForecaster:
             "pen_save90": pen_save90,
             "recoveries90": rates["recoveries90"] * ctx["def_mult"],
             "tackles90": rates["tackles90"] * ctx["def_mult"],
-            "key_passes90": rates["xa90"] * KEY_PASSES_PER_XA,
+            # Per-90 volume inputs for the BPS model. CBI is clearances,
+            # blocks and interceptions *alone*: the filter tracks cbit = CBI +
+            # tackles, and tackles are priced separately below, so passing cbit
+            # here would charge them twice.
+            "cbi90": max(0.0, rates["cbit90"] - rates["tackles90"]) * ctx["def_mult"],
+            "xa90": rates["xa90"] * assist_multiplier(ctx["att_mult"]),
             "defcon_mu": defcon_mu,
             "defcon_dispersion": self.defcon_dispersion.get(element_type, 1.85),
             "cbit": rates["cbit90"] * ctx["def_mult"] * min_frac,
@@ -1431,7 +1434,7 @@ def _empty_components(player, element_type):
         "xg_cond": 0.0, "xa_cond": 0.0, "p_cs": 0.0, "opp_xg": 0.0, "player_opp_xg": 0.0,
         "saves90": 0.0, "yc90": 0.0, "rc90": 0.0, "og90": 0.0,
         "pen_miss90": 0.0, "pen_save90": 0.0, "recoveries90": 0.0, "tackles90": 0.0,
-        "key_passes90": 0.0, "defcon_mu": 0.0, "defcon_dispersion": 1.85,
+        "cbi90": 0.0, "xa90": 0.0, "defcon_mu": 0.0, "defcon_dispersion": 1.85,
         "cbit": 0.0, "cbirt": 0.0, "xBonus": 0.0, "xCS_pts": 0.0, "xG_pts": 0.0,
         "xA_pts": 0.0, "xSaves": 0.0, "xPenSaves": 0.0, "xDefCon": 0.0,
         "xConc_penalty": 0.0, "xCard_penalty": 0.0, "math_pts": 0.0,
