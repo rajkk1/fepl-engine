@@ -553,3 +553,62 @@ def test_normalisation_survives_a_team_that_cannot_field_anyone():
     out = _tilt_to_team_minutes(squad)
     assert out == squad
     assert _tilt_to_team_minutes([]) == []
+
+
+def test_reconciliation_hits_both_team_level_facts():
+    """
+    A team-match contains two things that are known, not modelled: 985 minutes,
+    and 10.28 players lasting 60+. One tilt can only hit the first, and it pays
+    for it in composition.
+    """
+    from xp_model import (_reconcile_team_minutes, _tilt_to_team_minutes,
+                          _appearance_minutes, TEAM_MATCH_MINUTES,
+                          TEAM_LONG_APPEARANCES)
+
+    squad = ([[0.02, 0.03, 0.15, 0.80] for _ in range(11)]
+             + [[0.55, 0.20, 0.15, 0.10] for _ in range(9)])
+
+    def summarise(sq):
+        return (sum(_appearance_minutes(d) for d in sq), sum(d[2] + d[3] for d in sq))
+
+    one_min, one_long = summarise(_tilt_to_team_minutes(squad))
+    two_min, two_long = summarise(_reconcile_team_minutes(squad))
+
+    assert one_min == pytest.approx(TEAM_MATCH_MINUTES, abs=1.0)
+    assert two_min == pytest.approx(TEAM_MATCH_MINUTES, abs=1.0)
+    # Only the two-knob version controls the composition as well.
+    assert two_long == pytest.approx(TEAM_LONG_APPEARANCES, abs=0.05)
+    assert abs(one_long - TEAM_LONG_APPEARANCES) > abs(two_long - TEAM_LONG_APPEARANCES)
+
+
+def test_reconciliation_returns_valid_distributions():
+    from xp_model import _reconcile_team_minutes
+
+    squad = [[0.9, 0.05, 0.03, 0.02], [0.5, 0.2, 0.2, 0.1],
+             [0.1, 0.1, 0.2, 0.6], [0.02, 0.03, 0.15, 0.80]] * 5
+    for d in _reconcile_team_minutes(squad):
+        assert sum(d) == pytest.approx(1.0)
+        assert all(-1e-12 <= x <= 1.0 + 1e-12 for x in d)
+
+
+def test_reconciliation_keeps_a_players_own_long_appearance_split():
+    """A player who never lasts 90 must not be handed 90-minute mass."""
+    from xp_model import _reconcile_team_minutes
+
+    subbed = [0.1, 0.2, 0.7, 0.0]          # always off before 90
+    squad = [list(subbed)] + [[0.02, 0.03, 0.15, 0.80] for _ in range(14)]
+    out = _reconcile_team_minutes(squad)
+    assert out[0][3] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_reconciliation_falls_back_when_the_targets_are_unreachable():
+    """No cameo mass anywhere means the two-knob system has nothing to solve
+    with; it must degrade to the single tilt rather than raise."""
+    from xp_model import _reconcile_team_minutes, _appearance_minutes, TEAM_MATCH_MINUTES
+
+    squad = [[0.0, 0.0, 0.0, 1.0] for _ in range(14)]
+    out = _reconcile_team_minutes(squad)
+    assert all(sum(d) == pytest.approx(1.0) for d in out)
+    assert sum(_appearance_minutes(d) for d in out) == pytest.approx(
+        TEAM_MATCH_MINUTES, abs=40.0)
+    assert _reconcile_team_minutes([]) == []

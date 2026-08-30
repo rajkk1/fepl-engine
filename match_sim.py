@@ -466,6 +466,14 @@ class MatchSimulator:
             # they are exposed for the tests and for diagnostics.
             "mean_goals": {p["id"]: float(goals_m[i].mean()) for i, p in enumerate(players)},
             "mean_assists": {p["id"]: float(assists_m[i].mean()) for i, p in enumerate(players)},
+            # Mean BPS among simulations the player actually appeared in, which
+            # is the quantity comparable to a realised `bps` in the data. Bonus
+            # is a rank statistic over these, so a per-position error here maps
+            # straight into a per-position bonus bias.
+            "mean_bps": {
+                p["id"]: float(bps[i][appeared[i]].mean()) if appeared[i].any() else 0.0
+                for i, p in enumerate(players)
+            },
             "n_sims": self.n_sims,
         }
 

@@ -356,6 +356,10 @@ def load_lineup_overrides(source: Optional[str] = None) -> Dict[int, float]:
 # Minutes a team actually plays in one match. Not 11 x 90 = 990: red cards cost
 # a team the balance, and the measured mean over 2025-26 single fixtures is 985.
 TEAM_MATCH_MINUTES = 985.0
+# Players lasting 60+ minutes in a team-match, measured over 2025-26 single
+# fixtures. Not 11: three to five substitutions a match means roughly one
+# starter is routinely withdrawn before the hour.
+TEAM_LONG_APPEARANCES = 10.28
 # Bucket midpoints live in match_sim so both paths cannot drift apart.
 _BUCKET_MINUTES = BUCKET_MINUTES
 
@@ -384,15 +388,27 @@ def _tilt_one(probs: List[float], lam: float) -> List[float]:
 
 def _tilt_to_team_minutes(dists: List[List[float]],
                           target: float = TEAM_MATCH_MINUTES) -> List[List[float]]:
-    """Find the one tilt that makes a team's expected minutes sum to `target`."""
+    """
+    One tilt making a team's expected minutes sum to `target`.
+
+    Kept as the fallback for `_reconcile_team_minutes`, which controls the same
+    total plus the number of long appearances. One knob cannot do both, and
+    which way it errs is not a detail: it over-shaves the fringe and leaves
+    nailed starters over-allocated, which lands as a *per-position* bias.
+    """
     if not dists:
         return dists
     total = sum(_appearance_minutes(d) for d in dists)
     # Nothing to solve for, and nothing to solve *with* if no one can play.
     if total <= 0 or abs(total - target) < 1.0:
         return dists
-    lo, hi = 1e-6, 1e6
-    for _ in range(60):
+    # The bracket has to span the odds themselves. A squad of certain starters
+    # sits at odds ~1e9 after the clamp in `_tilt_one`, and pulling it down to a
+    # real team-match needs a lambda near 1e-9 - outside a 1e-6 bracket, where
+    # the search would quietly converge on the wrong end and leave the total
+    # uncorrected.
+    lo, hi = 1e-12, 1e12
+    for _ in range(200):
         mid = math.sqrt(lo * hi)
         if sum(_appearance_minutes(_tilt_one(d, mid)) for d in dists) > target:
             hi = mid
@@ -400,6 +416,77 @@ def _tilt_to_team_minutes(dists: List[List[float]],
             lo = mid
     lam = math.sqrt(lo * hi)
     return [_tilt_one(d, lam) for d in dists]
+
+
+def _reconcile_team_minutes(dists: List[List[float]],
+                            minutes_target: float = TEAM_MATCH_MINUTES,
+                            long_target: float = TEAM_LONG_APPEARANCES
+                            ) -> List[List[float]]:
+    """
+    Reconcile a team against *both* things a team-match is known to contain:
+    985 minutes, and 10.28 players lasting 60 minutes or more.
+
+    A single tilt on "does this player appear" hits the minutes total but lets
+    the composition drift, because it cannot tell a starter's minutes from a
+    substitute's. Measured, it over-corrected the fringe (-473 minutes) while
+    leaving nailed starters over-allocated (+307) - a bias that falls unevenly
+    across positions, which is worse than an even one for a solver whose whole
+    job is choosing between positions.
+
+    The four buckets already separate the two groups that need separate
+    treatment: 60+ is a long appearance, 1-59 is a cameo. So tilt them
+    independently, multinomial-logit style, with `p0` as the fixed reference
+    category. Each player keeps their own 60-89 / 90 split, and a player with
+    no chance of appearing stays at no chance.
+    """
+    if not dists:
+        return dists
+    arr = np.asarray(dists, dtype=float)
+    p0, cameo = arr[:, 0], arr[:, 1]
+    long = arr[:, 2] + arr[:, 3]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        share90 = np.where(long > 1e-12, arr[:, 3] / np.maximum(long, 1e-12), 0.0)
+    long_minutes = share90 * _BUCKET_MINUTES[2] + (1.0 - share90) * _BUCKET_MINUTES[1]
+
+    # Infeasible if nobody can start or nobody can come on: there is no tilt
+    # that reaches the target, so leave the team to the one-knob fallback.
+    if long.sum() <= 0 or cameo.sum() <= 0:
+        return _tilt_to_team_minutes(dists, minutes_target)
+
+    def _apply(theta):
+        lc, ll = math.exp(theta[0]), math.exp(theta[1])
+        denom = p0 + cameo * lc + long * ll
+        denom = np.where(denom > 1e-12, denom, 1.0)
+        return cameo * lc / denom, long * ll / denom
+
+    def _resid(theta):
+        c2, l2 = _apply(theta)
+        return [c2.sum() * _BUCKET_MINUTES[0] + float((l2 * long_minutes).sum())
+                - minutes_target,
+                l2.sum() - long_target]
+
+    try:
+        from scipy.optimize import root
+
+        sol = root(_resid, [0.0, 0.0], method="hybr")
+        if not sol.success or not np.all(np.isfinite(sol.x)):
+            return _tilt_to_team_minutes(dists, minutes_target)
+        c2, l2 = _apply(sol.x)
+    except Exception:  # a solver failure must not lose a gameweek
+        return _tilt_to_team_minutes(dists, minutes_target)
+
+    if not (np.all(np.isfinite(c2)) and np.all(np.isfinite(l2))):
+        return _tilt_to_team_minutes(dists, minutes_target)
+
+    out = np.column_stack([
+        np.clip(1.0 - c2 - l2, 0.0, 1.0),
+        c2,
+        l2 * (1.0 - share90),
+        l2 * share90,
+    ])
+    totals = out.sum(axis=1, keepdims=True)
+    out = out / np.where(totals > 0, totals, 1.0)
+    return [list(map(float, row)) for row in out]
 
 
 def _maybe(row: Dict[str, Any], key: str):
@@ -901,7 +988,7 @@ class EnsembleForecaster:
 
         for keys in groups.values():
             dists = [self._minutes_cache[k] for k in keys]
-            for k, d in zip(keys, _tilt_to_team_minutes(dists)):
+            for k, d in zip(keys, _reconcile_team_minutes(dists)):
                 self._minutes_cache[k] = d
 
     def clear_minutes_cache(self):
