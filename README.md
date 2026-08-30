@@ -64,7 +64,17 @@ no hosting cost.
    both play 60+ minutes correlate at **+0.098**; before this the engine had
    them at **−0.07**, indistinguishable from opposition players and negative
    only because club-mates compete for the same bonus. Stacking consequently
-   looked like it *reduced* risk.
+   looked like it *reduced* risk; it now correctly prices as riskier.
+
+   The team total itself is **not Poisson**. Net of the spread in λ across
+   matches, team goals given the market's expectation are *under*-dispersed
+   (conditional dispersion 0.864) — fewer 0s, fewer blowouts, a bulge at 2 —
+   so the distribution is reweighted cell by cell to the measured shape, with
+   the base rate solved so the mean is exactly what the market said. Poisson
+   over-states P(concede nothing) by **+0.016**, a clean sheet handed to every
+   keeper and defender that reality does not award; the tilted version errs by
+   +0.003. The analytic and simulated clean sheet read the same function, so
+   they cannot disagree about a defender.
 6. **Calibration** (`calibration.py`) — a per-position correction fitted on a
    rolling window of completed gameweeks. **Off by default**: it was built for
    an over-spread model that has since been fixed, and it no longer earns its
@@ -137,7 +147,7 @@ Pooled over 2022-23 to 2025-26, GW5–38 — **135 gameweeks**:
 ```
  model                MAE    RMSE    bias     rho    P@15  cap.regret
  fpl_xp_LEAKS       1.548   2.440  +0.176   0.739     5.7        6.15  <- LEAKS
- fepl               1.777   2.736  -0.115   0.586     2.5       10.77
+ fepl               1.768   2.735  -0.139   0.585     2.7       10.62
  ppg                1.962   2.887  -0.000   0.460     2.4       10.76
  roll3_mins         1.969   3.072  -0.133   0.526     1.7       12.24
  roll3              2.017   3.075  +0.047   0.516     1.8       12.24
@@ -148,10 +158,10 @@ minus each clean baseline, 95% CI over the 135 gameweeks:
 
 | metric | vs `ppg` | vs `roll3` | vs `roll3_mins` |
 |---|---|---|---|
-| MAE | **−0.185** [−0.199, −0.170] | **−0.240** [−0.257, −0.223] | **−0.192** [−0.209, −0.176] |
-| rank correlation | **+0.126** [+0.112, +0.139] | **+0.070** [+0.062, +0.078] | **+0.059** [+0.052, +0.067] |
-| precision@15 | +0.111 [−0.148, +0.370] | **+0.719** [+0.422, +1.022] | **+0.815** [+0.519, +1.119] |
-| captain regret | +0.015 [−1.081, +1.119] | **−1.474** [−2.600, −0.348] | **−1.467** [−2.644, −0.274] |
+| MAE | **−0.194** [−0.208, −0.180] | **−0.249** [−0.266, −0.232] | **−0.201** [−0.218, −0.185] |
+| rank correlation | **+0.125** [+0.112, +0.138] | **+0.070** [+0.061, +0.078] | **+0.059** [+0.051, +0.067] |
+| precision@15 | +0.222 [−0.037, +0.481] | **+0.830** [+0.541, +1.133] | **+0.926** [+0.630, +1.222] |
+| captain regret | −0.133 [−1.200, +0.941] | **−1.622** [−2.741, −0.474] | **−1.615** [−2.800, −0.407] |
 
 Bold is significant. The honest summary: against the rolling-mean baselines the
 engine wins on everything, including the two decision metrics. Against **trailing
@@ -170,14 +180,15 @@ builds at random, and this repo has already watched that happen — a change who
 true effect on precision@15 was −0.118 [−0.324, +0.059] drifted the metric below
 the baseline on noise alone.
 
-**Known bias.** The engine now under-predicts by 0.115 points per player per
-gameweek, and unevenly: on 2025-26 keepers run +0.168 while midfielders run
-−0.135. Most of that is the single per-team minutes tilt, which cannot correct
-the fringe and nailed bands at once — it leaves fringe players slightly
-under-allocated and nailed players slightly over. A uniform bias would matter
-little to a solver that only ranks, but a *per-position* one distorts choices
-between positions, so this is a real open defect rather than a rounding
-detail.
+**Known bias.** The engine under-predicts by 0.139 points per player per
+gameweek, and unevenly: on 2025-26 keepers run +0.143 while midfielders run
+−0.117. A uniform bias would matter little to a solver that only ranks, but a
+*per-position* one distorts choices between positions, so this is a real open
+defect. Three candidate causes have been measured and ruled out — the minutes
+band split, the one-keeper-per-team constraint (already satisfied to 89.1
+minutes against 90), and the BPS volume model. The remaining gap is significant
+(GKP minus MID +0.298 [+0.131, +0.458]) and currently has no mechanism
+supported by evidence.
 
 **How much room is actually left.** FPL points are extremely noisy, so a perfect
 forecast still misses. Estimated from the model's own (well-calibrated)
