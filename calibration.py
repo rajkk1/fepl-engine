@@ -1,15 +1,40 @@
 """
 Post-hoc recalibration of expected points.
 
-The engine's raw output is systematically over-spread: backtesting gave
-`actual = 0.63 * pred + 0.98` on 2025-26, meaning the model over-rates exactly
-the players it likes most. That is the mechanism behind poor captaincy picks,
-because captaincy only cares about the top of the ranking.
-
 This module fits a per-position correction on a rolling window of completed
 gameweeks and applies it inside `predict()`. Isotonic regression is used where
 there is enough data (it is monotone, so it never reorders players within a
 position), falling back to a linear fit and then to the identity.
+
+**This is off by default, and the reason is worth reading before you turn it on.**
+
+The fit itself is sound. Fitted honestly on 2025-26 GW8-16 the slopes come out
+{GKP 0.78, DEF 0.77, MID 0.94, FWD 0.86}, so the raw forecast genuinely is
+over-spread and this layer genuinely does correct it in a squared-error sense.
+
+Applying that correction still makes the engine worse where it counts. A matched
+A/B on 2025-26 GW8-16, same commit, only the flag changed:
+
+    calibration off : MAE 1.914  rho 0.594  P@15 2.2  captain regret 11.89
+    calibration on  : MAE 1.932  rho 0.594  P@15 2.3  captain regret 12.11
+
+The mechanism is the point. A least-squares fit is dominated by the mass of
+low-scoring players, so the correction it learns is mostly "shrink toward the
+mean" - and shrinking compresses precisely the top of the ranking, where
+captaincy is decided. It buys a little precision@15 and pays for it in captain
+regret and MAE. Calibration that optimises aggregate error is not the same thing
+as calibration that helps you pick a captain.
+
+(An earlier version of this file reported slopes near 1.0 and concluded there was
+nothing to correct. That was an artefact: the calibrator was being fitted against
+retrospective forecasts made by a minutes model and team ratings that had already
+been trained on the very gameweeks being scored, which flattered the model and
+biased the slope toward the identity. `EnsembleForecaster.refit_as_of` now rolls
+those fitted parameters back per gameweek, which is what surfaced the real
+slopes above.)
+
+Turn it on only with a backtest in hand showing it earns its place on the metric
+you care about.
 """
 import logging
 from typing import Dict, Any, List, Optional
@@ -104,14 +129,29 @@ class PointsCalibrator:
             )
         return self
 
-    def apply(self, raw_pred: float, element_type: int) -> float:
-        """Calibrate one prediction. Identity when unfitted for that position."""
+    def apply(self, raw_pred: float, element_type: int, n_fixtures: int = 1) -> float:
+        """
+        Calibrate one prediction. Identity when unfitted for that position.
+
+        `n_fixtures` is how many matches the raw total covers. The fit is per
+        *fixture*, so a double gameweek needs the intercept applied twice, not
+        once: adding it to the summed total was systematically underrating
+        exactly the double-gameweek players the optimiser makes its biggest
+        calls on.
+        """
         if not self.is_fitted:
             return raw_pred
         model = self._models.get(int(element_type))
         if model is None:
             return raw_pred
+        n = max(1, int(n_fixtures))
         if self._kind[int(element_type)] == "isotonic":
+            # Calibrate the per-fixture average, then scale back up, so the
+            # fitted shape is evaluated on the range it was fitted over.
+            if n > 1:
+                per = raw_pred / n
+                shaped = float(model.predict([per])[0])
+                return float(max(0.0, n * ((1.0 - TIE_BREAK) * shaped + TIE_BREAK * per)))
             # Isotonic is monotone *non-decreasing*, so it happily maps a whole
             # range of raw values onto one plateau. That is fatal at the top of
             # the ranking, where captaincy and precision@k need to tell near-
@@ -120,7 +160,7 @@ class PointsCalibrator:
             base = float(model.predict([raw_pred])[0])
             return float(max(0.0, (1.0 - TIE_BREAK) * base + TIE_BREAK * raw_pred))
         slope, intercept = model
-        return float(max(0.0, slope * raw_pred + intercept))
+        return float(max(0.0, slope * raw_pred + intercept * n))
 
     def apply_many(self, preds: np.ndarray, element_type: int) -> np.ndarray:
         if not self.is_fitted:

@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import backtest
 from calibration import PointsCalibrator
 from market_odds import MarketOddsModel
 from backtest import build_baselines, build_eval_population, check_gate, evaluate_gameweek
@@ -258,3 +259,234 @@ def test_home_advantage_is_not_applied_twice(teams):
     mu_h, mu_a = m.get_match_lambdas(1, 2)
     assert mu_h == pytest.approx(1.4, abs=1e-6)
     assert mu_a == pytest.approx(1.4, abs=1e-6)
+
+
+# ------------------------------------------------------------- calibration
+
+
+def test_calibration_applies_the_intercept_once_per_fixture():
+    """
+    Regression: a double gameweek's two fixtures were summed and then calibrated
+    once, so the intercept was applied a single time instead of twice. That
+    systematically underrated exactly the DGW players the optimiser makes its
+    biggest calls on.
+    """
+    from calibration import PointsCalibrator
+
+    cal = PointsCalibrator(method="linear")
+    cal._models = {3: (0.9, 0.5)}
+    cal._kind = {3: "linear"}
+    cal.is_fitted = True
+
+    single = cal.apply(5.0, 3, n_fixtures=1)
+    double = cal.apply(10.0, 3, n_fixtures=2)
+    assert single == pytest.approx(0.9 * 5.0 + 0.5)
+    assert double == pytest.approx(0.9 * 10.0 + 2 * 0.5)
+    assert double == pytest.approx(2 * cal.apply(5.0, 3, n_fixtures=1))
+
+
+def test_gate_enforces_decision_metrics_not_just_error():
+    """
+    Error alone is dominated by correctly predicting low scores, so a model can
+    clear it while being no better than the baseline at picking a squad.
+    """
+    from backtest import check_gate
+
+    summary = {"models": {
+        "fepl": {"rmse": 2.5, "mae": 1.5, "spearman": 0.40, "precision_at_15": 1.5},
+        "ppg": {"rmse": 3.0, "mae": 2.0, "spearman": 0.55, "precision_at_15": 2.0},
+        "roll3": {"rmse": 3.1, "mae": 2.1, "spearman": 0.50, "precision_at_15": 1.9},
+        "roll3_mins": {"rmse": 3.1, "mae": 2.1, "spearman": 0.50, "precision_at_15": 1.9},
+    }}
+    assert check_gate(summary, ("rmse",))[0] is True
+    ok, msg = check_gate(summary)
+    assert ok is False
+    assert "spearman" in msg
+
+
+def test_the_error_gate_is_rmse_not_mae():
+    """
+    FPL points are right-skewed (mean 2.37, median 1), so a forecast minimises
+    MAE at the median and RMSE at the mean. The optimiser sums expected points,
+    so it needs the mean - gating on MAE rewarded under-prediction, which is the
+    bias this engine spent several commits chasing. Correcting the
+    expected-assists conversion made bias better at every price band and RMSE
+    better, while making MAE significantly worse.
+    """
+    from backtest import DEFAULT_GATE_METRICS
+
+    assert "rmse" in DEFAULT_GATE_METRICS
+    assert "mae" not in DEFAULT_GATE_METRICS
+
+
+def test_mae_rewards_under_prediction_on_a_right_skewed_outcome():
+    """The mechanism, so nobody reinstates MAE as the error gate by accident."""
+    rng = np.random.default_rng(0)
+    # Right-skewed like FPL points: mostly blanks, occasional haul.
+    pts = np.where(rng.random(40000) < 0.55, 0.0, rng.gamma(2.0, 2.6, 40000))
+    mean, median = pts.mean(), float(np.median(pts))
+    assert mean > median
+
+    def mae(c):
+        return float(np.abs(pts - c).mean())
+
+    def rmse(c):
+        return float(np.sqrt(((pts - c) ** 2).mean()))
+
+    # MAE prefers a forecast below the mean; RMSE prefers the mean itself.
+    assert mae(median) < mae(mean)
+    assert rmse(mean) < rmse(median)
+
+
+# ------------------------------------------------------- multi-season pooling
+
+
+def _gw(gw, fepl_mae, ppg_mae, season="2025-26"):
+    def m(mae):
+        return {"mae": mae, "rmse": mae * 1.4, "bias": 0.0, "spearman": 0.5,
+                "precision_at_15": 2.0, "captain_regret": 10.0,
+                "by_position": {}, "by_price": {}}
+    return {"gw": gw, "n": 100, "season": season,
+            "models": {"fepl": m(fepl_mae), "ppg": m(ppg_mae),
+                       "roll3": m(ppg_mae), "roll3_mins": m(ppg_mae)}}
+
+
+def test_pooling_concatenates_every_seasons_gameweeks():
+    a = {"season": "2024-25", "per_gameweek": [_gw(1, 1.8, 2.0), _gw(2, 1.9, 2.1)]}
+    b = {"season": "2025-26", "per_gameweek": [_gw(1, 1.7, 2.0)]}
+    assert len(backtest.pool_gameweeks([a, b])) == 3
+
+
+def test_paired_ci_separates_a_real_gap_from_noise():
+    """The entire reason for running more than one season."""
+    consistent = [_gw(i, 1.8, 2.0) for i in range(20)]      # always 0.2 better
+    ci = backtest.paired_ci(consistent, "fepl", "ppg", "mae")
+    assert ci["significant"] is True and ci["diff"] == pytest.approx(-0.2)
+
+    noisy = [_gw(i, 2.0 + (0.9 if i % 2 else -0.9), 2.0) for i in range(20)]
+    ci = backtest.paired_ci(noisy, "fepl", "ppg", "mae")
+    assert ci["significant"] is False, "alternating +-0.9 must not read as real"
+
+
+def test_paired_ci_needs_a_minimum_sample():
+    assert backtest.paired_ci([_gw(1, 1.8, 2.0)], "fepl", "ppg", "mae") is None
+
+
+def test_defcon_scoring_is_off_before_fpl_introduced_it():
+    """
+    2022-23..2024-25 have no CBIT columns, and the Gamma-Poisson filter treats a
+    missing column as missing rather than zero - so it holds the positional
+    prior and would happily predict DefCon points for seasons in which FPL
+    awarded none. Backtesting those seasons without this gate scores every
+    defender under rules that did not exist.
+    """
+    from match_sim import defcon_active
+    assert defcon_active(2024) is False
+    assert defcon_active(2025) is True
+    assert defcon_active(None) is True, "a live run must use current rules"
+
+
+def test_season_caveats_flag_seasons_that_cannot_be_pooled():
+    assert any("expected_goals" in c for c in backtest.season_caveats("2021-22"))
+    assert not any("expected_goals" in c for c in backtest.season_caveats("2023-24"))
+    assert any("defensive contribution" in c for c in backtest.season_caveats("2023-24"))
+    assert backtest.season_caveats("2025-26") == []
+
+
+def test_each_season_resolves_its_own_prior(monkeypatch):
+    """
+    The bug this guards: the prior season was resolved once from seasons[0] and
+    reused, so a 2022-23 + 2025-26 run gave 2025-26 the 2021-22 priors.
+    """
+    asked = []
+
+    def fake_fetch(season_str):
+        asked.append(season_str)
+        return (object(), None, None, None)
+
+    monkeypatch.setattr(backtest, "fetch_data", fake_fetch)
+    backtest._load_prior_season("2025-26", "auto")
+    backtest._load_prior_season("2022-23", "auto")
+    assert asked == ["2024-25", "2021-22"]
+
+
+def test_missing_prior_season_degrades_rather_than_raising(monkeypatch):
+    def boom(season_str):
+        raise OSError("offline")
+
+    monkeypatch.setattr(backtest, "fetch_data", boom)
+    assert backtest._load_prior_season("2025-26", "auto") is None
+    assert backtest._load_prior_season("2025-26", "none") is None
+
+
+# ------------------------------------------- lower-variance ranking metrics
+
+
+def test_captured_and_ndcg_are_perfect_on_a_perfect_ranking():
+    a = [10.0, 8.0, 6.0, 4.0, 2.0, 0.0, 0.0]
+    ids = list(range(len(a)))
+    assert backtest._points_captured_at_k(a, a, ids, 3) == pytest.approx(1.0)
+    assert backtest._ndcg_at_k(a, a, ids, 3) == pytest.approx(1.0)
+
+
+def test_captured_and_ndcg_are_zero_on_an_inverted_ranking():
+    a = [10.0, 8.0, 6.0, 0.0, 0.0, 0.0]
+    rev = [-x for x in a]
+    ids = list(range(len(a)))
+    assert backtest._points_captured_at_k(a, rev, ids, 3) == pytest.approx(0.0)
+    assert backtest._ndcg_at_k(a, rev, ids, 3) == pytest.approx(0.0)
+
+
+def test_captured_is_magnitude_aware_where_precision_is_not():
+    """
+    precision@15 counts set overlap, so missing a 20-point haul scores the same
+    as missing a 6-pointer. That is most of why it could not resolve a real
+    difference: the information it throws away is exactly the information that
+    distinguishes two forecasts at the top.
+    """
+    a = [20.0, 6.0, 5.0, 0.0, 0.0, 0.0]
+    ids = list(range(len(a)))
+    # Both forecasts hit exactly one of the true top three, so the set overlap -
+    # and therefore precision@3 - is identical. One of them found the 20-point
+    # haul and the other found a 5.
+    got_the_haul = [3.0, 0.0, 0.0, 2.0, 1.0, 0.0]     # top 3 -> {0, 3, 4}
+    missed_the_haul = [0.0, 0.0, 3.0, 2.0, 1.0, 0.0]  # top 3 -> {2, 3, 4}
+
+    assert (backtest._precision_at_k(a, got_the_haul, ids, 3)
+            == backtest._precision_at_k(a, missed_the_haul, ids, 3) == 1)
+
+    assert (backtest._points_captured_at_k(a, got_the_haul, ids, 3)
+            > 3 * backtest._points_captured_at_k(a, missed_the_haul, ids, 3))
+
+
+def test_ndcg_rewards_getting_the_biggest_scorer_top():
+    """Position weighting: captaincy consumes the head of the ranking, not the
+    fifteenth slot, so order within the top k has to matter."""
+    a = [20.0, 6.0, 5.0]
+    ids = [0, 1, 2]
+    best_first = [3.0, 2.0, 1.0]
+    best_third = [1.0, 2.0, 3.0]
+    assert (backtest._ndcg_at_k(a, best_first, ids, 3)
+            > backtest._ndcg_at_k(a, best_third, ids, 3))
+    # Both capture the same total, so `captured` is blind to the ordering.
+    assert (backtest._points_captured_at_k(a, best_first, ids, 3)
+            == pytest.approx(backtest._points_captured_at_k(a, best_third, ids, 3)))
+
+
+def test_ranking_metrics_are_bounded_and_survive_degenerate_input():
+    ids = list(range(4))
+    for fn in (backtest._points_captured_at_k, backtest._ndcg_at_k):
+        assert fn([], [], [], 3) == 0.0
+        assert fn([0.0] * 4, [1.0, 2.0, 3.0, 4.0], ids, 3) == 0.0   # nothing scored
+        v = fn([-1.0, 2.0, 0.0, 5.0], [4.0, 3.0, 2.0, 1.0], ids, 2)
+        assert 0.0 <= v <= 1.0
+
+
+def test_gameweek_evaluation_reports_the_new_metrics():
+    actual = {1: 12.0, 2: 6.0, 3: 2.0, 4: 0.0}
+    res = backtest.evaluate_gameweek(
+        {"m": {1: 9.0, 2: 6.0, 3: 2.0, 4: 0.0}}, actual,
+        {i: 3 for i in actual}, {i: 60 for i in actual},
+        list(actual), p_play={}, played={})
+    for key in ("captured_at_15", "ndcg_at_15"):
+        assert 0.0 <= res["models"]["m"][key] <= 1.0

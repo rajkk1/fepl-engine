@@ -186,3 +186,52 @@ def test_bench_boost_active(base_bootstrap):
     )
     
     assert res_bb["gameweeks"][1]["gw_xp"] > res_base["gameweeks"][1]["gw_xp"]
+
+
+def test_future_gameweeks_are_discounted(base_bootstrap):
+    """
+    A point in GW+4 is not worth a point now: injuries, rotation and price
+    changes accumulate, and the plan is re-solved next week anyway. Weighting the
+    horizon equally traded a real point now for a speculative one at par.
+    """
+    xp_matrix = {pid: {1: 1.0, 2: 1.0, 3: 1.0} for pid in range(1, 31)}
+    res_flat = solve_fpl_optimization(
+        bootstrap=base_bootstrap, xp_matrix=xp_matrix, horizon_gws=[1, 2, 3],
+        initial_squad_ids=list(range(1, 16)), initial_bank=10.0, initial_ft=1,
+        horizon_decay=1.0,
+    )
+    res_decayed = solve_fpl_optimization(
+        bootstrap=base_bootstrap, xp_matrix=xp_matrix, horizon_gws=[1, 2, 3],
+        initial_squad_ids=list(range(1, 16)), initial_bank=10.0, initial_ft=1,
+        horizon_decay=0.86,
+    )
+    assert res_decayed["total_xp"] < res_flat["total_xp"]
+
+
+def test_a_distant_gain_no_longer_outweighs_a_nearer_one(base_bootstrap):
+    """With decay, the solver should prefer points it can bank sooner."""
+    near = {pid: {1: 2.0, 2: 2.0} for pid in range(1, 31)}
+    near[20] = {1: 9.0, 2: 2.0}     # big gain in GW1
+    far = {pid: {1: 2.0, 2: 2.0} for pid in range(1, 31)}
+    far[20] = {1: 2.0, 2: 9.0}      # same gain, a week later
+
+    def total(matrix):
+        return solve_fpl_optimization(
+            bootstrap=base_bootstrap, xp_matrix=matrix, horizon_gws=[1, 2],
+            initial_squad_ids=list(range(1, 16)), initial_bank=10.0, initial_ft=1,
+            horizon_decay=0.86,
+        )["total_xp"]
+
+    assert total(near) > total(far)
+
+
+def test_bench_keeper_is_worth_less_than_a_bench_outfielder(base_bootstrap):
+    """
+    An outfield sub scores when a starter in his position blanks, which happens
+    often. The backup keeper plays only if the first-choice keeper does not.
+    A flat bench weight priced those the same.
+    """
+    from optimizer import BENCH_WEIGHT_BY_POSITION, POS_GKP, POS_DEF, POS_MID, POS_FWD
+    assert BENCH_WEIGHT_BY_POSITION[POS_GKP] < BENCH_WEIGHT_BY_POSITION[POS_DEF]
+    assert BENCH_WEIGHT_BY_POSITION[POS_GKP] < BENCH_WEIGHT_BY_POSITION[POS_MID]
+    assert BENCH_WEIGHT_BY_POSITION[POS_GKP] < BENCH_WEIGHT_BY_POSITION[POS_FWD]

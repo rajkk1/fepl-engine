@@ -71,3 +71,18 @@ def history():
 def fixture():
     return {"event": 10, "team_h": 1, "team_a": 2, "finished": False,
             "kickoff_time": "2025-10-25T14:00:00Z"}
+
+
+@pytest.fixture
+def gw_frame():
+    """A minimal merged-gameweek frame for harness tests."""
+    import pandas as pd
+    rows = []
+    for gw in range(1, 8):
+        for pid in range(1, 21):
+            rows.append({"GW": gw, "element": pid,
+                         "total_points": (pid % 7) + gw % 3,
+                         "minutes": 90 if pid % 4 else 0,
+                         "selected": 1000 * (21 - pid),
+                         "value": 50 + pid, "xP": 2.0})
+    return pd.DataFrame(rows)

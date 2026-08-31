@@ -66,6 +66,33 @@ def get_manager_team_state(team_id: int, current_gw: int):
 def print_separator(char="=", length=70):
     print(char * length)
 
+
+def _score_percentiles(point_draws, gw, starters, captain):
+    """
+    10th / 50th / 90th percentile of the starting XI's score for `gw`.
+
+    Returns None when no draws are available (which is the case whenever the
+    forecast came from a path that did not request them).
+    """
+    if not point_draws or not starters:
+        return None
+    try:
+        import numpy as np
+        from match_sim import squad_score_draws
+
+        by_pid = {pid: arr for (pid, g), arr in point_draws.items() if g == gw}
+        ids = [p["id"] for p in starters if p["id"] in by_pid]
+        if not ids:
+            return None
+        cap_id = captain["id"] if captain and captain["id"] in by_pid else None
+        totals = squad_score_draws(by_pid, ids, captain_id=cap_id)
+        if totals is None or len(totals) == 0:
+            return None
+        return tuple(float(v) for v in np.percentile(totals, [10, 50, 90]))
+    except Exception as e:
+        logging.debug("Could not compute a score range: %s", e)
+        return None
+
 def main():
     load_dotenv()
     parser = argparse.ArgumentParser(description="FEPL Weekly Action Plan CLI")
@@ -77,6 +104,17 @@ def main():
     parser.add_argument("--risk-aversion", type=float, default=0.0,
                         help="Rank-aware risk weight. 0 = pure expected points; "
                              "0.02-0.10 trades points for a better rank distribution.")
+    parser.add_argument("--lineups", type=str, default="",
+                        help="Path to a predicted-lineups JSON feed (or set "
+                             "FPL_LINEUPS). Minutes dominate FPL point error, so "
+                             "this is the single largest accuracy gain available.")
+    parser.add_argument("--horizon-decay", type=float, default=None,
+                        help="Per-gameweek discount on future expected points "
+                             "(default 0.86). Pass 1.0 to weight the horizon "
+                             "equally.")
+    parser.add_argument("--calibrate", action="store_true",
+                        help="Enable per-position recalibration (off by default; "
+                             "see calibration.py for why).")
     args = parser.parse_args()
 
     team_id = os.getenv("FPL_TEAM_ID") or args.team
@@ -118,10 +156,20 @@ def main():
     label = "Marginal Expected Rank Value (MERV)" if args.risk_aversion > 0 else "expected points (xP)"
     print(f"⏳ Generating {label} for GW{current_gw} to GW{current_gw + args.horizon - 1}...")
     horizon_gws = list(range(current_gw, current_gw + args.horizon))
-    from xp_model import generate_merv_matrix
+    from xp_model import generate_merv_matrix, load_lineup_overrides
+
+    lineups = load_lineup_overrides(args.lineups or None)
+    if lineups:
+        print(f"📋 Using {len(lineups)} predicted-lineup entries.")
+    else:
+        print("📋 No predicted-lineups feed configured "
+              "(--lineups / FPL_LINEUPS); minutes come from the model alone.")
+
+    point_draws = {}
     xp_matrix = generate_merv_matrix(
         horizon_gws, bootstrap=bootstrap, fixtures=fixtures,
-        risk_aversion=args.risk_aversion,
+        risk_aversion=args.risk_aversion, calibrate=args.calibrate,
+        lineup_overrides=lineups, draws_out=point_draws,
     )
 
     active_chip = args.chip if args.chip else ""
@@ -133,6 +181,8 @@ def main():
             initial_squad_ids=squad_ids, initial_bank=bank, initial_ft=ft,
             initial_sell_prices=sell_prices,
             max_hits_per_gw=2, active_chip=chip, active_chip_gw=chip_gw,
+            **({} if args.horizon_decay is None
+               else {"horizon_decay": args.horizon_decay}),
         )
 
     if not active_chip:
@@ -272,6 +322,17 @@ def main():
 
     print("\n" + "-" * 70)
     print(f" 📊 Expected GW{current_gw} Score: {res.get('gameweeks', {}).get(current_gw, {}).get('gw_xp', sum(p['xp'] for p in starters)):.2f} pts")
+
+    # A single expected score hides how wide the outcome is, and team-mates'
+    # scores are correlated, so the spread cannot be recovered by adding up
+    # per-player variances. These draws come from the joint match simulation,
+    # which is the only place that correlation is represented.
+    score_range = _score_percentiles(point_draws, current_gw, starters, captain)
+    if score_range:
+        p10, p50, p90 = score_range
+        print(f" 🎲 Likely range:      {p10:.0f} - {p90:.0f} pts "
+              f"(median {p50:.0f}, 10th-90th percentile)")
+
     print(f" 💰 Remaining Bank: £{gw1_data.get('bank', 0.0):.1f}m")
     print("-" * 70)
 

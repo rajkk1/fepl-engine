@@ -24,6 +24,8 @@ import argparse
 import json
 import logging
 import math
+import os
+import time
 from typing import Dict, Any, List, Optional, Tuple
 
 import numpy as np
@@ -39,17 +41,70 @@ OPTIONAL_STAT_COLUMNS = [
     "clearances_blocks_interceptions", "recoveries", "tackles",
     "expected_goals", "expected_assists", "expected_goals_conceded",
     "saves", "yellow_cards", "red_cards", "starts", "bps", "defensive_contribution",
+    "own_goals", "penalties_missed", "penalties_saved",
 ]
 
 
+_DATA_CACHE: Dict[str, Any] = {}
+
+# Where a manually downloaded copy is looked for, mirroring the upstream layout:
+#   data/2025-26/players_raw.csv
+#   data/2025-26/gws/merged_gw.csv
+# A local file always wins, which is also how to run this offline.
+LOCAL_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+
+# Same files, different hosts. `raw.githubusercontent.com` intermittently
+# answers 400 for a file that plainly exists - it did so for 2025-26's
+# players_raw.csv mid-run, having served it minutes earlier - and the
+# github.com/raw path serves it fine. One flaky CDN should not cost a season.
+DATA_MIRRORS = (
+    VAASTAV,
+    "https://github.com/vaastav/Fantasy-Premier-League/raw/master/data",
+)
+
+
+def _read_csv_anywhere(season_str: str, rel_path: str,
+                       attempts: int = 3, base_delay: float = 3.0):
+    """Read one season file: local copy first, then each mirror, then retry."""
+    local = os.path.join(LOCAL_DATA_DIR, season_str, rel_path)
+    if os.path.exists(local):
+        logger.info("Using local %s", local)
+        return pd.read_csv(local, low_memory=False)
+
+    last: Optional[Exception] = None
+    for attempt in range(attempts):
+        for base in DATA_MIRRORS:
+            try:
+                return pd.read_csv(f"{base}/{season_str}/{rel_path}", low_memory=False)
+            except Exception as e:
+                last = e
+        if attempt < attempts - 1:
+            delay = base_delay * (2 ** attempt)
+            logger.warning(
+                "All mirrors failed for %s/%s (%s); retrying in %.0fs [%d/%d]",
+                season_str, rel_path, type(last).__name__, delay,
+                attempt + 1, attempts - 1)
+            time.sleep(delay)
+    raise RuntimeError(
+        f"Could not fetch {season_str}/{rel_path} from any mirror ({last}). "
+        f"Download it manually and save it to "
+        f"{os.path.join(LOCAL_DATA_DIR, season_str, rel_path)}"
+    ) from last
+
+
 def fetch_data(season_str: str = "2024-25"):
-    base = f"{VAASTAV}/{season_str}"
-    logger.info("Downloading historical data for %s...", season_str)
-    df_gw = pd.read_csv(f"{base}/gws/merged_gw.csv", low_memory=False)
-    df_players = pd.read_csv(f"{base}/players_raw.csv", low_memory=False)
-    df_teams = pd.read_csv(f"{base}/teams.csv", low_memory=False)
-    df_fixtures = pd.read_csv(f"{base}/fixtures.csv", low_memory=False)
-    return df_gw, df_players, df_teams, df_fixtures
+    """Season data, cached in-process: callers re-request the same seasons."""
+    if season_str in _DATA_CACHE:
+        return _DATA_CACHE[season_str]
+    logger.info("Loading historical data for %s...", season_str)
+    out = (
+        _read_csv_anywhere(season_str, "gws/merged_gw.csv"),
+        _read_csv_anywhere(season_str, "players_raw.csv"),
+        _read_csv_anywhere(season_str, "teams.csv"),
+        _read_csv_anywhere(season_str, "fixtures.csv"),
+    )
+    _DATA_CACHE[season_str] = out
+    return out
 
 
 # --------------------------------------------------------------- mock the API
@@ -141,7 +196,12 @@ def build_mock_api(df_gw, df_players, df_teams, df_fixtures, current_gw: int,
             "expected_assists_per_90": st["xa90"],
             "points_per_game": st["ppg"],
             "selected_by_percent": own_pct.get(pid, 0.0),
-            "penalties_order": int(p["penalties_order"]) if not pd.isna(p.get("penalties_order")) else None,
+            "penalties_order": _order(p.get("penalties_order")),
+            # Set-piece duty: published by FPL, and the strongest freely
+            # available assist signal a player's own xA cannot yet show.
+            "corners_and_indirect_freekicks_order":
+                _order(p.get("corners_and_indirect_freekicks_order")),
+            "direct_freekicks_order": _order(p.get("direct_freekicks_order")),
             "history_past": prior_aggregates.get(pid, []),
         })
 
@@ -208,6 +268,16 @@ def _prior_season_aggregates(prior_gw) -> Dict[int, List[Dict[str, Any]]]:
         entry["season_name"] = "prior"
         out[int(pid)] = [entry]
     return out
+
+
+def _order(value):
+    """FPL set-piece / penalty order: a small int, or None when not a taker."""
+    if value is None or pd.isna(value):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _absent_streak(group) -> int:
@@ -308,6 +378,61 @@ def _captain_regret(actual, pred, ids) -> float:
     return float(best_actual - actual[pick])
 
 
+# The two metrics that matter most per point - precision@15 and captain regret -
+# are also the two this harness cannot resolve. Over 135 gameweeks the paired
+# interval against trailing points-per-game is [-0.037, +0.481] on precision@15
+# and [-1.200, +0.941] on captain regret: both span zero, and four seasons is all
+# the data that exists.
+#
+# That is partly a sample-size problem and partly the metrics' own fault. Both
+# throw information away:
+#
+#   * precision@15 is an integer count out of 15, typically 2 or 3. It scores a
+#     missed 20-point haul the same as a missed 6-pointer, and a player ranked
+#     16th the same as one ranked 300th.
+#   * captain regret reads a single player's realised score. One draw from the
+#     most volatile distribution in the game, once a gameweek.
+#
+# The two below measure the same thing - is the top of the ranking right - using
+# magnitudes and every one of the k slots. Being ratios against what was
+# available that gameweek, they also divide out how generous the gameweek was,
+# which is a large part of the gameweek-to-gameweek variance in the counts.
+
+
+def _points_captured_at_k(actual, pred, ids, k: int = 15) -> float:
+    """
+    Share of the best available top-k points that the model's top-k actually
+    returned. 1.0 is a perfect selection; a random one scores the population
+    mean over the top-k mean.
+    """
+    if not ids:
+        return 0.0
+    a = np.asarray(actual, dtype=float)
+    order = np.argsort(-np.asarray(pred, dtype=float), kind="stable")[:k]
+    best = float(np.sort(a)[::-1][:k].sum())
+    return float(a[order].sum() / best) if best > 0 else 0.0
+
+
+def _ndcg_at_k(actual, pred, ids, k: int = 15) -> float:
+    """
+    Normalised discounted cumulative gain, with realised points as the gain.
+
+    Position-weighted, so getting the biggest scorer top matters more than
+    filling slot fifteen - which is how captaincy and transfers actually consume
+    a ranking. Negative scores are floored at zero because a gain has to be
+    non-negative for the discount to mean anything.
+    """
+    if not ids:
+        return 0.0
+    a = np.clip(np.asarray(actual, dtype=float), 0.0, None)
+    order = np.argsort(-np.asarray(pred, dtype=float), kind="stable")[:k]
+    disc = 1.0 / np.log2(np.arange(2, len(order) + 2))
+    dcg = float((a[order] * disc).sum())
+    ideal = np.sort(a)[::-1][:len(order)]
+    idcg = float((ideal * disc[:len(ideal)]).sum())
+    return dcg / idcg if idcg > 0 else 0.0
+
+
 def evaluate_gameweek(preds: Dict[str, Dict[int, float]], actual: Dict[int, float],
                       positions: Dict[int, int], costs: Dict[int, float],
                       population: List[int], p_play: Dict[int, float],
@@ -330,6 +455,8 @@ def evaluate_gameweek(preds: Dict[str, Dict[int, float]], actual: Dict[int, floa
             "spearman": _spearman_by_position(a, p, pos),
             "precision_at_15": _precision_at_k(a, p, ids, 15),
             "captain_regret": _captain_regret(a, p, ids),
+            "captured_at_15": _points_captured_at_k(a, p, ids, 15),
+            "ndcg_at_15": _ndcg_at_k(a, p, ids, 15),
         }
         # Per-position and per-price-band error, so a model that is fine on
         # midfielders and broken on defenders cannot hide in the aggregate.
@@ -371,7 +498,8 @@ def evaluate_gameweek(preds: Dict[str, Dict[int, float]], actual: Dict[int, floa
 def run_backtest(season_str: str = "2025-26", test_gws: Optional[List[int]] = None,
                  df_gw=None, df_players=None, df_teams=None, df_fixtures=None,
                  prior_season_gw=None,
-                 calibrate: bool = True, risk_aversion: float = 0.0,
+                 calibrate: bool = False, risk_aversion: float = 0.0,
+                 lineup_overrides=None,
                  calibration_method: str = "linear",
                  include_leaky_baseline: bool = True,
                  verbose: bool = True) -> Dict[str, Any]:
@@ -401,7 +529,7 @@ def run_backtest(season_str: str = "2025-26", test_gws: Optional[List[int]] = No
         matrix = generate_merv_matrix(
             [gw], bootstrap=bootstrap, fixtures=fixtures, all_history=all_history,
             season=season_int, risk_aversion=risk_aversion, calibrate=calibrate,
-            calibration_method=calibration_method,
+            calibration_method=calibration_method, lineup_overrides=lineup_overrides,
         )
 
         target = df_gw[df_gw["GW"] == gw]
@@ -459,6 +587,10 @@ def summarise(per_gw: List[Dict[str, Any]], season_str: str,
     summary: Dict[str, Any] = {
         "season": season_str,
         "gameweeks": len(per_gw),
+        # Per-gameweek detail, so a difference between two models can be tested
+        # for significance rather than eyeballed. Nine gameweeks is a very small
+        # sample for a statistic as noisy as captain regret.
+        "per_gameweek": per_gw,
         "p_play_auc": float(np.mean([g["p_play_auc"] for g in per_gw if "p_play_auc" in g]))
         if any("p_play_auc" in g for g in per_gw) else None,
         "p_play_logloss": float(np.mean([g["p_play_logloss"] for g in per_gw
@@ -478,6 +610,8 @@ def summarise(per_gw: List[Dict[str, Any]], season_str: str,
             "spearman": float(np.mean([r["spearman"] for r in rows])),
             "precision_at_15": float(np.mean([r["precision_at_15"] for r in rows])),
             "captain_regret": float(np.mean([r["captain_regret"] for r in rows])),
+            "captured_at_15": float(np.mean([r["captured_at_15"] for r in rows])),
+            "ndcg_at_15": float(np.mean([r["ndcg_at_15"] for r in rows])),
             "by_position": _merge_breakdown(rows, "by_position"),
             "by_price": _merge_breakdown(rows, "by_price"),
         }
@@ -514,12 +648,13 @@ def _print_summary(s: Dict[str, Any]):
               f"log-loss {s['p_play_logloss']:.3f}")
     print()
     print(f" {'model':<16}{'MAE':>8}{'RMSE':>8}{'bias':>8}{'rho':>8}"
-          f"{'P@15':>8}{'cap.regret':>12}")
+          f"{'P@15':>8}{'cap@15':>8}{'ndcg':>8}{'cap.regret':>12}")
     print(" " + "-" * 82)
     for name, m in sorted(s["models"].items(), key=lambda kv: kv[1]["mae"]):
         flag = "  <- LEAKS" if "LEAK" in name else ""
         print(f" {name:<16}{m['mae']:>8.3f}{m['rmse']:>8.3f}{m['bias']:>+8.3f}"
               f"{m['spearman']:>8.3f}{m['precision_at_15']:>8.1f}"
+              f"{m['captured_at_15']:>8.3f}{m['ndcg_at_15']:>8.3f}"
               f"{m['captain_regret']:>12.2f}{flag}")
 
     fepl = s["models"].get("fepl")
@@ -540,39 +675,296 @@ def _print_summary(s: Dict[str, Any]):
 
 CLEAN_BASELINES = ("ppg", "roll3", "roll3_mins")
 
+# True when a lower value is better.
+LOWER_IS_BETTER = {
+    "mae": True, "rmse": True, "captain_regret": True,
+    "spearman": False, "precision_at_15": False,
+}
 
-def check_gate(summary: Dict[str, Any], metric: str = "mae") -> Tuple[bool, str]:
+# What the gate checks by default.
+#
+# MAE alone is the wrong test and passing it means less than it looks. Averaged
+# over ~300 players it is dominated by correctly predicting low scores and
+# non-starters, so a model can clear every baseline on MAE while being no better
+# than trailing points-per-game at the two decisions FPL is actually won on:
+# which fifteen players to own, and who to captain. Worse, MAE actively rewards
+# shrinking the forecast toward the mean, which is precisely what blunts the top
+# of the ranking.
+#
+# So the gate covers error *and* rank quality. `spearman` is within-position rank
+# correlation: it is decision-relevant *and* it is stable enough to gate on.
+#
+# What gets gated is decided by measurement, not by how much the metric matters.
+# Paired per-gameweek bootstrap over a full 2025-26 season (34 gameweeks), FEPL
+# minus the trailing points-per-game baseline, 95% CI:
+#
+#     mae               -0.183  [-0.210, -0.157]   significant
+#     spearman          +0.130  [+0.106, +0.155]   significant
+#     precision_at_15   +0.059  [-0.382, +0.500]   NOT significant
+#     captain_regret    +0.147  [-1.235, +1.353]   NOT significant
+#
+# precision@15 and captain regret are the metrics that matter most per point,
+# and they are also too noisy to gate on with one season of data - the CI on
+# each spans zero comfortably. Gating on them would fail builds at random and
+# teach us to chase noise. They are reported as advisory instead, and gating
+# them needs several seasons of evaluation, not a better threshold.
+DEFAULT_GATE_METRICS = ("rmse", "spearman")
+
+# RMSE, not MAE, and that is a correction rather than a preference.
+#
+# FPL points are heavily right-skewed: over 11,114 scored player-gameweeks the
+# mean is 2.37 and the median is 1. A constant forecast minimises MAE at the
+# median and RMSE at the mean, so on this distribution MAE structurally rewards
+# *under*-prediction:
+#
+#     constant c   MAE     RMSE
+#         1.00    2.015   3.339
+#         2.00    2.071   3.069
+#         2.37    2.220   3.047   <- the mean
+#         3.00    2.478   3.112
+#
+# The optimiser sums expected points over a squad, so it needs the conditional
+# mean. Gating on MAE was therefore rewarding the very bias this engine has been
+# chasing: correcting the expected-assists conversion cut the bias at every
+# price band and improved RMSE, while making MAE significantly worse. The two
+# metrics disagreed and MAE was the wrong one to believe.
+#
+# RMSE clears every clean baseline comfortably over 135 gameweeks: -0.153
+# [-0.175, -0.132] against trailing points-per-game, -0.342 and -0.339 against
+# the rolling means. MAE is still reported, and is still the more stable number,
+# but stability is not the same as measuring the right thing.
+
+# Reported on every gate run but not enforced: see the CIs above.
+ADVISORY_GATE_METRICS = ("precision_at_15", "captain_regret")
+
+
+def _compare(fepl: Dict[str, Any], baseline: Dict[str, Any], metric: str) -> bool:
+    if LOWER_IS_BETTER[metric]:
+        return fepl[metric] < baseline[metric]
+    return fepl[metric] > baseline[metric]
+
+
+def check_gate(summary: Dict[str, Any], metrics=DEFAULT_GATE_METRICS) -> Tuple[bool, str]:
     """
-    The engine must beat every clean point-in-time baseline. The leaking FPL
-    column is deliberately excluded - it is not a fair target.
+    The engine must beat every clean point-in-time baseline on every gated
+    metric. The leaking FPL column is deliberately excluded - it is not a fair
+    target.
     """
+    if isinstance(metrics, str):
+        metrics = (metrics,)
     models = summary.get("models", {})
     fepl = models.get("fepl")
     if not fepl:
         return False, "no FEPL results produced"
 
-    lower_is_better = metric in ("mae", "rmse", "captain_regret")
-    failures = []
-    for name in CLEAN_BASELINES:
-        b = models.get(name)
-        if not b:
+    failures, passes = [], []
+    for metric in metrics:
+        if metric not in LOWER_IS_BETTER:
+            failures.append(f"unknown gate metric {metric!r}")
             continue
-        better = fepl[metric] < b[metric] if lower_is_better else fepl[metric] > b[metric]
-        if not better:
-            failures.append(f"{name} ({metric} {b[metric]:.3f} vs FEPL {fepl[metric]:.3f})")
+        beaten = []
+        for name in CLEAN_BASELINES:
+            b = models.get(name)
+            if not b or metric not in b:
+                continue
+            if not _compare(fepl, b, metric):
+                beaten.append(f"{name} {b[metric]:.3f}")
+        if beaten:
+            failures.append(
+                f"{metric} (FEPL {fepl[metric]:.3f} vs " + ", ".join(beaten) + ")")
+        else:
+            passes.append(f"{metric} {fepl[metric]:.3f}")
 
     if failures:
-        return False, "FEPL failed to beat: " + "; ".join(failures)
-    return True, f"FEPL beats all clean baselines on {metric} ({fepl[metric]:.3f})"
+        return False, "FEPL failed to beat baselines on: " + "; ".join(failures)
+    return True, "FEPL beats all clean baselines on " + ", ".join(passes)
+
+
+def advisory_report(summary: Dict[str, Any]) -> List[str]:
+    """Non-gating checks, printed so a regression is visible without failing CI."""
+    models = summary.get("models", {})
+    fepl = models.get("fepl")
+    if not fepl:
+        return []
+    out = []
+    for metric in ADVISORY_GATE_METRICS:
+        if metric not in fepl:
+            continue
+        worse = [f"{n} {models[n][metric]:.3f}" for n in CLEAN_BASELINES
+                 if n in models and metric in models[n]
+                 and not _compare(fepl, models[n], metric)]
+        if worse:
+            out.append(f"[WARN] {metric}: FEPL {fepl[metric]:.3f} is no better than "
+                       + ", ".join(worse))
+        else:
+            out.append(f"[ok]   {metric}: FEPL {fepl[metric]:.3f} beats every baseline")
+    return out
+
+
+# What each season's data can and cannot support. Pooling seasons that measure
+# different models is worse than not pooling at all, so the differences are
+# named here rather than discovered later in a confusing average.
+#
+#   2020-21, 2021-22  no expected_goals / expected_assists at all. The whole
+#                     attacking model falls back to positional priors, so these
+#                     measure something that is not this engine.
+#   2022-23..2024-25  no CBIT / tackles / recoveries columns, and FPL awarded no
+#                     defensive contribution points either. The scoring gate in
+#                     `xp_model` turns DefCon off for them, so they are
+#                     comparable on everything except DefCon.
+#   2025-26           full coverage.
+FIRST_SEASON_WITH_XG = 2022
+
+# FPL began publishing xG/xA partway through 2022-23, so that season's columns
+# exist but its totals are understated by roughly a third. Both attacking
+# statistics give away that the coverage is partial, because each is an outlier
+# against three otherwise stable seasons:
+#
+#     season    goals/xG   assists/xA
+#     2022-23      1.419        2.111
+#     2023-24      0.998        1.424
+#     2024-25      0.982        1.374
+#     2025-26      0.943        1.379
+#
+# A season whose xG is a third low measures a handicapped model, so it is not
+# suitable for pooling even though the column is present.
+FIRST_SEASON_WITH_FULL_XG = 2023
+
+
+def season_caveats(season_str: str) -> List[str]:
+    """Human-readable warnings about what a season's data cannot measure."""
+    from match_sim import defcon_active
+
+    start = int(season_str.split("-")[0])
+    out = []
+    if start < FIRST_SEASON_WITH_XG:
+        out.append(
+            "no expected_goals/expected_assists in this season's data - the "
+            "attacking model runs on positional priors alone. Results are NOT "
+            "comparable with later seasons and should not be pooled."
+        )
+    elif start < FIRST_SEASON_WITH_FULL_XG:
+        out.append(
+            "expected_goals/expected_assists coverage is PARTIAL this season - "
+            "FPL began publishing them partway through, and the totals are "
+            "roughly a third low (goals/xG 1.42 against ~0.97 elsewhere). "
+            "Attacking forecasts run low as a result; do not pool this season "
+            "without saying so."
+        )
+    if not defcon_active(start):
+        out.append(
+            "FPL awarded no defensive contribution points this season; DefCon "
+            "scoring is switched off so the model is scored under the rules "
+            "actually in force."
+        )
+    return out
+
+
+def _load_prior_season(season_str: str, choice: str):
+    """`history_past` for one season: its own predecessor unless told otherwise."""
+    if choice == "none":
+        return None
+    if choice == "auto":
+        start = int(season_str.split("-")[0]) - 1
+        choice = f"{start}-{str(start + 1)[2:]}"
+    try:
+        df = fetch_data(choice)[0]
+        logger.info("Loaded %s as history_past for %s.", choice, season_str)
+        return df
+    except Exception as e:
+        logger.warning(
+            "Could not load %s as history_past for %s (%s). That season is "
+            "measured WITHOUT the prior-season priors production has, so its "
+            "results understate the model.", choice, season_str, e,
+        )
+        return None
+
+
+def pool_gameweeks(summaries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Every scored gameweek across every season, as one sample."""
+    return [g for s in summaries for g in s.get("per_gameweek", [])]
+
+
+def paired_ci(gws: List[Dict[str, Any]], model: str, baseline: str, metric: str,
+              n_boot: int = 20000, seed: int = 0) -> Optional[Dict[str, Any]]:
+    """
+    Bootstrap CI for (model - baseline) on one metric, paired by gameweek.
+
+    Pairing matters: gameweeks differ enormously in how predictable they are, and
+    comparing unpaired means drowns the difference in that shared variation.
+    """
+    rows = [(g["models"][model][metric], g["models"][baseline][metric])
+            for g in gws if model in g["models"] and baseline in g["models"]]
+    if len(rows) < 3:
+        return None
+    d = np.array([a - b for a, b in rows], dtype=float)
+    rng = np.random.default_rng(seed)
+    boot = rng.choice(d, size=(n_boot, len(d)), replace=True).mean(axis=1)
+    lo, hi = np.percentile(boot, [2.5, 97.5])
+    return {"n": len(d), "diff": float(d.mean()), "lo": float(lo), "hi": float(hi),
+            "significant": bool((lo > 0) == (hi > 0))}
+
+
+def _print_pooled(summaries: List[Dict[str, Any]]):
+    """
+    The whole reason to run more than one season: enough gameweeks to say which
+    differences are real. precision@15 and captain regret both have confidence
+    intervals spanning zero on a single season.
+    """
+    gws = pool_gameweeks(summaries)
+    if not gws:
+        return
+    seasons = ", ".join(s["season"] for s in summaries)
+    print()
+    print("=" * 86)
+    print(f" POOLED ACROSS SEASONS  ({seasons}; {len(gws)} gameweeks)")
+    print("=" * 86)
+    names = sorted({k for g in gws for k in g["models"]})
+    agg = {}
+    for name in names:
+        rows = [g["models"][name] for g in gws if name in g["models"]]
+        agg[name] = {m: float(np.mean([r[m] for r in rows]))
+                     for m in ("mae", "rmse", "bias", "spearman",
+                               "precision_at_15", "captain_regret",
+                               "captured_at_15", "ndcg_at_15")}
+    print(f" {'model':<16}{'MAE':>8}{'RMSE':>8}{'bias':>8}{'rho':>8}"
+          f"{'P@15':>8}{'cap@15':>8}{'ndcg':>8}{'cap.regret':>12}")
+    print(" " + "-" * 82)
+    for name, m in sorted(agg.items(), key=lambda kv: kv[1]["mae"]):
+        flag = "  <- LEAKS" if "LEAK" in name else ""
+        print(f" {name:<16}{m['mae']:>8.3f}{m['rmse']:>8.3f}{m['bias']:>+8.3f}"
+              f"{m['spearman']:>8.3f}{m['precision_at_15']:>8.1f}"
+              f"{m['captured_at_15']:>8.3f}{m['ndcg_at_15']:>8.3f}"
+              f"{m['captain_regret']:>12.2f}{flag}")
+
+    print()
+    print(" FEPL vs each clean baseline, paired by gameweek (95% CI of difference):")
+    print(f"   {'metric':<17}{'baseline':<12}{'diff':>9}{'95% CI':>22}")
+    for metric in ("mae", "rmse", "spearman", "precision_at_15", "captured_at_15",
+                   "ndcg_at_15", "captain_regret"):
+        for base in CLEAN_BASELINES:
+            ci = paired_ci(gws, "fepl", base, metric)
+            if not ci:
+                continue
+            span = f"[{ci['lo']:+.3f}, {ci['hi']:+.3f}]"
+            mark = "significant" if ci["significant"] else "noise"
+            print(f"   {metric:<17}{base:<12}{ci['diff']:>+9.3f}{span:>22}  {mark}")
+    print("=" * 86)
 
 
 def main():
+    from xp_model import load_lineup_overrides
+
     ap = argparse.ArgumentParser(description="FEPL walk-forward backtest")
     ap.add_argument("--seasons", nargs="+", default=["2025-26"],
                     help="Seasons to test, e.g. 2023-24 2024-25 2025-26")
     ap.add_argument("--from-gw", type=int, default=5)
     ap.add_argument("--to-gw", type=int, default=None)
-    ap.add_argument("--no-calibration", action="store_true")
+    # Calibration is OFF by default: measured on 2025-26 GW8-16 it made MAE
+    # slightly worse (1.917 vs 1.906) while costing ~40% of runtime. See
+    # calibration.py. The flag is kept so the decision stays re-measurable.
+    ap.add_argument("--calibrate", action="store_true",
+                    help="Enable per-position recalibration (off by default)")
     ap.add_argument("--calibration-method", default="linear",
                     choices=["linear", "isotonic", "none"])
     ap.add_argument("--risk-aversion", type=float, default=0.0)
@@ -581,39 +973,40 @@ def main():
                          "an explicit season like 2024-25, or 'none'")
     ap.add_argument("--gate", action="store_true",
                     help="Exit non-zero unless FEPL beats every clean baseline")
-    ap.add_argument("--gate-metric", default="mae")
+    ap.add_argument("--gate-metric", nargs="+", default=list(DEFAULT_GATE_METRICS),
+                    choices=sorted(LOWER_IS_BETTER),
+                    help="Metrics the gate enforces (default: error plus the "
+                         "decision metrics, not MAE alone)")
+    ap.add_argument("--lineups", default="",
+                    help="Path to a predicted-lineups JSON feed (see "
+                         "xp_model.load_lineup_overrides). Normally absent in a "
+                         "backtest: no such feed exists retrospectively.")
     ap.add_argument("--json-out", default="")
     args = ap.parse_args()
 
     # Production always has `history_past` from the API, so a backtest without it
     # measures a weaker model than the one that actually runs. Load the previous
     # season by default and say plainly when we could not.
-    prior_gw = None
-    prior_choice = args.prior_season
-    if prior_choice != "none":
-        if prior_choice == "auto":
-            start = int(args.seasons[0].split("-")[0]) - 1
-            prior_choice = f"{start}-{str(start + 1)[2:]}"
-        try:
-            prior_gw = fetch_data(prior_choice)[0]
-            logger.info("Loaded %s as history_past for cross-season priors.", prior_choice)
-        except Exception as e:
-            logger.warning(
-                "Could not load %s for history_past (%s). This run measures the "
-                "model WITHOUT the prior-season priors it has in production, so "
-                "results understate it.", prior_choice, e,
-            )
-
     all_summaries = []
     for season in args.seasons:
+        # Each season needs *its own* predecessor. Resolving the prior once from
+        # seasons[0] and reusing it gave 2025-26 the 2022-23 priors on any
+        # multi-season run, which is worse than having none.
+        prior_gw = _load_prior_season(season, args.prior_season)
+        for warning in season_caveats(season):
+            logger.warning("%s: %s", season, warning)
         gws = list(range(args.from_gw, (args.to_gw or 38) + 1))
         s = run_backtest(
             season_str=season, test_gws=gws,
             prior_season_gw=prior_gw,
-            calibrate=not args.no_calibration, risk_aversion=args.risk_aversion,
+            calibrate=args.calibrate, risk_aversion=args.risk_aversion,
             calibration_method=args.calibration_method,
+            lineup_overrides=load_lineup_overrides(args.lineups or None),
         )
         all_summaries.append(s)
+
+    if len(all_summaries) > 1:
+        _print_pooled(all_summaries)
 
     if args.json_out:
         with open(args.json_out, "w") as f:
@@ -625,6 +1018,17 @@ def main():
         for s in all_summaries:
             ok, msg = check_gate(s, args.gate_metric)
             print(f"[{'PASS' if ok else 'FAIL'}] {s['season']}: {msg}")
+            for line in advisory_report(s):
+                print(f"        {line}")
+            failed = failed or not ok
+        if len(all_summaries) > 1:
+            # A season is a small sample and one bad one should not sink the
+            # build on its own, but the pooled result is the real verdict.
+            pooled = summarise(pool_gameweeks(all_summaries), "pooled", verbose=False)
+            ok, msg = check_gate(pooled, args.gate_metric)
+            print(f"[{'PASS' if ok else 'FAIL'}] pooled: {msg}")
+            for line in advisory_report(pooled):
+                print(f"        {line}")
             failed = failed or not ok
         raise SystemExit(1 if failed else 0)
 

@@ -116,10 +116,41 @@ class MarketOddsModel:
             merged = merged.combine_first(extra)
         merged = merged.dropna(subset=["Date", "HomeTeam", "AwayTeam", "H", "D", "A", "O", "U"])
 
-        self.odds_df = merged.sort_values("Date").reset_index(drop=True)
+        merged = merged.sort_values("Date").reset_index(drop=True)
+        self.odds_df = self._augment_with_lambdas(merged)
         _GLOBAL_ODDS_CACHE[season_str] = self.odds_df
         logger.info("Loaded %d priced matches for season %s", len(self.odds_df), season_str)
         return len(self.odds_df) > 0
+
+    def _augment_with_lambdas(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Precompute each match's (mu_home, mu_away) once, when the file is loaded.
+
+        Inverting the over/under price and splitting the total each cost a
+        `root_scalar` solve, and `split_goals` builds a 10x10 Dixon-Coles grid
+        per iteration. Those depend only on the row's prices, never on the
+        as-of date, but the ratings fit used to redo all of it on every call -
+        once per gameweek in a backtest, and now several times per gameweek for
+        the leak-free calibration refit. Doing it once per season instead is
+        what makes an honest calibration affordable.
+        """
+        mu_h, mu_a = [], []
+        for row in df.itertuples(index=False):
+            try:
+                p_h, p_d, p_a = _devig(1.0 / row.H, 1.0 / row.D, 1.0 / row.A)
+                p_over, _ = _devig(1.0 / row.O, 1.0 / row.U)
+                if not all(np.isfinite([p_h, p_d, p_a, p_over])):
+                    raise ValueError
+                total = self.implied_total_goals(p_over)
+                h, a = self.split_goals(total, p_h, p_a)
+            except (ZeroDivisionError, TypeError, ValueError):
+                h = a = np.nan
+            mu_h.append(h)
+            mu_a.append(a)
+        out = df.copy()
+        out["mu_h"] = mu_h
+        out["mu_a"] = mu_a
+        return out
 
     # -------------------------------------------------------- goal expectation
 
@@ -240,16 +271,19 @@ class MarketOddsModel:
             a_id = self.FD_TO_FPL.get(row.AwayTeam)
             if not h_id or not a_id:
                 continue
-            try:
-                p_h, p_d, p_a = _devig(1.0 / row.H, 1.0 / row.D, 1.0 / row.A)
-                p_over, _ = _devig(1.0 / row.O, 1.0 / row.U)
-            except (ZeroDivisionError, TypeError):
-                continue
-            if not all(np.isfinite([p_h, p_d, p_a, p_over])):
-                continue
-
-            mu_total = self.implied_total_goals(p_over)
-            mu_h, mu_a = self.split_goals(mu_total, p_h, p_a)
+            # Precomputed once per season by `_augment_with_lambdas`; fall back
+            # to solving in place for a frame that predates that column.
+            mu_h = getattr(row, "mu_h", None)
+            mu_a = getattr(row, "mu_a", None)
+            if mu_h is None or mu_a is None or not np.isfinite([mu_h, mu_a]).all():
+                try:
+                    p_h, p_d, p_a = _devig(1.0 / row.H, 1.0 / row.D, 1.0 / row.A)
+                    p_over, _ = _devig(1.0 / row.O, 1.0 / row.U)
+                except (ZeroDivisionError, TypeError):
+                    continue
+                if not all(np.isfinite([p_h, p_d, p_a, p_over])):
+                    continue
+                mu_h, mu_a = self.split_goals(self.implied_total_goals(p_over), p_h, p_a)
 
             # Exponential decay by match age, in matches-equivalent days.
             age_days = (latest - row.Date).days if pd.notna(row.Date) else 0
