@@ -23,6 +23,7 @@ from typing import Dict, Any, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from functools import lru_cache
 
 from fpl_api import get_bootstrap_static, get_fixtures, get_all_element_summaries
 from market_odds import MarketOddsModel, LEAGUE_MEAN_GOALS
@@ -501,6 +502,22 @@ def _maybe(row: Dict[str, Any], key: str):
     return out if math.isfinite(out) else None
 
 
+@lru_cache(maxsize=8192)
+def _parse_kickoff(value: str):
+    """
+    Parse a kickoff timestamp, memoised on the string.
+
+    A gameweek holds ten distinct kickoff times and the forecast asks for one
+    per player-fixture, so this was 4,700 identical `pd.to_datetime` calls and
+    1.6 of 11 seconds. Memoising on the string rather than reading the
+    calendar's cached value keeps the semantics exact: the calendar is keyed by
+    (team, gameweek) and holds only one kickoff per key, so it would hand back
+    the wrong time for the second fixture of a double gameweek.
+    """
+    ts = pd.to_datetime(value)
+    return ts.tz_convert(None) if getattr(ts, "tzinfo", None) else ts
+
+
 class FixtureCalendar:
     """
     Kickoff times per (team, gameweek), and the rest/congestion they imply.
@@ -523,8 +540,7 @@ class FixtureCalendar:
             if not ko:
                 continue
             try:
-                ts = pd.to_datetime(ko)
-                ts = ts.tz_convert(None) if getattr(ts, "tzinfo", None) else ts
+                ts = _parse_kickoff(ko)
             except Exception:
                 continue
             if pd.isna(ts):
@@ -780,8 +796,7 @@ class MinutesClassifier:
         kickoff = None
         if fixture is not None and fixture.get("kickoff_time"):
             try:
-                kickoff = pd.to_datetime(fixture["kickoff_time"])
-                kickoff = kickoff.tz_convert(None) if getattr(kickoff, "tzinfo", None) else kickoff
+                kickoff = _parse_kickoff(fixture["kickoff_time"])
             except Exception:
                 kickoff = None
         if kickoff is None and fixture is not None:
@@ -1145,8 +1160,7 @@ class EnsembleForecaster:
             if ev is None or ko is None or ev >= gw:
                 continue
             try:
-                ts = pd.to_datetime(ko)
-                times.append(ts.tz_convert(None) if getattr(ts, "tzinfo", None) else ts)
+                times.append(_parse_kickoff(ko))
             except Exception:
                 continue
         self.dc.fit_team_ratings(

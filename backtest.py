@@ -24,6 +24,7 @@ import argparse
 import json
 import logging
 import math
+import os
 import time
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -46,38 +47,61 @@ OPTIONAL_STAT_COLUMNS = [
 
 _DATA_CACHE: Dict[str, Any] = {}
 
+# Where a manually downloaded copy is looked for, mirroring the upstream layout:
+#   data/2025-26/players_raw.csv
+#   data/2025-26/gws/merged_gw.csv
+# A local file always wins, which is also how to run this offline.
+LOCAL_DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 
-def _read_csv_retrying(url: str, attempts: int = 4, base_delay: float = 3.0):
-    """
-    Read a remote CSV, retrying on transient failures.
+# Same files, different hosts. `raw.githubusercontent.com` intermittently
+# answers 400 for a file that plainly exists - it did so for 2025-26's
+# players_raw.csv mid-run, having served it minutes earlier - and the
+# github.com/raw path serves it fine. One flaky CDN should not cost a season.
+DATA_MIRRORS = (
+    VAASTAV,
+    "https://github.com/vaastav/Fantasy-Premier-League/raw/master/data",
+)
 
-    A multi-season backtest makes hundreds of requests and the host rate-limits,
-    which arrives as an HTTP 400 rather than a 429. Failing the whole run on one
-    refused request throws away an hour of work for something a short wait fixes.
-    """
+
+def _read_csv_anywhere(season_str: str, rel_path: str,
+                       attempts: int = 3, base_delay: float = 3.0):
+    """Read one season file: local copy first, then each mirror, then retry."""
+    local = os.path.join(LOCAL_DATA_DIR, season_str, rel_path)
+    if os.path.exists(local):
+        logger.info("Using local %s", local)
+        return pd.read_csv(local, low_memory=False)
+
+    last: Optional[Exception] = None
     for attempt in range(attempts):
-        try:
-            return pd.read_csv(url, low_memory=False)
-        except Exception as e:
-            if attempt == attempts - 1:
-                raise
+        for base in DATA_MIRRORS:
+            try:
+                return pd.read_csv(f"{base}/{season_str}/{rel_path}", low_memory=False)
+            except Exception as e:
+                last = e
+        if attempt < attempts - 1:
             delay = base_delay * (2 ** attempt)
-            logger.warning("Fetch failed (%s); retrying in %.0fs [%d/%d]: %s",
-                           type(e).__name__, delay, attempt + 1, attempts - 1, url)
+            logger.warning(
+                "All mirrors failed for %s/%s (%s); retrying in %.0fs [%d/%d]",
+                season_str, rel_path, type(last).__name__, delay,
+                attempt + 1, attempts - 1)
             time.sleep(delay)
+    raise RuntimeError(
+        f"Could not fetch {season_str}/{rel_path} from any mirror ({last}). "
+        f"Download it manually and save it to "
+        f"{os.path.join(LOCAL_DATA_DIR, season_str, rel_path)}"
+    ) from last
 
 
 def fetch_data(season_str: str = "2024-25"):
     """Season data, cached in-process: callers re-request the same seasons."""
     if season_str in _DATA_CACHE:
         return _DATA_CACHE[season_str]
-    base = f"{VAASTAV}/{season_str}"
-    logger.info("Downloading historical data for %s...", season_str)
+    logger.info("Loading historical data for %s...", season_str)
     out = (
-        _read_csv_retrying(f"{base}/gws/merged_gw.csv"),
-        _read_csv_retrying(f"{base}/players_raw.csv"),
-        _read_csv_retrying(f"{base}/teams.csv"),
-        _read_csv_retrying(f"{base}/fixtures.csv"),
+        _read_csv_anywhere(season_str, "gws/merged_gw.csv"),
+        _read_csv_anywhere(season_str, "players_raw.csv"),
+        _read_csv_anywhere(season_str, "teams.csv"),
+        _read_csv_anywhere(season_str, "fixtures.csv"),
     )
     _DATA_CACHE[season_str] = out
     return out
