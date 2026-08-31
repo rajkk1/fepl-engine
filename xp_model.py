@@ -282,6 +282,11 @@ class GammaPoissonFilter:
                       season_prior: Optional[Dict[str, float]] = None):
         pos = player.get("element_type", POS_MID)
         prior = dict(self.pos_priors.get(pos, self.pos_priors[POS_MID]))
+        # Price says something about a player's rate that a position-wide prior
+        # cannot, so the attacking priors are anchored to their price rather than
+        # to the positional mean.
+        prior.update(price_adjusted_attack_priors(pos, prior,
+                                                 player.get("now_cost")))
         # Blend the positional prior with the player's own prior-season rates,
         # weighted by how much prior-season evidence there actually is. A flat
         # 50/50 under-weights a player with a full season behind them, which
@@ -550,6 +555,125 @@ def _reconcile_team_minutes(dists: List[List[float]],
     totals = out.sum(axis=1, keepdims=True)
     out = out / np.where(totals > 0, totals, 1.0)
     return [list(map(float, row)) for row in out]
+
+
+# Price is information about a player's rate that a position-wide prior throws
+# away, and it is available before the deadline.
+#
+# Realised per-90 rates by price band over 2023-24..2025-26, against the
+# position prior the filter shrinks toward:
+#
+#     pos  band          xG/90   prior  ratio    xA/90   prior  ratio
+#     MID  <£5.0         0.102   0.152   0.67    0.091   0.118   0.77
+#     MID  £5.0-7.5      0.196   0.152   1.29    0.148   0.118   1.25
+#     MID  £7.5-10.0     0.296   0.152   1.95    0.221   0.118   1.87
+#     MID  £10.0+        0.486   0.152   3.20    0.277   0.118   2.35
+#     FWD  <£5.0         0.350   0.386   0.91    0.071   0.069   1.02
+#     FWD  £7.5-10.0     0.487   0.386   1.26    0.095   0.069   1.38
+#
+# A £9m midfielder was anchored to the same 0.152 as a £4.5m one, so shrinkage
+# dragged down exactly the players whose price says they are better - which is
+# how a diffuse "premium under-prediction" arose without any single component
+# being broken. Decomposing the £7.5-10.0m band found midfielders short on goals
+# (51% of their bias) and forwards short on assists (99% of theirs), with
+# minutes, bonus and appearances all near-exact.
+#
+# Fitted log-linear on minutes-weighted price deciles per position: DEF xG
+# +0.297 (R^2 0.76) / xA +0.405 (0.81), MID xG +0.316 (0.84) / xA +0.240 (0.84),
+# FWD xG +0.098 (0.92) / xA +0.070 (0.44). Keepers are excluded - their
+# attacking rates are ~0.002/90, so the fit is noise on nothing.
+#
+# The reference price is each position's minutes-weighted mean, so at an average
+# price the prior is exactly the measured positional value and nothing changes.
+# This is not leakage: `now_cost` is the point-in-time value from before the
+# deadline. It does partly re-use information the history already carries, since
+# a player who scores rises in price - but the measurement above is of a model
+# that *already had* the history, and it still under-predicted, so the price
+# carries signal the history had not caught up with.
+# Fitted parametric forms were tried first and rejected. A log-linear fit in
+# price, and a log-log fit, both track the cheap end well and then run away:
+# minutes-weighting puts most of the fit where prices are low, and the real
+# relationship flattens at the top. For a £9.0m midfielder against a measured
+# 0.296 xG/90 they predicted 0.427 and 0.427 respectively. The measured bin
+# means *are* the estimate, so they are used directly and interpolated in log
+# price, which reproduces them by construction and cannot extrapolate: outside
+# the range `np.interp` holds the end value.
+#
+# Minutes-weighted mean per-90 rates by price bin, 2023-24..2025-26:
+#
+#     MID    mean £    xG/90   xA/90       n
+#            4.84      0.102   0.091    7450
+#            5.50      0.169   0.133    5089
+#            6.63      0.241   0.173    2817
+#            8.40      0.296   0.221     824
+#           11.85      0.486   0.277     225
+#
+# A running maximum is applied so the knots are non-decreasing. Price-to-quality
+# is monotone; the two small dips in the raw numbers (DEF xA at £5.29m, FWD xA at
+# £5.97m) are noise at n≈1000, and a prior that fell as price rose would be
+# indefensible however the sample came out.
+#
+# Keepers have no knots: their attacking rates are ~0.002/90, so there is
+# nothing to anchor.
+_RAW_PRICE_KNOTS = {
+    POS_DEF: {"price": [4.32, 4.82, 5.29, 5.96],
+              "xg": [0.0479, 0.0588, 0.0608, 0.0749],
+              "xa": [0.0472, 0.0716, 0.0659, 0.0802]},
+    POS_MID: {"price": [4.84, 5.50, 6.63, 8.40, 11.85],
+              "xg": [0.1015, 0.1685, 0.2413, 0.2962, 0.4861],
+              "xa": [0.0914, 0.1328, 0.1735, 0.2210, 0.2768]},
+    POS_FWD: {"price": [5.10, 5.97, 7.26, 8.72],
+              "xg": [0.3564, 0.4157, 0.4313, 0.5252],
+              "xa": [0.0657, 0.0631, 0.0906, 0.0931]},
+}
+PRICE_RATE_KNOTS = {
+    pos: {"logprice": [math.log(p) for p in k["price"]],
+          "xg": list(np.maximum.accumulate(k["xg"])),
+          "xa": list(np.maximum.accumulate(k["xa"]))}
+    for pos, k in _RAW_PRICE_KNOTS.items()
+}
+
+
+def price_adjusted_attack_priors(element_type: int, prior: Dict[str, float],
+                                 now_cost) -> Dict[str, float]:
+    """
+    Attacking priors read off price rather than the positional mean.
+
+    Price is information the filter otherwise throws away, and it is known
+    before the deadline. A £9m midfielder was anchored to the same 0.152 xG/90 as
+    a £4.5m one, so shrinkage dragged down exactly the players whose price says
+    they are better - which is how a diffuse "premium under-prediction" arose
+    with no single component broken. Decomposing the £7.5-10.0m band found
+    midfielders short on goals (51% of their bias) and forwards short on assists
+    (99% of theirs), with minutes, bonus and appearances near-exact.
+
+    This is not leakage - `now_cost` is the point-in-time value from before the
+    deadline. It does partly re-use what the history already carries, since a
+    player who scores rises in price, but the measurement above is of a model
+    that *had* the history and still under-predicted, so price carries signal the
+    history had not caught up with.
+    """
+    rates = _price_rates(int(element_type), round(_f(now_cost, 0.0)))
+    if not rates:
+        return {}
+    return {stat: v for stat, v in rates.items() if stat in prior}
+
+
+@lru_cache(maxsize=4096)
+def _price_rates(element_type: int, now_cost_tenths: int):
+    """
+    Interpolated rates for one (position, price). Cached because this is called
+    once per player per fixture and FPL prices are discrete tenths - there are a
+    few hundred distinct values, so the interpolation runs a few hundred times a
+    season rather than a few hundred thousand.
+    """
+    knots = PRICE_RATE_KNOTS.get(element_type)
+    price = now_cost_tenths / 10.0
+    if not knots or price <= 0:
+        return None
+    lp = math.log(price)
+    return {stat: float(np.interp(lp, knots["logprice"], knots[stat]))
+            for stat in ("xg", "xa")}
 
 
 def _maybe(row: Dict[str, Any], key: str):
