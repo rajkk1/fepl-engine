@@ -196,19 +196,52 @@ class GammaPoissonFilter:
         if stat_settings:
             self.stat_settings.update(stat_settings)
 
+        # Measured per-90 rates, not estimates. Every value below is the realised
+        # rate over the seasons whose data carries that column, computed on rows
+        # where the column is actually present - dividing a one-season numerator
+        # by a four-season minutes total is what made recoveries look 5x wrong.
+        #
+        # xg / xa / saves / yc / rc / og: 2022-23..2025-26 (n = 3,083 keeper and
+        # 42,710 outfield appearances). cbit / cbirt / recoveries / tackles:
+        # 2025-26 only, the sole season carrying them.
+        #
+        # What was materially wrong, and mattered:
+        #
+        #     stat            was     measured   ratio
+        #     FWD xa        0.150        0.069    0.46
+        #     DEF xa        0.080        0.052    0.65
+        #     MID xa        0.150        0.118    0.78
+        #     FWD yc        0.088        0.163    1.85
+        #     MID yc        0.134        0.199    1.49
+        #     GKP saves     2.500        3.019    1.21
+        #     GKP recov.    2.000        8.152    4.08
+        #
+        # The attacking priors were uniformly too generous and the card priors too
+        # forgiving, both in the direction that flatters a player with no history.
+        # Keeper recoveries were out by 4x - keepers claim loose balls constantly,
+        # and that rate feeds their BPS volume.
+        #
+        # The priors that drive defensive-contribution points were already good:
+        # DEF cbit x1.03, MID cbirt x1.09, FWD cbirt x1.17. Reconstructing
+        # CBIT/CBIRT from the raw columns reproduces FPL's own
+        # `defensive_contribution` threshold hit-rate exactly (DEF 0.270, MID
+        # 0.179, FWD 0.012), so the reconstruction is right as well as the prior.
+        # `cbit` for a midfielder or forward, and both for a keeper, are corrected
+        # for completeness but drive nothing: only DEF reads cbit, only MID/FWD
+        # read cbirt, and a keeper has no threshold at all.
         self.pos_priors = {
-            POS_GKP: {"xg": 0.00, "xa": 0.01, "cbit": 0.5, "cbirt": 0.5,
-                      "saves": 2.5, "yc": 0.076, "rc": 0.003, "og": 0.002,
-                      "recoveries": 2.0, "tackles": 0.1},
-            POS_DEF: {"xg": 0.05, "xa": 0.08, "cbit": 7.45, "cbirt": 7.45,
-                      "saves": 0.0, "yc": 0.165, "rc": 0.006, "og": 0.006,
-                      "recoveries": 5.5, "tackles": 1.6},
-            POS_MID: {"xg": 0.15, "xa": 0.15, "cbit": 1.0, "cbirt": 7.86,
-                      "saves": 0.0, "yc": 0.134, "rc": 0.005, "og": 0.002,
-                      "recoveries": 5.0, "tackles": 1.5},
-            POS_FWD: {"xg": 0.40, "xa": 0.15, "cbit": 0.5, "cbirt": 4.09,
-                      "saves": 0.0, "yc": 0.088, "rc": 0.004, "og": 0.001,
-                      "recoveries": 3.0, "tackles": 0.9},
+            POS_GKP: {"xg": 0.00, "xa": 0.002, "cbit": 1.26, "cbirt": 9.41,
+                      "saves": 3.02, "yc": 0.073, "rc": 0.001, "og": 0.006,
+                      "recoveries": 8.15, "tackles": 0.032},
+            POS_DEF: {"xg": 0.049, "xa": 0.052, "cbit": 7.69, "cbirt": 11.38,
+                      "saves": 0.0, "yc": 0.183, "rc": 0.007, "og": 0.009,
+                      "recoveries": 3.70, "tackles": 1.71},
+            POS_MID: {"xg": 0.152, "xa": 0.118, "cbit": 4.16, "cbirt": 8.58,
+                      "saves": 0.0, "yc": 0.199, "rc": 0.005, "og": 0.002,
+                      "recoveries": 4.42, "tackles": 1.84},
+            POS_FWD: {"xg": 0.386, "xa": 0.069, "cbit": 2.45, "cbirt": 4.80,
+                      "saves": 0.0, "yc": 0.163, "rc": 0.004, "og": 0.001,
+                      "recoveries": 2.35, "tackles": 0.80},
         }
 
     def _settings(self, stat: str) -> Tuple[float, float]:

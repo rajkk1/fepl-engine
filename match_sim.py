@@ -85,9 +85,13 @@ BPS_DEFCON = 3                  # hitting the defensive-contribution threshold
 # rejected: shrunk rate estimates carry too little within-position variation, so
 # they collide with the intercept and the fit returns negative coefficients for
 # recoveries and tackles - a defender making more tackles would earn less BPS.
-# `scale` then absorbs the bias between predicted and actual rates (predicted
-# CBI runs ~1.35x actual, forward recoveries ~1.5x), and is solved so that
-# applying this to predicted rates reproduces the measured per-90 level above.
+# `scale` then absorbs the bias between predicted and actual rates, and is
+# solved so that applying this to predicted rates reproduces the measured per-90
+# level above. It is therefore COUPLED to the positional priors in
+# `GammaPoissonFilter`: correcting those changes the predicted rates this is
+# fitted against, and the scale has to be re-solved with them. When the keeper
+# recoveries prior was corrected from 2.0 to a measured 8.15, the old keeper
+# scale of 2.008 would have produced 3.35 volume BPS against a target of 0.50.
 #
 # xA is dropped for keepers: it adds nothing (CV R^2 0.157 -> 0.156) and the
 # fitted sign is noise. For outfielders it is the single most valuable term
@@ -96,13 +100,13 @@ BPS_DEFCON = 3                  # hitting the defensive-contribution threshold
 # creative position, which is exactly where the bonus was going missing.
 BPS_VOLUME = {
     POS_GKP: {"base": -3.00, "rec": 0.518, "tak": 0.575, "cbi": 0.228,
-              "xa": 0.00, "scale": 2.008},
+              "xa": 0.00, "scale": 0.300},
     POS_DEF: {"base": -0.23, "rec": 0.477, "tak": 0.665, "cbi": 0.248,
-              "xa": 14.17, "scale": 0.749},
+              "xa": 14.17, "scale": 0.928},
     POS_MID: {"base": 0.73, "rec": 0.400, "tak": 0.953, "cbi": 0.443,
-              "xa": 14.32, "scale": 0.910},
+              "xa": 14.32, "scale": 0.940},
     POS_FWD: {"base": -3.11, "rec": 0.524, "tak": 1.184, "cbi": 0.508,
-              "xa": 9.92, "scale": 0.459},
+              "xa": 9.92, "scale": 0.782},
 }
 
 

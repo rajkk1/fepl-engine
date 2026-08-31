@@ -215,24 +215,49 @@ def test_assist_fixture_multiplier_is_symmetric(player, teams):
     """
     from xp_model import assist_multiplier
 
-    gpf = GammaPoissonFilter()
-    dc = MarketOddsPredictor()
-    dc.market._fill_missing(teams)
-    dc.market._league_mean = 1.4
-    # A strong attack: every fixture carries att_mult > 1.
-    for tid in dc.market.team_ratings:
-        dc.market.team_ratings[tid].update(att_home=2.2, att_away=2.0,
-                                           def_home=1.2, def_away=1.2)
+    from xp_model import GammaPoissonFilter, MarketOddsPredictor
 
-    hist = [{"round": gw, "minutes": 90, "was_home": True, "opponent_team": 2,
-             "expected_assists": 0.40, "expected_goals": 0.10} for gw in range(1, 13)]
-    rates = gpf.predict_match({**player, "team": 1}, hist, dc, 13)
+    def recover(att_home, att_away, prior_weight=None):
+        """Demonstrate 0.40 xA90 in a given attack, predict back into the same."""
+        gpf = GammaPoissonFilter(
+            stat_settings={"xa": (8.0, prior_weight)} if prior_weight is not None
+            else None)
+        dc = MarketOddsPredictor()
+        dc.market._fill_missing(teams)
+        dc.market._league_mean = 1.4
+        for tid in dc.market.team_ratings:
+            dc.market.team_ratings[tid].update(att_home=att_home, att_away=att_away,
+                                               def_home=1.2, def_away=1.2)
+        hist = [{"round": gw, "minutes": 90, "was_home": True, "opponent_team": 2,
+                 "expected_assists": 0.40, "expected_goals": 0.10}
+                for gw in range(1, 13)]
+        rates = gpf.predict_match({**player, "team": 1}, hist, dc, 13)
+        ctx = dc.fixture_context(1, {"event": 13, "team_h": 1, "team_a": 2})
+        return rates["xa90"] * assist_multiplier(ctx["att_mult"])
 
-    ctx = dc.fixture_context(1, {"event": 13, "team_h": 1, "team_a": 2})
-    recovered = rates["xa90"] * assist_multiplier(ctx["att_mult"])
-    assert recovered == pytest.approx(0.40, rel=0.12), (
-        f"demonstrated 0.40 xA90 came back as {recovered:.3f}"
-    )
+    # Symmetry is a claim about the *multiplier*, so it has to be tested with the
+    # prior out of the way. Asserting the round trip returns 0.40 with shrinkage
+    # on measures the shrinkage instead, and this test duly broke when the xA
+    # prior was corrected from 0.150 to a measured 0.118.
+    #
+    # With no prior weight the round trip must be exact at any fixture strength:
+    # the factor dividing history out is the one multiplying the prediction back
+    # in. Under the old asymmetry a strong attack came back materially short.
+    for att_home, att_away in ((2.2, 2.0), (0.9, 0.8), (1.4, 1.4)):
+        exact = recover(att_home, att_away, prior_weight=1e-9)
+        assert exact == pytest.approx(0.40, rel=1e-4), (
+            f"attack {att_home}/{att_away} recovered {exact:.4f}, not 0.40"
+        )
+
+    # With the prior restored, a stronger attack recovers *more* - and that is
+    # correct, not a leftover asymmetry. Shrinkage happens in normalised space,
+    # so the prior is scaled by the fixture multiplier while the observations are
+    # not; a player with no history deserves a higher rate in a better attack.
+    strong = recover(2.2, 2.0)
+    weak = recover(0.9, 0.8)
+    assert strong > weak
+    # Shrinkage pulls toward the prior without overshooting it.
+    assert 0.118 < weak < strong < 0.40
 
 
 def test_assist_multiplier_is_softer_than_the_goal_multiplier():

@@ -191,15 +191,22 @@ builds at random, and this repo has already watched that happen — a change who
 true effect on precision@15 was −0.118 [−0.324, +0.059] drifted the metric below
 the baseline on noise alone.
 
-**Known bias.** The engine under-predicts by 0.139 points per player per
-gameweek, and unevenly: on 2025-26 keepers run +0.143 while midfielders run
-−0.117. A uniform bias would matter little to a solver that only ranks, but a
-*per-position* one distorts choices between positions, so this is a real open
-defect. Three candidate causes have been measured and ruled out — the minutes
-band split, the one-keeper-per-team constraint (already satisfied to 89.1
-minutes against 90), and the BPS volume model. The remaining gap is significant
-(GKP minus MID +0.298 [+0.131, +0.458]) and currently has no mechanism
-supported by evidence.
+**Known bias, and where it actually is.** The engine under-predicts by 0.152
+points per player per gameweek, and framing that by position (GKP +0.085, DEF
+−0.054, MID −0.258, FWD −0.253) is misleading. By price it is unambiguous:
+
+| price band | bias |
+|---|---|
+| under £5.0m | −0.027 |
+| £5.0–7.5m | −0.240 |
+| £7.5–10.0m | −0.601 |
+| £10.0m+ | **−0.643** |
+
+It is a *premium* problem, monotone in price, and £10m+ players are exactly the
+captaincy candidates — which is the most likely reason captain regret is the one
+metric still unresolved. Three candidate causes have been measured and ruled out
+for the positional framing (the minutes band split, the one-keeper-per-team
+constraint, and the BPS volume model); this price gradient is the live lead.
 
 **How much room is actually left.** FPL points are extremely noisy, so a perfect
 forecast still misses. Estimated from the model's own (well-calibrated)
