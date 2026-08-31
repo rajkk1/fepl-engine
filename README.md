@@ -242,6 +242,50 @@ understated xG, and the band is small enough (~450 player-gameweeks) that its
 interval spans ±0.4 either way, so "not significant" here means "cannot tell",
 not "fixed".
 
+**Does any of it put points on the board?** Everything above measures the
+*forecast*. `simulator.py` measures what the forecast is for: it replays a season
+following the engine's own transfers, captaincy and bench order, driving the
+**same optimiser** with each forecast so any difference is attributable to the
+forecast alone.
+
+```
+ season      engine     ppg   roll3   hits
+ 2023-24       2066    1937    1833     32
+ 2024-25       2186    2010    1776     16
+ 2025-26       2020    1964    1629     16
+```
+
+Pooled over all three clean seasons — **114 gameweeks**, paired by gameweek:
+
+| baseline | mean | 95% CI | 3-season total | win rate | |
+|---|---|---|---|---|---|
+| `ppg` | **+3.17** | [+0.13, +6.21] | **+361** | 0.553 | significant |
+| `roll3` | **+9.07** | [+5.28, +12.71] | **+1034** | 0.711 | significant |
+
+Read the interval rather than the verdict on the first row. The lower bound is
+**+0.13** and the t-test gives p = 0.045; at this effect size significance needs
+~107 gameweeks and there are 114, so it clears the bar by a season's margin at
+most. Two seasons (76 gameweeks) gave [−0.13, +6.33] and did not clear it. This
+is weak evidence for a real end-to-end edge over points-per-game, not a settled
+result.
+
+The mean is the right statistic, which is worth recording because the obvious
+alternative is wrong. Rank-based tests are the usual answer to a noisy paired
+difference, but this one is not heavy-tailed (excess kurtosis −0.41) and the
+engine wins *bigger* rather than *more often* — a 55% win rate against a +3.17
+mean. A rank test therefore discards the signal: on the two-season sample the
+t-test gave p = 0.066, Wilcoxon 0.158, and a sign test 0.909.
+
+Note where much of the margin over `roll3` comes from: the engine takes 16 hits
+in a recent season where `roll3` takes 71, and ~53 transfers against ~108. A
+forecast that is stable week to week does not churn the squad, and that
+discipline is much of the gap rather than better player selection.
+
+The forecast corrections here do carry through. Replaying 2024-25 before and
+after the prior and expected-assists fixes, on an unchanged optimiser, moves the
+season from **2124 to 2186** (+62) — itself +1.63 pts/gw [−1.63, +4.95], so not
+individually significant, but consistent in direction.
+
 **How much room is actually left.** FPL points are extremely noisy, so a perfect
 forecast still misses. Estimated from the model's own (well-calibrated)
 predictive distribution, the irreducible MAE floor is ≈1.72 — a forecaster who
