@@ -142,7 +142,9 @@ enforces error *and* within-position rank correlation, and reports precision@15
 and captain regret alongside them — enforced only where they are stable enough
 to enforce, which the table below settles.
 
-Pooled over 2022-23 to 2025-26, GW5–38 — **135 gameweeks**:
+Pooled over 2023-24 to 2025-26, GW5–38 — **102 gameweeks**. 2022-23 is excluded:
+its xG/xA coverage is partial (see above), and including it both biased and
+blurred every number below.
 
 ```
  model                MAE    RMSE    bias     rho    P@15  cap.regret
@@ -154,16 +156,17 @@ Pooled over 2022-23 to 2025-26, GW5–38 — **135 gameweeks**:
 ```
 
 **Which of those differences are real.** Paired per-gameweek bootstrap, FEPL
-minus each clean baseline, 95% CI over the 135 gameweeks:
+minus each clean baseline, 95% CI over the 102 gameweeks:
 
 | metric | vs `ppg` | vs `roll3` | vs `roll3_mins` |
 |---|---|---|---|
-| MAE | **−0.194** [−0.208, −0.180] | **−0.249** [−0.266, −0.232] | **−0.201** [−0.218, −0.185] |
-| rank correlation | **+0.125** [+0.112, +0.138] | **+0.070** [+0.061, +0.078] | **+0.059** [+0.051, +0.067] |
-| precision@15 | +0.222 [−0.037, +0.481] | **+0.830** [+0.541, +1.133] | **+0.926** [+0.630, +1.222] |
-| **points captured@15** | **+0.029** [+0.012, +0.046] | **+0.074** [+0.054, +0.094] | **+0.076** [+0.056, +0.096] |
-| **NDCG@15** | **+0.026** [+0.006, +0.045] | **+0.077** [+0.054, +0.099] | **+0.080** [+0.057, +0.102] |
-| captain regret | −0.133 [−1.200, +0.941] | **−1.622** [−2.741, −0.474] | **−1.615** [−2.800, −0.407] |
+| **RMSE** (gated) | **−0.154** [−0.177, −0.131] | **−0.346** [−0.371, −0.322] | **−0.345** [−0.368, −0.322] |
+| MAE | **−0.166** [−0.181, −0.150] | **−0.223** [−0.240, −0.206] | **−0.177** [−0.193, −0.161] |
+| rank correlation | **+0.127** [+0.112, +0.141] | **+0.068** [+0.059, +0.077] | **+0.058** [+0.050, +0.067] |
+| precision@15 | +0.265 [+0.000, +0.520] | **+0.873** [+0.569, +1.176] | **+0.971** [+0.667, +1.284] |
+| **points captured@15** | **+0.035** [+0.018, +0.052] | **+0.082** [+0.062, +0.102] | **+0.085** [+0.065, +0.105] |
+| **NDCG@15** | **+0.034** [+0.016, +0.052] | **+0.083** [+0.060, +0.106] | **+0.087** [+0.065, +0.110] |
+| captain regret | −0.755 [−1.843, +0.373] | **−1.941** [−3.275, −0.608] | **−1.922** [−3.265, −0.578] |
 
 Bold is significant. The engine beats every clean baseline on error, on ranking,
 and — measured properly — **at the top of the ranking too**.
@@ -213,70 +216,31 @@ the steadier number, but steadiness is not the same as measuring the right thing
 **Expected assists are not FPL assists.** FPL credits winning a scored penalty, a
 shot deflected into a scorer's path, and an error forced by the passer; xA
 measures only the chance-creating pass. League-wide FPL awards **1.39×** what xA
-implies (1.424 / 1.374 / 1.379 across the three seasons with full coverage),
-while xG tracks goals almost exactly (0.998 / 0.982 / 0.943). The engine fed xA
-straight through as if it were assists.
+implies (1.424 / 1.374 / 1.379 across the three clean seasons), while xG tracks
+goals almost exactly (0.998 / 0.982 / 0.943). The engine fed xA straight through
+as if it were assists. Because the error is multiplicative it was invisible on a
+cheap player creating nothing and worth ~0.6 points a gameweek on a £10m creator,
+so it surfaced as a price gradient rather than a broken component.
 
-Because the error is multiplicative it was invisible on a cheap player creating
-nothing and worth ~0.6 points a gameweek on a £10m creator — so it surfaced as a
-price gradient rather than a broken component:
+**What bias is left.** Overall −0.034, near enough unbiased. By price band, with
+the clean three seasons:
 
-| price band | bias before | after |
-|---|---|---|
-| under £5.0m | −0.027 | **+0.002** |
-| £5.0–7.5m | −0.240 | −0.175 |
-| £7.5–10.0m | −0.601 | −0.489 |
-| £10.0m+ | −0.643 | −0.515 |
+| price band | bias | 95% CI | |
+|---|---|---|---|
+| under £5.0m | +0.046 | [+0.005, +0.086] | significant |
+| £5.0–7.5m | −0.097 | [−0.146, −0.049] | significant |
+| £7.5–10.0m | **−0.381** | [−0.570, −0.188] | significant |
+| £10.0m+ | −0.048 | [−0.452, +0.350] | **not significant** |
 
-Assists accounted for −0.23 of a −0.38 total on players at £7.5m and above, with
-goals (−0.02) and minutes (+0.2 min) near-exact. A residual under-prediction of
-premiums remains and is the largest known defect.
+By position: GKP +0.098 [+0.035, +0.159], MID −0.078 [−0.123, −0.032], FWD −0.131
+[−0.208, −0.055] all significant; DEF +0.034 not.
 
-| price band | bias |
-|---|---|
-| under £5.0m | −0.027 |
-| £5.0–7.5m | −0.240 |
-| £7.5–10.0m | −0.601 |
-| £10.0m+ | **−0.643** |
-
-It is a *premium* problem, monotone in price, and £10m+ players are exactly the
-captaincy candidates — which is the most likely reason captain regret is the one
-metric still unresolved. Three candidate causes have been measured and ruled out
-for the positional framing (the minutes band split, the one-keeper-per-team
-constraint, and the BPS volume model); this price gradient is the live lead.
-
-**Does any of it put points on the board?** `simulator.py` replays a season
-following the engine's own transfers, captaincy and bench order, driving the
-*same* optimiser with each forecast so the difference is attributable to the
-forecast alone.
-
-```
-                  2024-25              2025-26
- forecast    points   per GW      points   per GW
- engine        2186    57.53        2020    53.16
- ppg           2010    52.89        1964    51.68
- roll3         1776    46.74        1629    42.87
-```
-
-Against the rolling mean it is decisive: **+10.54 pts/gw [+6.78, +14.24]** pooled
-over 76 gameweeks, +801 points across two seasons. Against trailing
-points-per-game the engine is +232 points across the two seasons — a large gap in
-FPL terms — but per gameweek that is **+3.05 [−0.13, +6.33], still not
-significant**. 2024-25 alone does clear the bar (+4.63 [+0.29, +9.18]) and
-2025-26 does not (+1.47 [−3.00, +6.18]); pooling is the more reliable read, so
-the honest claim is that the engine's end-to-end edge over points-per-game is
-probably real and not yet demonstrated.
-
-Worth noting where a chunk of the margin comes from: the engine takes **16 hits
-where `roll3` takes 72**, and makes 53 transfers against 109. A forecast that is
-stable week to week does not churn the squad, and that discipline is most of
-`roll3`'s deficit rather than superior player selection.
-
-The forecast corrections in this repo do carry through to points. Replaying
-2024-25 before and after the prior and expected-assists fixes, on an unchanged
-optimiser, moves the season from **2124 to 2186** (+62) and moves the verdict
-against points-per-game from noise to significant — though the +62 is itself
-+1.63 pts/gw [−1.63, +4.95], not individually significant.
+The £7.5–10.0m band is now the largest measured defect. An earlier version of
+this file called the £10m+ band the biggest problem at −0.515; on clean data it
+is **−0.048 and indistinguishable from zero** — that reading was mostly 2022-23's
+understated xG, and the band is small enough (~450 player-gameweeks) that its
+interval spans ±0.4 either way, so "not significant" here means "cannot tell",
+not "fixed".
 
 **How much room is actually left.** FPL points are extremely noisy, so a perfect
 forecast still misses. Estimated from the model's own (well-calibrated)
