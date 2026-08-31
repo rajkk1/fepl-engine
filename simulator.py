@@ -302,9 +302,26 @@ def _print_comparison(results: Dict[str, Any]):
 
     # Per-gameweek paired test: a season total is one sample, and one sample
     # cannot tell a better forecast from a luckier one.
+    #
+    # The mean is the right statistic here, which is worth stating because it is
+    # not obvious and the alternative was tried. Rank-based tests are the usual
+    # answer to a noisy difference, but the paired difference is not heavy-tailed
+    # (excess kurtosis -0.41 over 76 gameweeks) and the engine wins *bigger*
+    # rather than *more often* - only 51.3% of gameweeks. A rank or sign test
+    # discards exactly the signal:
+    #
+    #     t-test on the mean    p = 0.066
+    #     Wilcoxon signed-rank  p = 0.158
+    #     sign test / win rate  p = 0.909
+    #
+    # So the bootstrap mean stays the verdict. Win rate and a trimmed mean are
+    # reported beside it because they describe *how* the edge arrives, which is
+    # the thing a season total hides.
     if eng is not None and len(results) > 1:
         print()
-        print(" engine minus baseline, paired by gameweek (95% CI):")
+        print(" engine minus baseline, paired by gameweek:")
+        print(f"   {'baseline':<12}{'mean':>8}{'95% CI':>18}{'trimmed':>9}"
+              f"{'win rate':>10}{'':>4}")
         e = np.array([h["net"] for h in results["engine"]["history"]], dtype=float)
         rng = np.random.default_rng(0)
         for src, r in results.items():
@@ -316,8 +333,10 @@ def _print_comparison(results: Dict[str, Any]):
             boot = rng.choice(d, size=(20000, n), replace=True).mean(axis=1)
             lo, hi = np.percentile(boot, [2.5, 97.5])
             mark = "significant" if (lo > 0) == (hi > 0) else "noise"
-            print(f"   vs {src:<10}{d.mean():>+8.2f} pts/gw"
-                  f"   [{lo:+.2f}, {hi:+.2f}]  {mark}")
+            k = max(1, int(0.1 * n))
+            trimmed = float(np.sort(d)[k:n - k].mean()) if n > 2 * k else float(d.mean())
+            print(f"   {src:<12}{d.mean():>+8.2f}{f'[{lo:+.2f}, {hi:+.2f}]':>18}"
+                  f"{trimmed:>+9.2f}{(d > 0).mean():>10.3f}  {mark}")
     print("=" * 74)
 
 

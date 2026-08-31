@@ -720,3 +720,101 @@ def test_the_bps_volume_term_stays_in_expected_assists(player, teams):
     assert c["xa90"] > 0 and c["xa"] > 0
     implied = c["xa"] / (c["xmin"] / 90.0) / c["xa90"]
     assert implied == pytest.approx(FPL_ASSISTS_PER_XA, rel=0.15)
+
+
+# ------------------------------------------------- price-anchored rate priors
+
+
+def test_attacking_priors_are_anchored_to_price():
+    """
+    A £9m midfielder was shrunk toward the same 0.152 xG/90 as a £4.5m one.
+    Realised rates by price band (2023-24..2025-26) say otherwise: MID xG/90 runs
+    0.102 / 0.169 / 0.241 / 0.296 / 0.486 from cheapest to dearest. Anchoring to
+    the positional mean dragged down exactly the players whose price says they
+    are better, which is how a diffuse "premium under-prediction" arose with no
+    single component broken.
+    """
+    from xp_model import price_adjusted_attack_priors
+    from match_sim import POS_MID
+
+    base = {"xg": 0.152, "xa": 0.118}
+    cheap = price_adjusted_attack_priors(POS_MID, base, 45)
+    dear = price_adjusted_attack_priors(POS_MID, base, 118)
+    assert cheap["xg"] < base["xg"] < dear["xg"]
+    assert dear["xg"] > 3 * cheap["xg"]
+
+
+def test_price_priors_reproduce_the_measured_rates():
+    """The knots are measurements, so interpolation must return them."""
+    from xp_model import price_adjusted_attack_priors
+    from match_sim import POS_MID
+
+    base = {"xg": 0.152, "xa": 0.118}
+    for price_tenths, expected in ((48, 0.1015), (55, 0.1685), (118, 0.4861)):
+        got = price_adjusted_attack_priors(POS_MID, base, price_tenths)["xg"]
+        assert got == pytest.approx(expected, rel=0.05), price_tenths
+
+
+def test_price_priors_are_monotone_in_price():
+    from xp_model import price_adjusted_attack_priors
+    from match_sim import POS_DEF, POS_MID, POS_FWD
+
+    base = {"xg": 0.15, "xa": 0.12}
+    for pos in (POS_DEF, POS_MID, POS_FWD):
+        for stat in ("xg", "xa"):
+            vals = [price_adjusted_attack_priors(pos, base, t)[stat]
+                    for t in (40, 55, 70, 90, 120, 160)]
+            assert vals == sorted(vals), f"{pos} {stat} not monotone: {vals}"
+
+
+def test_price_priors_never_extrapolate():
+    """
+    Parametric fits were tried and rejected for running away above the observed
+    range - a log-linear fit put a £9m midfielder at 0.427 against a measured
+    0.296. Interpolation must hold the end knot instead.
+    """
+    from xp_model import price_adjusted_attack_priors, _RAW_PRICE_KNOTS
+    from match_sim import POS_MID
+
+    base = {"xg": 0.152, "xa": 0.118}
+    top = max(_RAW_PRICE_KNOTS[POS_MID]["xg"])
+    for absurd in (200, 400, 2000):
+        assert price_adjusted_attack_priors(POS_MID, base, absurd)["xg"] == \
+            pytest.approx(top, rel=1e-6)
+
+
+def test_keepers_get_no_price_adjustment():
+    """Keeper attacking rates are ~0.002/90; there is nothing to anchor."""
+    from xp_model import price_adjusted_attack_priors
+    from match_sim import POS_GKP
+
+    assert price_adjusted_attack_priors(POS_GKP, {"xg": 0.0, "xa": 0.002}, 60) == {}
+
+
+def test_missing_price_leaves_the_prior_alone():
+    from xp_model import price_adjusted_attack_priors
+    from match_sim import POS_MID
+
+    base = {"xg": 0.152, "xa": 0.118}
+    for bad in (None, 0, "", "abc"):
+        assert price_adjusted_attack_priors(POS_MID, base, bad) == {}
+
+
+def test_price_prior_reaches_the_forecast(player, teams, fixture):
+    """The anchor has to move expected points, not just sit in a table."""
+    from xp_model import EnsembleForecaster
+
+    def predict(now_cost):
+        ens = EnsembleForecaster()
+        ens.dc.market._fill_missing(teams)
+        ens.dc.market._league_mean = 1.4
+        ens.mc.is_trained = False
+        hist = [{"round": gw, "minutes": 90, "was_home": True, "opponent_team": 2,
+                 "starts": 1, "expected_goals": 0.20, "expected_assists": 0.15}
+                for gw in range(1, 4)]
+        return ens._predict_uncalibrated({**player, "team": 1, "now_cost": now_cost},
+                                         fixture, hist, 0, 4)
+
+    cheap, dear = predict(45), predict(110)
+    assert dear["xG_pts"] > cheap["xG_pts"]
+    assert dear["math_pts"] > cheap["math_pts"]

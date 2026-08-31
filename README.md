@@ -227,20 +227,69 @@ the clean three seasons:
 
 | price band | bias | 95% CI | |
 |---|---|---|---|
-| under £5.0m | +0.046 | [+0.005, +0.086] | significant |
-| £5.0–7.5m | −0.097 | [−0.146, −0.049] | significant |
-| £7.5–10.0m | **−0.381** | [−0.570, −0.188] | significant |
-| £10.0m+ | −0.048 | [−0.452, +0.350] | **not significant** |
+| under £5.0m | +0.037 | | |
+| £5.0–7.5m | −0.076 | | |
+| £7.5–10.0m | **−0.252** | (was −0.381) | |
+| £10.0m+ | +0.101 | (was −0.048) | overshoots |
 
-By position: GKP +0.098 [+0.035, +0.159], MID −0.078 [−0.123, −0.032], FWD −0.131
-[−0.208, −0.055] all significant; DEF +0.034 not.
+By position: GKP +0.097, DEF +0.041, MID −0.057, FWD −0.116.
 
-The £7.5–10.0m band is now the largest measured defect. An earlier version of
-this file called the £10m+ band the biggest problem at −0.515; on clean data it
-is **−0.048 and indistinguishable from zero** — that reading was mostly 2022-23's
-understated xG, and the band is small enough (~450 player-gameweeks) that its
-interval spans ±0.4 either way, so "not significant" here means "cannot tell",
-not "fixed".
+Most of that gradient was **price being ignored**. Realised rates rise steeply
+with price within a position — MID xG/90 runs 0.102 / 0.169 / 0.241 / 0.296 /
+0.486 from cheapest band to dearest — but the Gamma-Poisson filter shrank every
+midfielder toward the same 0.152 positional mean, dragging down exactly the
+players whose price says they are better. Anchoring the attacking priors to
+price (interpolated between measured price-bin means, so no curve is fitted and
+nothing extrapolates) cut the £7.5–10m bias from −0.381 to −0.252 and is worth
+**+105 points over three seasons** end-to-end.
+
+Two caveats. The £10m+ band now overshoots slightly (+0.101), and the ~450
+player-gameweeks there give an interval of roughly ±0.4, so it is not well
+pinned down either way. And an earlier version of this file called £10m+ the
+biggest defect at −0.515; that was mostly 2022-23's understated xG.
+
+**Does any of it put points on the board?** Everything above measures the
+*forecast*. `simulator.py` measures what the forecast is for: it replays a season
+following the engine's own transfers, captaincy and bench order, driving the
+**same optimiser** with each forecast so any difference is attributable to the
+forecast alone.
+
+```
+ season      engine     ppg   roll3   hits
+ 2023-24       2069    1937    1833     32
+ 2024-25       2218    2010    1776     16
+ 2025-26       2090    1964    1629     16
+```
+
+Pooled over all three clean seasons — **114 gameweeks**, paired by gameweek:
+
+| baseline | mean | 95% CI | 3-season total | win rate | |
+|---|---|---|---|---|---|
+| `ppg` | **+4.09** | [+0.81, +7.35] | **+466** | 0.553 | significant |
+| `roll3` | **+9.07** | [+5.28, +12.71] | **+1034** | 0.711 | significant |
+
+Read the interval rather than the verdict on the first row. The lower bound is
+**+0.81** — better than the +0.13 it sat at before the price-anchored priors, but
+still close enough that this is evidence for a real end-to-end edge over
+points-per-game rather than a settled result. Two seasons (76 gameweeks) gave
+[−0.13, +6.33] and did not clear zero at all.
+
+The mean is the right statistic, which is worth recording because the obvious
+alternative is wrong. Rank-based tests are the usual answer to a noisy paired
+difference, but this one is not heavy-tailed (excess kurtosis −0.41) and the
+engine wins *bigger* rather than *more often* — a 55% win rate against a +3.17
+mean. A rank test therefore discards the signal: on the two-season sample the
+t-test gave p = 0.066, Wilcoxon 0.158, and a sign test 0.909.
+
+Note where much of the margin over `roll3` comes from: the engine takes 16 hits
+in a recent season where `roll3` takes 71, and ~53 transfers against ~108. A
+forecast that is stable week to week does not churn the squad, and that
+discipline is much of the gap rather than better player selection.
+
+The forecast corrections here do carry through. Replaying 2024-25 before and
+after the prior and expected-assists fixes, on an unchanged optimiser, moves the
+season from **2124 to 2186** (+62) — itself +1.63 pts/gw [−1.63, +4.95], so not
+individually significant, but consistent in direction.
 
 **How much room is actually left.** FPL points are extremely noisy, so a perfect
 forecast still misses. Estimated from the model's own (well-calibrated)
