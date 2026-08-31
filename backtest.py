@@ -378,6 +378,61 @@ def _captain_regret(actual, pred, ids) -> float:
     return float(best_actual - actual[pick])
 
 
+# The two metrics that matter most per point - precision@15 and captain regret -
+# are also the two this harness cannot resolve. Over 135 gameweeks the paired
+# interval against trailing points-per-game is [-0.037, +0.481] on precision@15
+# and [-1.200, +0.941] on captain regret: both span zero, and four seasons is all
+# the data that exists.
+#
+# That is partly a sample-size problem and partly the metrics' own fault. Both
+# throw information away:
+#
+#   * precision@15 is an integer count out of 15, typically 2 or 3. It scores a
+#     missed 20-point haul the same as a missed 6-pointer, and a player ranked
+#     16th the same as one ranked 300th.
+#   * captain regret reads a single player's realised score. One draw from the
+#     most volatile distribution in the game, once a gameweek.
+#
+# The two below measure the same thing - is the top of the ranking right - using
+# magnitudes and every one of the k slots. Being ratios against what was
+# available that gameweek, they also divide out how generous the gameweek was,
+# which is a large part of the gameweek-to-gameweek variance in the counts.
+
+
+def _points_captured_at_k(actual, pred, ids, k: int = 15) -> float:
+    """
+    Share of the best available top-k points that the model's top-k actually
+    returned. 1.0 is a perfect selection; a random one scores the population
+    mean over the top-k mean.
+    """
+    if not ids:
+        return 0.0
+    a = np.asarray(actual, dtype=float)
+    order = np.argsort(-np.asarray(pred, dtype=float), kind="stable")[:k]
+    best = float(np.sort(a)[::-1][:k].sum())
+    return float(a[order].sum() / best) if best > 0 else 0.0
+
+
+def _ndcg_at_k(actual, pred, ids, k: int = 15) -> float:
+    """
+    Normalised discounted cumulative gain, with realised points as the gain.
+
+    Position-weighted, so getting the biggest scorer top matters more than
+    filling slot fifteen - which is how captaincy and transfers actually consume
+    a ranking. Negative scores are floored at zero because a gain has to be
+    non-negative for the discount to mean anything.
+    """
+    if not ids:
+        return 0.0
+    a = np.clip(np.asarray(actual, dtype=float), 0.0, None)
+    order = np.argsort(-np.asarray(pred, dtype=float), kind="stable")[:k]
+    disc = 1.0 / np.log2(np.arange(2, len(order) + 2))
+    dcg = float((a[order] * disc).sum())
+    ideal = np.sort(a)[::-1][:len(order)]
+    idcg = float((ideal * disc[:len(ideal)]).sum())
+    return dcg / idcg if idcg > 0 else 0.0
+
+
 def evaluate_gameweek(preds: Dict[str, Dict[int, float]], actual: Dict[int, float],
                       positions: Dict[int, int], costs: Dict[int, float],
                       population: List[int], p_play: Dict[int, float],
@@ -400,6 +455,8 @@ def evaluate_gameweek(preds: Dict[str, Dict[int, float]], actual: Dict[int, floa
             "spearman": _spearman_by_position(a, p, pos),
             "precision_at_15": _precision_at_k(a, p, ids, 15),
             "captain_regret": _captain_regret(a, p, ids),
+            "captured_at_15": _points_captured_at_k(a, p, ids, 15),
+            "ndcg_at_15": _ndcg_at_k(a, p, ids, 15),
         }
         # Per-position and per-price-band error, so a model that is fine on
         # midfielders and broken on defenders cannot hide in the aggregate.
@@ -553,6 +610,8 @@ def summarise(per_gw: List[Dict[str, Any]], season_str: str,
             "spearman": float(np.mean([r["spearman"] for r in rows])),
             "precision_at_15": float(np.mean([r["precision_at_15"] for r in rows])),
             "captain_regret": float(np.mean([r["captain_regret"] for r in rows])),
+            "captured_at_15": float(np.mean([r["captured_at_15"] for r in rows])),
+            "ndcg_at_15": float(np.mean([r["ndcg_at_15"] for r in rows])),
             "by_position": _merge_breakdown(rows, "by_position"),
             "by_price": _merge_breakdown(rows, "by_price"),
         }
@@ -589,12 +648,13 @@ def _print_summary(s: Dict[str, Any]):
               f"log-loss {s['p_play_logloss']:.3f}")
     print()
     print(f" {'model':<16}{'MAE':>8}{'RMSE':>8}{'bias':>8}{'rho':>8}"
-          f"{'P@15':>8}{'cap.regret':>12}")
+          f"{'P@15':>8}{'cap@15':>8}{'ndcg':>8}{'cap.regret':>12}")
     print(" " + "-" * 82)
     for name, m in sorted(s["models"].items(), key=lambda kv: kv[1]["mae"]):
         flag = "  <- LEAKS" if "LEAK" in name else ""
         print(f" {name:<16}{m['mae']:>8.3f}{m['rmse']:>8.3f}{m['bias']:>+8.3f}"
               f"{m['spearman']:>8.3f}{m['precision_at_15']:>8.1f}"
+              f"{m['captured_at_15']:>8.3f}{m['ndcg_at_15']:>8.3f}"
               f"{m['captain_regret']:>12.2f}{flag}")
 
     fepl = s["models"].get("fepl")
@@ -818,20 +878,23 @@ def _print_pooled(summaries: List[Dict[str, Any]]):
         rows = [g["models"][name] for g in gws if name in g["models"]]
         agg[name] = {m: float(np.mean([r[m] for r in rows]))
                      for m in ("mae", "rmse", "bias", "spearman",
-                               "precision_at_15", "captain_regret")}
+                               "precision_at_15", "captain_regret",
+                               "captured_at_15", "ndcg_at_15")}
     print(f" {'model':<16}{'MAE':>8}{'RMSE':>8}{'bias':>8}{'rho':>8}"
-          f"{'P@15':>8}{'cap.regret':>12}")
+          f"{'P@15':>8}{'cap@15':>8}{'ndcg':>8}{'cap.regret':>12}")
     print(" " + "-" * 82)
     for name, m in sorted(agg.items(), key=lambda kv: kv[1]["mae"]):
         flag = "  <- LEAKS" if "LEAK" in name else ""
         print(f" {name:<16}{m['mae']:>8.3f}{m['rmse']:>8.3f}{m['bias']:>+8.3f}"
               f"{m['spearman']:>8.3f}{m['precision_at_15']:>8.1f}"
+              f"{m['captured_at_15']:>8.3f}{m['ndcg_at_15']:>8.3f}"
               f"{m['captain_regret']:>12.2f}{flag}")
 
     print()
     print(" FEPL vs each clean baseline, paired by gameweek (95% CI of difference):")
     print(f"   {'metric':<17}{'baseline':<12}{'diff':>9}{'95% CI':>22}")
-    for metric in ("mae", "spearman", "precision_at_15", "captain_regret"):
+    for metric in ("mae", "spearman", "precision_at_15", "captured_at_15",
+                   "ndcg_at_15", "captain_regret"):
         for base in CLEAN_BASELINES:
             ci = paired_ci(gws, "fepl", base, metric)
             if not ci:

@@ -383,3 +383,76 @@ def test_missing_prior_season_degrades_rather_than_raising(monkeypatch):
     monkeypatch.setattr(backtest, "fetch_data", boom)
     assert backtest._load_prior_season("2025-26", "auto") is None
     assert backtest._load_prior_season("2025-26", "none") is None
+
+
+# ------------------------------------------- lower-variance ranking metrics
+
+
+def test_captured_and_ndcg_are_perfect_on_a_perfect_ranking():
+    a = [10.0, 8.0, 6.0, 4.0, 2.0, 0.0, 0.0]
+    ids = list(range(len(a)))
+    assert backtest._points_captured_at_k(a, a, ids, 3) == pytest.approx(1.0)
+    assert backtest._ndcg_at_k(a, a, ids, 3) == pytest.approx(1.0)
+
+
+def test_captured_and_ndcg_are_zero_on_an_inverted_ranking():
+    a = [10.0, 8.0, 6.0, 0.0, 0.0, 0.0]
+    rev = [-x for x in a]
+    ids = list(range(len(a)))
+    assert backtest._points_captured_at_k(a, rev, ids, 3) == pytest.approx(0.0)
+    assert backtest._ndcg_at_k(a, rev, ids, 3) == pytest.approx(0.0)
+
+
+def test_captured_is_magnitude_aware_where_precision_is_not():
+    """
+    precision@15 counts set overlap, so missing a 20-point haul scores the same
+    as missing a 6-pointer. That is most of why it could not resolve a real
+    difference: the information it throws away is exactly the information that
+    distinguishes two forecasts at the top.
+    """
+    a = [20.0, 6.0, 5.0, 0.0, 0.0, 0.0]
+    ids = list(range(len(a)))
+    # Both forecasts hit exactly one of the true top three, so the set overlap -
+    # and therefore precision@3 - is identical. One of them found the 20-point
+    # haul and the other found a 5.
+    got_the_haul = [3.0, 0.0, 0.0, 2.0, 1.0, 0.0]     # top 3 -> {0, 3, 4}
+    missed_the_haul = [0.0, 0.0, 3.0, 2.0, 1.0, 0.0]  # top 3 -> {2, 3, 4}
+
+    assert (backtest._precision_at_k(a, got_the_haul, ids, 3)
+            == backtest._precision_at_k(a, missed_the_haul, ids, 3) == 1)
+
+    assert (backtest._points_captured_at_k(a, got_the_haul, ids, 3)
+            > 3 * backtest._points_captured_at_k(a, missed_the_haul, ids, 3))
+
+
+def test_ndcg_rewards_getting_the_biggest_scorer_top():
+    """Position weighting: captaincy consumes the head of the ranking, not the
+    fifteenth slot, so order within the top k has to matter."""
+    a = [20.0, 6.0, 5.0]
+    ids = [0, 1, 2]
+    best_first = [3.0, 2.0, 1.0]
+    best_third = [1.0, 2.0, 3.0]
+    assert (backtest._ndcg_at_k(a, best_first, ids, 3)
+            > backtest._ndcg_at_k(a, best_third, ids, 3))
+    # Both capture the same total, so `captured` is blind to the ordering.
+    assert (backtest._points_captured_at_k(a, best_first, ids, 3)
+            == pytest.approx(backtest._points_captured_at_k(a, best_third, ids, 3)))
+
+
+def test_ranking_metrics_are_bounded_and_survive_degenerate_input():
+    ids = list(range(4))
+    for fn in (backtest._points_captured_at_k, backtest._ndcg_at_k):
+        assert fn([], [], [], 3) == 0.0
+        assert fn([0.0] * 4, [1.0, 2.0, 3.0, 4.0], ids, 3) == 0.0   # nothing scored
+        v = fn([-1.0, 2.0, 0.0, 5.0], [4.0, 3.0, 2.0, 1.0], ids, 2)
+        assert 0.0 <= v <= 1.0
+
+
+def test_gameweek_evaluation_reports_the_new_metrics():
+    actual = {1: 12.0, 2: 6.0, 3: 2.0, 4: 0.0}
+    res = backtest.evaluate_gameweek(
+        {"m": {1: 9.0, 2: 6.0, 3: 2.0, 4: 0.0}}, actual,
+        {i: 3 for i in actual}, {i: 60 for i in actual},
+        list(actual), p_play={}, played={})
+    for key in ("captured_at_15", "ndcg_at_15"):
+        assert 0.0 <= res["models"]["m"][key] <= 1.0

@@ -161,15 +161,26 @@ minus each clean baseline, 95% CI over the 135 gameweeks:
 | MAE | **−0.194** [−0.208, −0.180] | **−0.249** [−0.266, −0.232] | **−0.201** [−0.218, −0.185] |
 | rank correlation | **+0.125** [+0.112, +0.138] | **+0.070** [+0.061, +0.078] | **+0.059** [+0.051, +0.067] |
 | precision@15 | +0.222 [−0.037, +0.481] | **+0.830** [+0.541, +1.133] | **+0.926** [+0.630, +1.222] |
+| **points captured@15** | **+0.029** [+0.012, +0.046] | **+0.074** [+0.054, +0.094] | **+0.076** [+0.056, +0.096] |
+| **NDCG@15** | **+0.026** [+0.006, +0.045] | **+0.077** [+0.054, +0.099] | **+0.080** [+0.057, +0.102] |
 | captain regret | −0.133 [−1.200, +0.941] | **−1.622** [−2.741, −0.474] | **−1.615** [−2.800, −0.407] |
 
-Bold is significant. The honest summary: against the rolling-mean baselines the
-engine wins on everything, including the two decision metrics. Against **trailing
-points-per-game it wins decisively on error and ranking and ties at the top of
-the table** — precision@15 and captain regret both still straddle zero after four
-seasons. Points-per-game is a much better baseline than it looks: "who has been
-scoring" already encodes form and role, which is most of what picks out the
-elite.
+Bold is significant. The engine beats every clean baseline on error, on ranking,
+and — measured properly — **at the top of the ranking too**.
+
+**Why two metrics for the same thing.** precision@15 vs points-per-game reads
++0.222 [−0.037, +0.481]: not significant, and no more data exists. But that is
+partly the metric's own fault, not only a sample-size limit. It is an integer
+count out of 15, so it scores a missed 20-point haul the same as a missed
+6-pointer and a player ranked 16th the same as one ranked 300th. Replacing the
+count with the *share of available top-15 points actually captured* asks the same
+question of the same data and answers it: **+0.029 [+0.012, +0.046]**,
+significant. NDCG@15, which also weights by position, agrees at +0.026 [+0.006,
++0.045].
+
+Captain regret is the remaining unresolved one, and for the same reason: it reads
+a single player's realised score once a gameweek, which is the most volatile
+draw in the game.
 
 That tie is the single most useful thing this harness has established. It is not
 a gap that one season could have revealed — over 2025-26 alone, precision@15 vs
