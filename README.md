@@ -116,8 +116,8 @@ computable before the deadline — trailing points-per-game and rolling means.
 # fast check, one season
 uv run python backtest.py --seasons 2025-26 --from-gw 8 --to-gw 16 --gate
 
-# the real evaluation: four seasons pooled, gated on the pooled result
-uv run python backtest.py --seasons 2022-23 2023-24 2024-25 2025-26 \
+# the real evaluation: three seasons pooled, gated on the pooled result
+uv run python backtest.py --seasons 2023-24 2024-25 2025-26 \
   --from-gw 5 --to-gw 38 --gate
 ```
 
@@ -244,6 +244,39 @@ captaincy candidates — which is the most likely reason captain regret is the o
 metric still unresolved. Three candidate causes have been measured and ruled out
 for the positional framing (the minutes band split, the one-keeper-per-team
 constraint, and the BPS volume model); this price gradient is the live lead.
+
+**Does any of it put points on the board?** `simulator.py` replays a season
+following the engine's own transfers, captaincy and bench order, driving the
+*same* optimiser with each forecast so the difference is attributable to the
+forecast alone.
+
+```
+                  2024-25              2025-26
+ forecast    points   per GW      points   per GW
+ engine        2186    57.53        2020    53.16
+ ppg           2010    52.89        1964    51.68
+ roll3         1776    46.74        1629    42.87
+```
+
+Against the rolling mean it is decisive: **+10.54 pts/gw [+6.78, +14.24]** pooled
+over 76 gameweeks, +801 points across two seasons. Against trailing
+points-per-game the engine is +232 points across the two seasons — a large gap in
+FPL terms — but per gameweek that is **+3.05 [−0.13, +6.33], still not
+significant**. 2024-25 alone does clear the bar (+4.63 [+0.29, +9.18]) and
+2025-26 does not (+1.47 [−3.00, +6.18]); pooling is the more reliable read, so
+the honest claim is that the engine's end-to-end edge over points-per-game is
+probably real and not yet demonstrated.
+
+Worth noting where a chunk of the margin comes from: the engine takes **16 hits
+where `roll3` takes 72**, and makes 53 transfers against 109. A forecast that is
+stable week to week does not churn the squad, and that discipline is most of
+`roll3`'s deficit rather than superior player selection.
+
+The forecast corrections in this repo do carry through to points. Replaying
+2024-25 before and after the prior and expected-assists fixes, on an unchanged
+optimiser, moves the season from **2124 to 2186** (+62) and moves the verdict
+against points-per-game from noise to significant — though the +62 is itself
++1.63 pts/gw [−1.63, +4.95], not individually significant.
 
 **How much room is actually left.** FPL points are extremely noisy, so a perfect
 forecast still misses. Estimated from the model's own (well-calibrated)

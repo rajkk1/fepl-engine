@@ -815,6 +815,21 @@ def advisory_report(summary: Dict[str, Any]) -> List[str]:
 #   2025-26           full coverage.
 FIRST_SEASON_WITH_XG = 2022
 
+# FPL began publishing xG/xA partway through 2022-23, so that season's columns
+# exist but its totals are understated by roughly a third. Both attacking
+# statistics give away that the coverage is partial, because each is an outlier
+# against three otherwise stable seasons:
+#
+#     season    goals/xG   assists/xA
+#     2022-23      1.419        2.111
+#     2023-24      0.998        1.424
+#     2024-25      0.982        1.374
+#     2025-26      0.943        1.379
+#
+# A season whose xG is a third low measures a handicapped model, so it is not
+# suitable for pooling even though the column is present.
+FIRST_SEASON_WITH_FULL_XG = 2023
+
 
 def season_caveats(season_str: str) -> List[str]:
     """Human-readable warnings about what a season's data cannot measure."""
@@ -827,6 +842,14 @@ def season_caveats(season_str: str) -> List[str]:
             "no expected_goals/expected_assists in this season's data - the "
             "attacking model runs on positional priors alone. Results are NOT "
             "comparable with later seasons and should not be pooled."
+        )
+    elif start < FIRST_SEASON_WITH_FULL_XG:
+        out.append(
+            "expected_goals/expected_assists coverage is PARTIAL this season - "
+            "FPL began publishing them partway through, and the totals are "
+            "roughly a third low (goals/xG 1.42 against ~0.97 elsewhere). "
+            "Attacking forecasts run low as a result; do not pool this season "
+            "without saying so."
         )
     if not defcon_active(start):
         out.append(
