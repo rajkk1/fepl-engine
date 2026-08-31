@@ -287,21 +287,55 @@ def test_calibration_applies_the_intercept_once_per_fixture():
 
 def test_gate_enforces_decision_metrics_not_just_error():
     """
-    MAE alone is dominated by correctly predicting low scores, so a model can
+    Error alone is dominated by correctly predicting low scores, so a model can
     clear it while being no better than the baseline at picking a squad.
     """
     from backtest import check_gate
 
     summary = {"models": {
-        "fepl": {"mae": 1.5, "spearman": 0.40, "precision_at_15": 1.5},
-        "ppg": {"mae": 2.0, "spearman": 0.55, "precision_at_15": 2.0},
-        "roll3": {"mae": 2.1, "spearman": 0.50, "precision_at_15": 1.9},
-        "roll3_mins": {"mae": 2.1, "spearman": 0.50, "precision_at_15": 1.9},
+        "fepl": {"rmse": 2.5, "mae": 1.5, "spearman": 0.40, "precision_at_15": 1.5},
+        "ppg": {"rmse": 3.0, "mae": 2.0, "spearman": 0.55, "precision_at_15": 2.0},
+        "roll3": {"rmse": 3.1, "mae": 2.1, "spearman": 0.50, "precision_at_15": 1.9},
+        "roll3_mins": {"rmse": 3.1, "mae": 2.1, "spearman": 0.50, "precision_at_15": 1.9},
     }}
-    assert check_gate(summary, ("mae",))[0] is True
+    assert check_gate(summary, ("rmse",))[0] is True
     ok, msg = check_gate(summary)
     assert ok is False
     assert "spearman" in msg
+
+
+def test_the_error_gate_is_rmse_not_mae():
+    """
+    FPL points are right-skewed (mean 2.37, median 1), so a forecast minimises
+    MAE at the median and RMSE at the mean. The optimiser sums expected points,
+    so it needs the mean - gating on MAE rewarded under-prediction, which is the
+    bias this engine spent several commits chasing. Correcting the
+    expected-assists conversion made bias better at every price band and RMSE
+    better, while making MAE significantly worse.
+    """
+    from backtest import DEFAULT_GATE_METRICS
+
+    assert "rmse" in DEFAULT_GATE_METRICS
+    assert "mae" not in DEFAULT_GATE_METRICS
+
+
+def test_mae_rewards_under_prediction_on_a_right_skewed_outcome():
+    """The mechanism, so nobody reinstates MAE as the error gate by accident."""
+    rng = np.random.default_rng(0)
+    # Right-skewed like FPL points: mostly blanks, occasional haul.
+    pts = np.where(rng.random(40000) < 0.55, 0.0, rng.gamma(2.0, 2.6, 40000))
+    mean, median = pts.mean(), float(np.median(pts))
+    assert mean > median
+
+    def mae(c):
+        return float(np.abs(pts - c).mean())
+
+    def rmse(c):
+        return float(np.sqrt(((pts - c) ** 2).mean()))
+
+    # MAE prefers a forecast below the mean; RMSE prefers the mean itself.
+    assert mae(median) < mae(mean)
+    assert rmse(mean) < rmse(median)
 
 
 # ------------------------------------------------------- multi-season pooling

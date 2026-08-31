@@ -96,6 +96,37 @@ def assist_multiplier(att_mult: float) -> float:
     return 1.0 + ASSIST_FIXTURE_DAMPING * (att_mult - 1.0)
 
 
+# FPL assists per unit of Opta expected assists. These are not the same
+# statistic and the engine was treating them as if they were.
+#
+# FPL's assist rule is materially broader than Opta's: it credits an assist for
+# winning a penalty that is scored, for a shot or cross deflected or blocked
+# into a scorer's path, and for a defensive error forced by the passer. xA
+# measures only the chance-creating pass. League-wide:
+#
+#     season      sum xA   assists  ratio   |   sum xG   goals  ratio
+#     2022-23      439.1       927  2.111   |    731.5    1038  1.419
+#     2023-24      752.2      1071  1.424   |   1198.5    1196  0.998
+#     2024-25      711.7       978  1.374   |   1100.7    1081  0.982
+#     2025-26      683.3       942  1.379   |   1069.9    1009  0.943
+#
+# xG tracks goals almost exactly, so using it directly is right and no such
+# constant is needed for goals. xA does not, and the ratio is stable at ~1.39
+# across the three seasons with full coverage. 2022-23 is excluded: its ratio is
+# an outlier on *both* statistics (2.111 and 1.419), because FPL only began
+# publishing xG/xA partway through that season, so its totals are understated
+# by roughly a third. That also means 2022-23 attacking forecasts run low, and
+# its backtest results should be read with that in mind.
+#
+# Why this showed up as a *premium* problem. A multiplicative error produces an
+# absolute error proportional to the rate, so it is invisible on a cheap player
+# creating nothing and worth ~0.6 points a gameweek on a £10m creator. The
+# measured bias ran -0.027 under £5.0m and -0.643 above £10.0m, and assists
+# accounted for -0.23 of a -0.38 total on players at £7.5m and above, with goals
+# and minutes near-exact.
+FPL_ASSISTS_PER_XA = 1.39
+
+
 def _current_season_start_year(reference_date=None) -> int:
     """The year a Premier League season starting in July/August belongs to."""
     import datetime
@@ -1335,7 +1366,10 @@ class EnsembleForecaster:
 
         xg = (open_play_xg90 * ctx["att_mult"] + pen_xg90 + fk_xg90) * min_frac
         # Assists track chance creation, which scales more softly than goals.
-        xa = (open_play_xa90 * assist_multiplier(ctx["att_mult"]) + sp_xa90) * min_frac
+        # Converted from expected assists into the assists FPL actually awards,
+        # which is not the same statistic - see FPL_ASSISTS_PER_XA.
+        xa = ((open_play_xa90 * assist_multiplier(ctx["att_mult"]) + sp_xa90)
+              * min_frac * FPL_ASSISTS_PER_XA)
 
         xg_cond = xg / max(1e-6, p_play)
         xa_cond = xa / max(1e-6, p_play)

@@ -5,13 +5,19 @@ name: Forecast Accuracy Gate
 # The gate is: FEPL must beat every clean, point-in-time baseline (trailing
 # points-per-game and rolling means) on error AND on the decision metrics.
 #
-# MAE alone is not enough, and passing it means less than it looks. Averaged over
-# ~300 players it is dominated by correctly predicting low scores and players who
-# did not start, so a model can clear every baseline on MAE while being no better
-# than trailing points-per-game at the two things FPL is actually won on: which
-# fifteen players to own, and who to captain. MAE also rewards shrinking the
-# forecast toward the mean, which is exactly what blunts the top of the ranking.
-# So the gate also enforces within-position rank correlation.
+# The error half of the gate is RMSE, not MAE. FPL points are heavily
+# right-skewed (mean 2.37, median 1), and a forecast minimises MAE at the median
+# but RMSE at the mean. The optimiser sums expected points, so it needs the mean
+# - gating on MAE actively rewarded under-prediction. Correcting the
+# expected-assists conversion demonstrated it: bias improved at every price band
+# and RMSE improved, while MAE got significantly worse.
+#
+# Error alone is not enough either. Averaged over ~300 players it is dominated by
+# correctly predicting low scores and players who did not start, so a model can
+# clear every baseline on error while being no better than trailing
+# points-per-game at the two things FPL is actually won on: which fifteen players
+# to own, and who to captain. So the gate also enforces within-position rank
+# correlation.
 #
 # precision@15 and captain regret are reported as warnings but do NOT fail the
 # build. That is a measured decision, not a hedge: over a full 2025-26 season a
@@ -100,7 +106,7 @@ jobs:
             --from-gw ${{ steps.depth.outputs.from_gw }} \
             --to-gw ${{ steps.depth.outputs.to_gw }} \
             --prior-season ${{ github.event.inputs.prior_season || 'auto' }} \
-            --gate --gate-metric mae spearman \
+            --gate --gate-metric rmse spearman \
             --json-out backtest_results.json
 
       - name: Upload results

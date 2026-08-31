@@ -191,9 +191,46 @@ builds at random, and this repo has already watched that happen — a change who
 true effect on precision@15 was −0.118 [−0.324, +0.059] drifted the metric below
 the baseline on noise alone.
 
-**Known bias, and where it actually is.** The engine under-predicts by 0.152
-points per player per gameweek, and framing that by position (GKP +0.085, DEF
-−0.054, MID −0.258, FWD −0.253) is misleading. By price it is unambiguous:
+**The error gate is RMSE, not MAE, and that is a correction.** FPL points are
+heavily right-skewed: over 11,114 scored player-gameweeks the mean is 2.37 and
+the median is 1. A forecast minimises MAE at the median and RMSE at the mean, so
+on this distribution **MAE structurally rewards under-prediction**:
+
+| constant forecast | MAE | RMSE |
+|---|---|---|
+| 1.00 | 2.015 | 3.339 |
+| 2.00 | 2.071 | 3.069 |
+| 2.37 (the mean) | 2.220 | **3.047** |
+| 3.00 | 2.478 | 3.112 |
+
+The optimiser sums expected points over a squad, so it needs the conditional
+mean. Gating on MAE was rewarding the very bias this engine spent several
+commits chasing — and the two metrics eventually disagreed outright: correcting
+the expected-assists conversion cut the bias at **every** price band and improved
+RMSE, while making MAE significantly worse. MAE is still reported, and is still
+the steadier number, but steadiness is not the same as measuring the right thing.
+
+**Expected assists are not FPL assists.** FPL credits winning a scored penalty, a
+shot deflected into a scorer's path, and an error forced by the passer; xA
+measures only the chance-creating pass. League-wide FPL awards **1.39×** what xA
+implies (1.424 / 1.374 / 1.379 across the three seasons with full coverage),
+while xG tracks goals almost exactly (0.998 / 0.982 / 0.943). The engine fed xA
+straight through as if it were assists.
+
+Because the error is multiplicative it was invisible on a cheap player creating
+nothing and worth ~0.6 points a gameweek on a £10m creator — so it surfaced as a
+price gradient rather than a broken component:
+
+| price band | bias before | after |
+|---|---|---|
+| under £5.0m | −0.027 | **+0.002** |
+| £5.0–7.5m | −0.240 | −0.175 |
+| £7.5–10.0m | −0.601 | −0.489 |
+| £10.0m+ | −0.643 | −0.515 |
+
+Assists accounted for −0.23 of a −0.38 total on players at £7.5m and above, with
+goals (−0.02) and minutes (+0.2 min) near-exact. A residual under-prediction of
+premiums remains and is the largest known defect.
 
 | price band | bias |
 |---|---|

@@ -637,3 +637,86 @@ def test_reconciliation_falls_back_when_the_targets_are_unreachable():
     assert sum(_appearance_minutes(d) for d in out) == pytest.approx(
         TEAM_MATCH_MINUTES, abs=40.0)
     assert _reconcile_team_minutes([]) == []
+
+
+# ------------------------------------------ expected assists vs FPL assists
+
+
+def test_expected_assists_are_converted_to_fpl_assists():
+    """
+    xA and an FPL assist are different statistics. FPL credits winning a scored
+    penalty, a shot deflected into a scorer's path, and an error forced by the
+    passer; xA measures only the chance-creating pass. League-wide FPL awards
+    1.39x what xA implies, stable across the three seasons with full coverage
+    (1.424 / 1.374 / 1.379), while xG tracks goals almost exactly.
+
+    The engine fed xA straight through as if it were assists. Because the error
+    is multiplicative it was invisible on cheap players and worth ~0.6 points a
+    gameweek on a premium creator - which is why it surfaced as a price
+    gradient (-0.027 under £5.0m, -0.643 above £10.0m) rather than as an
+    obviously broken component.
+    """
+    from xp_model import FPL_ASSISTS_PER_XA
+
+    assert 1.3 < FPL_ASSISTS_PER_XA < 1.5
+
+
+def test_goals_are_not_rescaled(player, teams):
+    """xG needs no such factor: goals/xG is 0.98 over the same seasons. If a
+    constant ever appears for goals it should be near 1.0."""
+    import xp_model
+
+    assert not hasattr(xp_model, "FPL_GOALS_PER_XG") or \
+        0.95 <= xp_model.FPL_GOALS_PER_XG <= 1.05
+
+
+def test_assist_points_scale_with_the_conversion(player, teams, monkeypatch):
+    """
+    The conversion has to reach expected points, not just sit in a constant.
+    Doubling it must roughly double the assist component.
+    """
+    import xp_model as X
+    from xp_model import EnsembleForecaster
+
+    fx = {"event": 5, "team_h": 1, "team_a": 2, "kickoff_time": None}
+    hist = [{"round": gw, "minutes": 90, "was_home": True, "opponent_team": 2,
+             "expected_assists": 0.35, "expected_goals": 0.10, "starts": 1}
+            for gw in range(1, 5)]
+
+    def assist_points(factor):
+        monkeypatch.setattr(X, "FPL_ASSISTS_PER_XA", factor)
+        ens = EnsembleForecaster()
+        ens.dc.market._fill_missing(teams)
+        ens.dc.market._league_mean = 1.4
+        comps = ens._predict_uncalibrated({**player, "team": 1}, fx, hist,
+                                          current_gw=5)
+        return comps["xA_pts"]
+
+    base = assist_points(1.0)
+    doubled = assist_points(2.0)
+    assert base > 0
+    assert doubled == pytest.approx(2.0 * base, rel=0.02)
+
+
+def test_the_bps_volume_term_stays_in_expected_assists(player, teams):
+    """
+    `xa90` in the components feeds the BPS volume model, whose xA coefficient was
+    fitted against realised expected-assists. It must NOT carry the FPL-assist
+    conversion, or that fit silently changes scale.
+    """
+    from xp_model import EnsembleForecaster, FPL_ASSISTS_PER_XA
+
+    fx = {"event": 5, "team_h": 1, "team_a": 2, "kickoff_time": None}
+    hist = [{"round": gw, "minutes": 90, "was_home": True, "opponent_team": 2,
+             "expected_assists": 0.35, "expected_goals": 0.10, "starts": 1}
+            for gw in range(1, 5)]
+    ens = EnsembleForecaster()
+    ens.dc.market._fill_missing(teams)
+    ens.dc.market._league_mean = 1.4
+    c = ens._predict_uncalibrated({**player, "team": 1}, fx, hist, current_gw=5)
+
+    # xa (FPL assists, minutes-scaled) must exceed xa90 (xA per 90) by the
+    # conversion, once minutes are accounted for.
+    assert c["xa90"] > 0 and c["xa"] > 0
+    implied = c["xa"] / (c["xmin"] / 90.0) / c["xa90"]
+    assert implied == pytest.approx(FPL_ASSISTS_PER_XA, rel=0.15)

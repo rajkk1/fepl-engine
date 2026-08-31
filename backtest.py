@@ -708,7 +708,31 @@ LOWER_IS_BETTER = {
 # each spans zero comfortably. Gating on them would fail builds at random and
 # teach us to chase noise. They are reported as advisory instead, and gating
 # them needs several seasons of evaluation, not a better threshold.
-DEFAULT_GATE_METRICS = ("mae", "spearman")
+DEFAULT_GATE_METRICS = ("rmse", "spearman")
+
+# RMSE, not MAE, and that is a correction rather than a preference.
+#
+# FPL points are heavily right-skewed: over 11,114 scored player-gameweeks the
+# mean is 2.37 and the median is 1. A constant forecast minimises MAE at the
+# median and RMSE at the mean, so on this distribution MAE structurally rewards
+# *under*-prediction:
+#
+#     constant c   MAE     RMSE
+#         1.00    2.015   3.339
+#         2.00    2.071   3.069
+#         2.37    2.220   3.047   <- the mean
+#         3.00    2.478   3.112
+#
+# The optimiser sums expected points over a squad, so it needs the conditional
+# mean. Gating on MAE was therefore rewarding the very bias this engine has been
+# chasing: correcting the expected-assists conversion cut the bias at every
+# price band and improved RMSE, while making MAE significantly worse. The two
+# metrics disagreed and MAE was the wrong one to believe.
+#
+# RMSE clears every clean baseline comfortably over 135 gameweeks: -0.153
+# [-0.175, -0.132] against trailing points-per-game, -0.342 and -0.339 against
+# the rolling means. MAE is still reported, and is still the more stable number,
+# but stability is not the same as measuring the right thing.
 
 # Reported on every gate run but not enforced: see the CIs above.
 ADVISORY_GATE_METRICS = ("precision_at_15", "captain_regret")
@@ -893,7 +917,7 @@ def _print_pooled(summaries: List[Dict[str, Any]]):
     print()
     print(" FEPL vs each clean baseline, paired by gameweek (95% CI of difference):")
     print(f"   {'metric':<17}{'baseline':<12}{'diff':>9}{'95% CI':>22}")
-    for metric in ("mae", "spearman", "precision_at_15", "captured_at_15",
+    for metric in ("mae", "rmse", "spearman", "precision_at_15", "captured_at_15",
                    "ndcg_at_15", "captain_regret"):
         for base in CLEAN_BASELINES:
             ci = paired_ci(gws, "fepl", base, metric)
