@@ -24,6 +24,7 @@ import argparse
 import json
 import logging
 import math
+import time
 from typing import Dict, Any, List, Optional, Tuple
 
 import numpy as np
@@ -43,14 +44,43 @@ OPTIONAL_STAT_COLUMNS = [
 ]
 
 
+_DATA_CACHE: Dict[str, Any] = {}
+
+
+def _read_csv_retrying(url: str, attempts: int = 4, base_delay: float = 3.0):
+    """
+    Read a remote CSV, retrying on transient failures.
+
+    A multi-season backtest makes hundreds of requests and the host rate-limits,
+    which arrives as an HTTP 400 rather than a 429. Failing the whole run on one
+    refused request throws away an hour of work for something a short wait fixes.
+    """
+    for attempt in range(attempts):
+        try:
+            return pd.read_csv(url, low_memory=False)
+        except Exception as e:
+            if attempt == attempts - 1:
+                raise
+            delay = base_delay * (2 ** attempt)
+            logger.warning("Fetch failed (%s); retrying in %.0fs [%d/%d]: %s",
+                           type(e).__name__, delay, attempt + 1, attempts - 1, url)
+            time.sleep(delay)
+
+
 def fetch_data(season_str: str = "2024-25"):
+    """Season data, cached in-process: callers re-request the same seasons."""
+    if season_str in _DATA_CACHE:
+        return _DATA_CACHE[season_str]
     base = f"{VAASTAV}/{season_str}"
     logger.info("Downloading historical data for %s...", season_str)
-    df_gw = pd.read_csv(f"{base}/gws/merged_gw.csv", low_memory=False)
-    df_players = pd.read_csv(f"{base}/players_raw.csv", low_memory=False)
-    df_teams = pd.read_csv(f"{base}/teams.csv", low_memory=False)
-    df_fixtures = pd.read_csv(f"{base}/fixtures.csv", low_memory=False)
-    return df_gw, df_players, df_teams, df_fixtures
+    out = (
+        _read_csv_retrying(f"{base}/gws/merged_gw.csv"),
+        _read_csv_retrying(f"{base}/players_raw.csv"),
+        _read_csv_retrying(f"{base}/teams.csv"),
+        _read_csv_retrying(f"{base}/fixtures.csv"),
+    )
+    _DATA_CACHE[season_str] = out
+    return out
 
 
 # --------------------------------------------------------------- mock the API
