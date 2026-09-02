@@ -734,35 +734,35 @@ def test_attacking_priors_are_anchored_to_price():
     are better, which is how a diffuse "premium under-prediction" arose with no
     single component broken.
     """
-    from xp_model import price_adjusted_attack_priors
+    from xp_model import price_adjusted_priors
     from match_sim import POS_MID
 
     base = {"xg": 0.152, "xa": 0.118}
-    cheap = price_adjusted_attack_priors(POS_MID, base, 45)
-    dear = price_adjusted_attack_priors(POS_MID, base, 118)
+    cheap = price_adjusted_priors(POS_MID, base, 45)
+    dear = price_adjusted_priors(POS_MID, base, 118)
     assert cheap["xg"] < base["xg"] < dear["xg"]
     assert dear["xg"] > 3 * cheap["xg"]
 
 
 def test_price_priors_reproduce_the_measured_rates():
     """The knots are measurements, so interpolation must return them."""
-    from xp_model import price_adjusted_attack_priors
+    from xp_model import price_adjusted_priors
     from match_sim import POS_MID
 
     base = {"xg": 0.152, "xa": 0.118}
     for price_tenths, expected in ((48, 0.1015), (55, 0.1685), (118, 0.4861)):
-        got = price_adjusted_attack_priors(POS_MID, base, price_tenths)["xg"]
+        got = price_adjusted_priors(POS_MID, base, price_tenths)["xg"]
         assert got == pytest.approx(expected, rel=0.05), price_tenths
 
 
 def test_price_priors_are_monotone_in_price():
-    from xp_model import price_adjusted_attack_priors
+    from xp_model import price_adjusted_priors
     from match_sim import POS_DEF, POS_MID, POS_FWD
 
     base = {"xg": 0.15, "xa": 0.12}
     for pos in (POS_DEF, POS_MID, POS_FWD):
         for stat in ("xg", "xa"):
-            vals = [price_adjusted_attack_priors(pos, base, t)[stat]
+            vals = [price_adjusted_priors(pos, base, t)[stat]
                     for t in (40, 55, 70, 90, 120, 160)]
             assert vals == sorted(vals), f"{pos} {stat} not monotone: {vals}"
 
@@ -773,31 +773,31 @@ def test_price_priors_never_extrapolate():
     range - a log-linear fit put a £9m midfielder at 0.427 against a measured
     0.296. Interpolation must hold the end knot instead.
     """
-    from xp_model import price_adjusted_attack_priors, _RAW_PRICE_KNOTS
+    from xp_model import price_adjusted_priors, _RAW_PRICE_KNOTS
     from match_sim import POS_MID
 
     base = {"xg": 0.152, "xa": 0.118}
     top = max(_RAW_PRICE_KNOTS[POS_MID]["xg"])
     for absurd in (200, 400, 2000):
-        assert price_adjusted_attack_priors(POS_MID, base, absurd)["xg"] == \
+        assert price_adjusted_priors(POS_MID, base, absurd)["xg"] == \
             pytest.approx(top, rel=1e-6)
 
 
 def test_keepers_get_no_price_adjustment():
     """Keeper attacking rates are ~0.002/90; there is nothing to anchor."""
-    from xp_model import price_adjusted_attack_priors
+    from xp_model import price_adjusted_priors
     from match_sim import POS_GKP
 
-    assert price_adjusted_attack_priors(POS_GKP, {"xg": 0.0, "xa": 0.002}, 60) == {}
+    assert price_adjusted_priors(POS_GKP, {"xg": 0.0, "xa": 0.002}, 60) == {}
 
 
 def test_missing_price_leaves_the_prior_alone():
-    from xp_model import price_adjusted_attack_priors
+    from xp_model import price_adjusted_priors
     from match_sim import POS_MID
 
     base = {"xg": 0.152, "xa": 0.118}
     for bad in (None, 0, "", "abc"):
-        assert price_adjusted_attack_priors(POS_MID, base, bad) == {}
+        assert price_adjusted_priors(POS_MID, base, bad) == {}
 
 
 def test_price_prior_reaches_the_forecast(player, teams, fixture):
@@ -818,3 +818,69 @@ def test_price_prior_reaches_the_forecast(player, teams, fixture):
     cheap, dear = predict(45), predict(110)
     assert dear["xG_pts"] > cheap["xG_pts"]
     assert dear["math_pts"] > cheap["math_pts"]
+
+
+def test_card_priors_fall_with_price():
+    """
+    Cards run the opposite way to attacking rates and for the same reason. A flat
+    positional prior charges an £8m creator the booking rate of a £4.5m defensive
+    midfielder: measured over 2023-24..2025-26 a cheap midfielder is booked
+    0.260 per 90 against an expensive one's 0.106. That residual was 11% of the
+    £7.5-10.0m band's bias once the attacking priors were anchored.
+    """
+    from xp_model import price_adjusted_priors, POS_MID, POS_FWD
+
+    base = {"xg": 0.152, "xa": 0.118, "yc": 0.199}
+    cheap = price_adjusted_priors(POS_MID, base, 45)["yc"]
+    dear = price_adjusted_priors(POS_MID, base, 95)["yc"]
+    assert cheap > 2 * dear, f"cheap {cheap:.3f} vs dear {dear:.3f}"
+    # Forwards show the same sign, more weakly.
+    assert (price_adjusted_priors(POS_FWD, base, 52)["yc"]
+            > price_adjusted_priors(POS_FWD, base, 90)["yc"])
+
+
+def test_card_priors_are_monotone_non_increasing():
+    """
+    The £10.0m+ midfield card knot sits fractionally *above* the £7.5-10.0m one
+    on n=242. That is noise, and a prior where cards rose with price would be
+    indefensible, so a running minimum holds it flat.
+    """
+    from xp_model import price_adjusted_priors, PRICE_RATE_KNOTS
+
+    base = {"xg": 0.15, "xa": 0.12, "yc": 0.199}
+    for pos in PRICE_RATE_KNOTS:
+        vals = [price_adjusted_priors(pos, base, t)["yc"]
+                for t in range(40, 145, 5)]
+        assert vals == sorted(vals, reverse=True), f"{pos}: {vals}"
+
+
+def test_attacking_and_card_priors_move_in_opposite_directions():
+    """The two anchors must not be wired to the same sign by accident."""
+    from xp_model import price_adjusted_priors, POS_MID
+
+    base = {"xg": 0.152, "xa": 0.118, "yc": 0.199}
+    cheap = price_adjusted_priors(POS_MID, base, 45)
+    dear = price_adjusted_priors(POS_MID, base, 118)
+    assert dear["xg"] > cheap["xg"]
+    assert dear["xa"] > cheap["xa"]
+    assert dear["yc"] < cheap["yc"]
+
+
+def test_defender_card_priors_are_nearly_flat():
+    """
+    Measured, not assumed: defenders show ratios of 1.04 and 0.93 against their
+    prior, because an expensive defender still defends. If this ever develops a
+    steep slope it is a fitting artefact, not a discovery.
+    """
+    from xp_model import price_adjusted_priors, POS_DEF
+
+    base = {"xg": 0.049, "xa": 0.052, "yc": 0.183}
+    lo = price_adjusted_priors(POS_DEF, base, 40)["yc"]
+    hi = price_adjusted_priors(POS_DEF, base, 75)["yc"]
+    assert 0.85 < hi / lo <= 1.0
+
+
+def test_keepers_keep_the_positional_card_prior():
+    from xp_model import price_adjusted_priors, POS_GKP
+
+    assert price_adjusted_priors(POS_GKP, {"yc": 0.073}, 55) == {}

@@ -147,12 +147,12 @@ its xG/xA coverage is partial (see above), and including it both biased and
 blurred every number below.
 
 ```
- model                MAE    RMSE    bias     rho    P@15  cap.regret
- fpl_xp_LEAKS       1.548   2.440  +0.176   0.739     5.7        6.15  <- LEAKS
- fepl               1.768   2.735  -0.139   0.585     2.7       10.62
- ppg                1.962   2.887  -0.000   0.460     2.4       10.76
- roll3_mins         1.969   3.072  -0.133   0.526     1.7       12.24
- roll3              2.017   3.075  +0.047   0.516     1.8       12.24
+ model                MAE    RMSE    bias     rho    P@15  cap@15    ndcg  cap.regret
+ fpl_xp_LEAKS       1.467   2.284  +0.068   0.736     5.5   0.655   0.650        6.44  <- LEAKS
+ fepl               1.793   2.722  -0.023   0.589     2.7   0.426   0.418       10.43
+ ppg                1.955   2.876  +0.014   0.462     2.4   0.389   0.384       10.95
+ roll3_mins         1.966   3.068  -0.113   0.531     1.7   0.339   0.330       12.12
+ roll3              2.013   3.069  +0.072   0.521     1.8   0.343   0.335       12.14
 ```
 
 **Which of those differences are real.** Paired per-gameweek bootstrap, FEPL
@@ -172,7 +172,7 @@ Bold is significant. The engine beats every clean baseline on error, on ranking,
 and — measured properly — **at the top of the ranking too**.
 
 **Why two metrics for the same thing.** precision@15 vs points-per-game reads
-+0.222 [−0.037, +0.481]: not significant, and no more data exists. But that is
++0.265 [+0.000, +0.520]: not significant, and no more data exists. But that is
 partly the metric's own fault, not only a sample-size limit. It is an integer
 count out of 15, so it scores a missed 20-point haul the same as a missed
 6-pointer and a player ranked 16th the same as one ranked 300th. Replacing the
@@ -222,17 +222,18 @@ as if it were assists. Because the error is multiplicative it was invisible on a
 cheap player creating nothing and worth ~0.6 points a gameweek on a £10m creator,
 so it surfaced as a price gradient rather than a broken component.
 
-**What bias is left.** Overall −0.034, near enough unbiased. By price band, with
+**What bias is left.** Overall −0.023, near enough unbiased. By price band, with
 the clean three seasons:
 
 | price band | bias | 95% CI | |
 |---|---|---|---|
-| under £5.0m | +0.037 | | |
-| £5.0–7.5m | −0.076 | | |
-| £7.5–10.0m | **−0.252** | (was −0.381) | |
-| £10.0m+ | +0.101 | (was −0.048) | overshoots |
+| under £5.0m | +0.036 | | |
+| £5.0–7.5m | −0.077 | | |
+| £7.5–10.0m | **−0.246** | (was −0.381) | largest remaining |
+| £10.0m+ | +0.107 | (was −0.048) | now overshoots |
 
-By position: GKP +0.097, DEF +0.041, MID −0.057, FWD −0.116.
+By position: GKP +0.097 [+0.035, +0.159], MID −0.058 [−0.104, −0.012] and FWD
+−0.117 [−0.195, −0.040] are significant; DEF +0.040 is not.
 
 Most of that gradient was **price being ignored**. Realised rates rise steeply
 with price within a position — MID xG/90 runs 0.102 / 0.169 / 0.241 / 0.296 /
@@ -242,6 +243,14 @@ players whose price says they are better. Anchoring the attacking priors to
 price (interpolated between measured price-bin means, so no curve is fitted and
 nothing extrapolates) cut the £7.5–10m bias from −0.381 to −0.252 and is worth
 **+105 points over three seasons** end-to-end.
+
+Cards run the other way for the same reason — a cheap midfielder is booked 0.260
+per 90 against an expensive one's 0.106, because cheap midfielders are the ones
+who tackle — and are anchored to price too. That correction is *measurably
+tiny*: it moves the £7.5–10m band by +0.006 and the overall bias by −0.001. It
+is kept because a flat card prior is wrong in a direction the data is emphatic
+about, not because it bought anything. The card share of that band's residual
+turns out not to be prior-driven, so whatever remains there has another cause.
 
 Two caveats. The £10m+ band now overshoots slightly (+0.101), and the ~450
 player-gameweeks there give an interval of roughly ±0.4, so it is not well
