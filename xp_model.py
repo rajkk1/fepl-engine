@@ -285,8 +285,8 @@ class GammaPoissonFilter:
         # Price says something about a player's rate that a position-wide prior
         # cannot, so the attacking priors are anchored to their price rather than
         # to the positional mean.
-        prior.update(price_adjusted_attack_priors(pos, prior,
-                                                 player.get("now_cost")))
+        prior.update(price_adjusted_priors(pos, prior,
+                                           player.get("now_cost")))
         # Blend the positional prior with the player's own prior-season rates,
         # weighted by how much prior-season evidence there actually is. A flat
         # 50/50 under-weights a player with a full season behind them, which
@@ -615,29 +615,69 @@ def _reconcile_team_minutes(dists: List[List[float]],
 #
 # Keepers have no knots: their attacking rates are ~0.002/90, so there is
 # nothing to anchor.
+# Cards run the *other* way, and for the same reason. The £7.5-10.0m band was
+# still short after the attacking priors were anchored, and the residual named
+# cards: 0.120 predicted against 0.079 realised, 11% of that band's bias. A flat
+# positional prior charges an £8m creator the booking rate of a £4.5m defensive
+# midfielder. Measured per 90 over 2023-24..2025-26:
+#
+#     pos  band          yc/90   prior  ratio       n
+#     MID  <£5.0         0.260   0.199   1.30    5124
+#     MID  £5.0-7.5      0.199   0.199   1.00   10119
+#     MID  £7.5-10.0     0.106   0.199   0.53     920
+#     MID  £10.0+        0.112   0.199   0.56     242
+#     FWD  <£5.0         0.197   0.163   1.21     724
+#     FWD  £5.0-7.5      0.171   0.163   1.05    2778
+#     FWD  £7.5-10.0     0.138   0.163   0.84     537
+#     DEF  <£5.0         0.190   0.183   1.04    9102
+#     DEF  £5.0-7.5      0.170   0.183   0.93    2449
+#
+# A cheap midfielder is booked two and a half times as often as an expensive one
+# (0.260 against 0.106) because cheap midfielders are the ones who tackle.
+# Defenders show no price effect worth the name (1.04 / 0.93) - an expensive
+# defender still defends - so their knots are near-flat by measurement rather
+# than by assumption.
+#
+# The `yc` values are the band means read off at each existing knot's price,
+# rather than re-derived on their own bins, so all three stats share one set of
+# knot prices. Keepers have no price knots at all and keep the positional prior:
+# they are rarely booked and their price range is too narrow to fit.
 _RAW_PRICE_KNOTS = {
     POS_DEF: {"price": [4.32, 4.82, 5.29, 5.96],
               "xg": [0.0479, 0.0588, 0.0608, 0.0749],
-              "xa": [0.0472, 0.0716, 0.0659, 0.0802]},
+              "xa": [0.0472, 0.0716, 0.0659, 0.0802],
+              "yc": [0.190, 0.190, 0.170, 0.170]},
     POS_MID: {"price": [4.84, 5.50, 6.63, 8.40, 11.85],
               "xg": [0.1015, 0.1685, 0.2413, 0.2962, 0.4861],
-              "xa": [0.0914, 0.1328, 0.1735, 0.2210, 0.2768]},
+              "xa": [0.0914, 0.1328, 0.1735, 0.2210, 0.2768],
+              "yc": [0.260, 0.199, 0.199, 0.106, 0.112]},
     POS_FWD: {"price": [5.10, 5.97, 7.26, 8.72],
               "xg": [0.3564, 0.4157, 0.4313, 0.5252],
-              "xa": [0.0657, 0.0631, 0.0906, 0.0931]},
+              "xa": [0.0657, 0.0631, 0.0906, 0.0931],
+              "yc": [0.171, 0.171, 0.171, 0.138]},
 }
+# Monotonicity is enforced, and the direction is the point: attacking rates may
+# not fall as price rises, and cards may not rise. Small dips against the trend
+# are noise at n~1000, and a prior that moved the wrong way with price would be
+# indefensible either way. Note the opposite accumulators - MID's £10.0+ card
+# knot (0.112) sits fractionally above the £7.5-10.0m one (0.106) on n=242, and
+# the running minimum holds it at 0.106.
 PRICE_RATE_KNOTS = {
     pos: {"logprice": [math.log(p) for p in k["price"]],
           "xg": list(np.maximum.accumulate(k["xg"])),
-          "xa": list(np.maximum.accumulate(k["xa"]))}
+          "xa": list(np.maximum.accumulate(k["xa"])),
+          "yc": list(np.minimum.accumulate(k["yc"]))}
     for pos, k in _RAW_PRICE_KNOTS.items()
 }
 
+# Stats read off price rather than the positional mean.
+PRICE_ANCHORED_STATS = ("xg", "xa", "yc")
 
-def price_adjusted_attack_priors(element_type: int, prior: Dict[str, float],
+
+def price_adjusted_priors(element_type: int, prior: Dict[str, float],
                                  now_cost) -> Dict[str, float]:
     """
-    Attacking priors read off price rather than the positional mean.
+    Priors read off price rather than the positional mean.
 
     Price is information the filter otherwise throws away, and it is known
     before the deadline. A £9m midfielder was anchored to the same 0.152 xG/90 as
@@ -673,7 +713,7 @@ def _price_rates(element_type: int, now_cost_tenths: int):
         return None
     lp = math.log(price)
     return {stat: float(np.interp(lp, knots["logprice"], knots[stat]))
-            for stat in ("xg", "xa")}
+            for stat in PRICE_ANCHORED_STATS}
 
 
 def _maybe(row: Dict[str, Any], key: str):
