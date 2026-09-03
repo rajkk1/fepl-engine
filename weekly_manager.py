@@ -17,6 +17,61 @@ from optimizer import solve_fpl_optimization
 sys.stdout.reconfigure(encoding='utf-8')
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
+# --- selling prices -------------------------------------------------------
+#
+# FPL pays the purchase price plus HALF of any rise, rounded down; a fall is
+# taken in full. So a player bought at 4.0 and now worth 4.1 sells for 4.0 - the
+# 0.1 rise is worth nothing - while 7.5 rising to 7.7 sells for 7.6.
+#
+# The authenticated my-team endpoint states selling prices outright, but it
+# needs a cookie. Without one the engine used to fall back to the *current*
+# price, over-stating the budget by half of every rise, and recommending
+# transfers that FPL then refuses for want of £0.1m. Both halves are public:
+# the purchase price is in the transfer history, and for anyone still in the
+# squad from the start it is `now_cost - cost_change_start`.
+
+
+def fpl_selling_price(buy_tenths: int, now_tenths: int) -> int:
+    """FPL's selling price, in tenths. Integer division floors the profit."""
+    if now_tenths <= buy_tenths:
+        return now_tenths
+    return buy_tenths + (now_tenths - buy_tenths) // 2
+
+
+def purchase_prices(squad_ids, elements, transfers):
+    """
+    What each squad member cost, in tenths.
+
+    A player transferred in more than once takes the most recent price, so the
+    history is walked in order. Anyone with no transfer-in has been held since
+    the start, and their purchase price is the season-start price.
+    """
+    by_id = {e["id"]: e for e in elements or []}
+    bought = {}
+    for t in sorted(transfers or [],
+                    key=lambda x: (x.get("event") or 0, x.get("time") or "")):
+        pid, cost = t.get("element_in"), t.get("element_in_cost")
+        if pid is not None and cost is not None:
+            bought[int(pid)] = int(cost)
+    out = {}
+    for pid in squad_ids or []:
+        e = by_id.get(pid)
+        if not e:
+            continue
+        out[pid] = bought.get(pid, int(e["now_cost"]) - int(e.get("cost_change_start", 0) or 0))
+    return out
+
+
+def estimate_sell_prices(squad_ids, elements, transfers):
+    """Selling prices in £m, reconstructed from public data."""
+    by_id = {e["id"]: e for e in elements or []}
+    out = {}
+    for pid, buy in purchase_prices(squad_ids, elements, transfers).items():
+        now = int(by_id[pid]["now_cost"])
+        out[pid] = fpl_selling_price(buy, now) / 10.0
+    return out
+
+
 # --- chip availability ----------------------------------------------------
 #
 # FPL splits the season in half for chips: the first-half set expires at the
@@ -108,6 +163,27 @@ def get_manager_team_state(team_id: int, current_gw: int):
         bank = picks_data.get("entry_history", {}).get("bank", 0) / 10.0
         ft = 100 if current_gw == 1 else 1
         available_chips = chip_state(team_id, current_gw)
+        # Selling prices reconstructed from public data rather than defaulted to
+        # the current price, which over-stated the budget by half of every rise.
+        try:
+            elements = fpl_api.get_bootstrap_static().get("elements", [])
+            sell_prices = estimate_sell_prices(
+                squad_ids, elements, fpl_api.get_manager_transfers(team_id))
+            over = sum(
+                next(e["now_cost"] for e in elements if e["id"] == pid) / 10.0 - sp
+                for pid, sp in sell_prices.items())
+            if over > 0:
+                logging.info(
+                    "Selling prices reconstructed from public data: £%.1fm less "
+                    "than current prices, because FPL pays only half of a rise.",
+                    over)
+        except Exception as e:
+            logging.error(
+                "Could not reconstruct selling prices (%s). Falling back to "
+                "current prices, which OVER-STATES your budget - a recommended "
+                "transfer may be rejected for want of a tenth. Set FPL_COOKIE "
+                "for exact figures.", e)
+            sell_prices = {}
         return squad_ids, bank, ft, sell_prices, available_chips
     except Exception:
         # Pre-season or no team found. Chips are still worth checking, and if
