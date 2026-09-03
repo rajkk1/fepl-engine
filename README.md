@@ -388,9 +388,17 @@ Fork the repo and set two repository secrets
 - `FPL_TEAM_ID` — your FPL team ID, from the URL when viewing your points.
 - `DISCORD_WEBHOOK_URL` — for deadline alerts.
 
-Optionally set `FPL_COOKIE` to let the engine read your exact selling prices,
-bank and free-transfer count from the authenticated endpoint. Without it those
-fall back to public data and sensible defaults.
+Optionally set `FPL_COOKIE` to let the engine read your exact bank and
+free-transfer count from the authenticated endpoint. Without it those fall back
+to public data and sensible defaults.
+
+**Selling prices do not need the cookie either.** FPL pays the purchase price
+plus *half* of any rise, rounded down — a player bought at 4.0 and now worth 4.1
+sells for 4.0, because that 0.1 is worth nothing. The engine used to fall back to
+the *current* price, over-stating the budget by half of every rise, which is how
+it came to recommend a transfer FPL then refused for want of £0.1m. Purchase
+prices are reconstructed from the public transfer history, and from
+`now_cost - cost_change_start` for anyone held since the start.
 
 **Chips do not need the cookie.** They are read from your public chip history,
 and the engine accounts for FPL splitting the season in half: a wildcard played

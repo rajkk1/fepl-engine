@@ -141,6 +141,20 @@ def get_manager_history(team_id: int, use_cache: bool = True) -> Dict[str, Any]:
     return fetch_json(url, use_cache)
 
 
+def get_manager_transfers(team_id: int, use_cache: bool = True) -> List[Dict[str, Any]]:
+    """
+    Every transfer a manager has made, with the price paid for each player in.
+
+    Public, and the missing half of a selling price: FPL pays you the purchase
+    price plus half the rise, so the purchase price has to be known. Without
+    this the engine assumed it could sell at the current price and over-stated
+    the budget by half of every price rise.
+    """
+    url = f"{BASE_URL}entry/{team_id}/transfers/"
+    out = fetch_json(url, use_cache)
+    return out if isinstance(out, list) else []
+
+
 def get_my_team(team_id: int, cookie: str) -> Dict[str, Any]:
     """Fetch the authenticated team state to retrieve exact selling prices."""
     url = f"{BASE_URL}my-team/{team_id}/"
