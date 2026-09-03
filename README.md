@@ -411,6 +411,25 @@ one with `--chip`.
 
 Enable GitHub Pages on the `gh-pages` branch to publish `weekly_plan.json`.
 
+## Where the plan lives
+
+The weekly job writes the plan and publishes the whole `public/` directory to the
+**`gh-pages`** branch, so the current plan is:
+
+```
+https://<user>.github.io/<repo>/weekly_plan.json
+```
+
+`public/index.html` is a redirect to it, so the site root serves the plan
+directly. `gh-pages` is a publish target and is *meant* to stay permanently
+divergent from `main` — never merge it.
+
+Nothing writes the plan back to `main`, and `public/weekly_plan.json` is
+gitignored for that reason: a copy committed there would be frozen at whatever
+was checked in and would then sit in the obvious place looking authoritative
+while being months stale. If a local copy appears after running with
+`--export-json`, it is scratch.
+
 ## Local use
 
 ```bash
@@ -473,7 +492,8 @@ Run the tests with `uv run pytest tests/ -q`. They are offline by default; add
 
 `public/index.html` redirects to the raw `weekly_plan.json`; `public/app.html`
 deep-links to a companion mobile app that is not part of this repository. There
-is no styled web viewer here.
+is no styled web viewer here. The plan itself is not tracked in `main` — see
+*Where the plan lives*.
 
 ## Licence
 
