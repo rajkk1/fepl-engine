@@ -20,19 +20,19 @@
     ],
     "transfers_out": [
         {
-            "id": 165,
-            "web_name": "Jo\u00e3o Pedro",
-            "cost": 7.7
-        },
-        {
-            "id": 388,
-            "web_name": "Gu\u00e9hi",
-            "cost": 6.0
+            "id": 379,
+            "web_name": "Isak",
+            "cost": 9.0
         },
         {
             "id": 399,
             "web_name": "Cherki",
             "cost": 7.7
+        },
+        {
+            "id": 201,
+            "web_name": "Mu\u00f1oz",
+            "cost": 5.4
         }
     ],
     "hits": 2,
@@ -44,7 +44,7 @@
         "element_type": 3,
         "team": 16,
         "cost": 12.0,
-        "xp": 8.56,
+        "xp": 8.6,
         "p_play": 0.9964515213922245,
         "is_captain": true,
         "is_vice_captain": false,
@@ -57,7 +57,7 @@
         "element_type": 3,
         "team": 1,
         "cost": 9.5,
-        "xp": 7.81,
+        "xp": 7.73,
         "p_play": 0.9982291016980855,
         "is_captain": false,
         "is_vice_captain": true,
@@ -71,7 +71,7 @@
             "element_type": 3,
             "team": 1,
             "cost": 9.5,
-            "xp": 7.81,
+            "xp": 7.73,
             "p_play": 0.9982291016980855,
             "is_captain": false,
             "is_vice_captain": true,
@@ -97,8 +97,8 @@
             "element_type": 2,
             "team": 5,
             "cost": 4.7,
-            "xp": 6.46,
-            "p_play": 0.9971283548324014,
+            "xp": 6.53,
+            "p_play": 0.9967995303066448,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 4.7,
@@ -110,11 +110,24 @@
             "element_type": 3,
             "team": 6,
             "cost": 7.5,
-            "xp": 5.71,
+            "xp": 5.72,
             "p_play": 0.9818349971302709,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 7.5,
+            "status": "a"
+        },
+        {
+            "id": 165,
+            "web_name": "Jo\u00e3o Pedro",
+            "element_type": 4,
+            "team": 6,
+            "cost": 7.7,
+            "xp": 4.58,
+            "p_play": 0.999906408532263,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 7.7,
             "status": "a"
         },
         {
@@ -123,7 +136,7 @@
             "element_type": 1,
             "team": 9,
             "cost": 5.5,
-            "xp": 3.73,
+            "xp": 3.75,
             "p_play": 0.9788222535213542,
             "is_captain": false,
             "is_vice_captain": false,
@@ -136,24 +149,11 @@
             "element_type": 4,
             "team": 9,
             "cost": 5.5,
-            "xp": 5.9,
+            "xp": 5.95,
             "p_play": 0.9945842577694302,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 5.5,
-            "status": "a"
-        },
-        {
-            "id": 279,
-            "web_name": "Ajayi",
-            "element_type": 2,
-            "team": 11,
-            "cost": 4.1,
-            "xp": 4.06,
-            "p_play": 0.9984741369325881,
-            "is_captain": false,
-            "is_vice_captain": false,
-            "now_cost": 4.1,
             "status": "a"
         },
         {
@@ -162,24 +162,24 @@
             "element_type": 2,
             "team": 12,
             "cost": 4.0,
-            "xp": 4.7,
-            "p_play": 0.9996515399366851,
+            "xp": 4.72,
+            "p_play": 0.9996233580960155,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 4.0,
             "status": "a"
         },
         {
-            "id": 379,
-            "web_name": "Isak",
-            "element_type": 4,
-            "team": 14,
-            "cost": 9.0,
-            "xp": 5.36,
-            "p_play": 0.9995862318015603,
+            "id": 388,
+            "web_name": "Gu\u00e9hi",
+            "element_type": 2,
+            "team": 15,
+            "cost": 6.0,
+            "xp": 4.08,
+            "p_play": 0.7366763924410589,
             "is_captain": false,
             "is_vice_captain": false,
-            "now_cost": 9.0,
+            "now_cost": 6.0,
             "status": "a"
         },
         {
@@ -188,7 +188,7 @@
             "element_type": 3,
             "team": 16,
             "cost": 12.0,
-            "xp": 8.56,
+            "xp": 8.6,
             "p_play": 0.9964515213922245,
             "is_captain": true,
             "is_vice_captain": false,
@@ -201,7 +201,7 @@
             "element_type": 3,
             "team": 16,
             "cost": 8.0,
-            "xp": 6.61,
+            "xp": 6.49,
             "p_play": 0.9999367270608156,
             "is_captain": false,
             "is_vice_captain": false,
@@ -229,11 +229,24 @@
             "element_type": 3,
             "team": 14,
             "cost": 7.5,
-            "xp": 4.54,
-            "p_play": 0.9970154454383837,
+            "xp": 4.62,
+            "p_play": 0.9969382006920476,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 7.5,
+            "status": "a"
+        },
+        {
+            "id": 279,
+            "web_name": "Ajayi",
+            "element_type": 2,
+            "team": 11,
+            "cost": 4.1,
+            "xp": 4.01,
+            "p_play": 0.9984142752351537,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 4.1,
             "status": "a"
         },
         {
@@ -248,21 +261,8 @@
             "is_vice_captain": false,
             "now_cost": 5.5,
             "status": "a"
-        },
-        {
-            "id": 201,
-            "web_name": "Mu\u00f1oz",
-            "element_type": 2,
-            "team": 18,
-            "cost": 5.4,
-            "xp": 0.62,
-            "p_play": 0.25824180679518166,
-            "is_captain": false,
-            "is_vice_captain": false,
-            "now_cost": 5.4,
-            "status": "a"
         }
     ],
-    "expected_score": 75.38,
-    "remaining_bank": 0.0
+    "expected_score": 75.08,
+    "remaining_bank": 0.8
 }
