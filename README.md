@@ -300,6 +300,40 @@ after the prior and expected-assists fixes, on an unchanged optimiser, moves the
 season from **2124 to 2186** (+62) — itself +1.63 pts/gw [−1.63, +4.95], so not
 individually significant, but consistent in direction.
 
+**The £7.5–10.0m band, diagnosed and closed.** That band carries the largest
+remaining bias, and it is not a model defect. Decomposed on the current model
+(n=1490 player-gameweeks over three seasons) no component clears 27% — xA 27%,
+xG 22%, clean sheets 19%, cards 19%, with bonus *over*-predicted at −19% partly
+offsetting. But the aggregate is not broad either: of 63 player-seasons in the
+band, **five carry 86% of it**, the median player sits at −0.118, and only 58%
+are negative at all.
+
+| player | pos | season | £ | n | bias | share | main component |
+|---|---|---|---|---|---|---|---|
+| Foden | MID | 2023-24 | 7.9 | 32 | −2.32 | 29% | goals −1.78 |
+| Watkins | FWD | 2023-24 | 8.6 | 34 | −1.65 | 22% | assists −0.92 |
+| Isak | FWD | 2024-25 | 9.0 | 33 | −1.19 | 15% | goals −0.65 |
+| Mbeumo | MID | 2024-25 | 7.9 | 30 | −1.05 | 12% | goals −0.87 |
+| Bowen | FWD | 2025-26 | 7.6 | 34 | −0.91 | 12% | assists −0.57 |
+
+These are career years — players who out-finished their underlying numbers by a
+wide margin, in one season each. Foden's 2023-24 alone is 29% of the band. A
+forecast built on xG/xA will under-predict a player scoring at 70% above their
+xG, and *should*: predicting that it continues is not forecasting.
+
+Two hypotheses were tested and both failed, which is why this is closed rather
+than open. **A too-coarse price anchor** would show bias growing with predicted
+level; it runs the other way (Q1 −0.628, Q5 **+0.426**, correlation +0.091), so
+the model is mildly over-dispersed inside the band and a continuous price
+function would have made it worse. **Minutes** looked like a shared property —
+the worst five average 76.4 predicted against 82.4 actual — but that is
+conditioning on the outcome. Bucketed by *predicted* minutes, which is what the
+model acts on, the error is −2.6 / −1.6 / +0.9 across the confident range.
+
+One real residual did come out of it: players predicted under 40 minutes play
+about 10 more than that, which is the fringe end of the per-team minutes tilt
+over-shaving, already recorded above as a known cost.
+
 **How much room is actually left.** FPL points are extremely noisy, so a perfect
 forecast still misses. Estimated from the model's own (well-calibrated)
 predictive distribution, the irreducible MAE floor is ≈1.72 — a forecaster who
