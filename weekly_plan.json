@@ -8,9 +8,9 @@
             "cost": 5.5
         },
         {
-            "id": 368,
-            "web_name": "Szoboszlai",
-            "cost": 7.0
+            "id": 305,
+            "web_name": "Davis",
+            "cost": 4.0
         },
         {
             "id": 426,
@@ -20,14 +20,14 @@
     ],
     "transfers_out": [
         {
-            "id": 366,
-            "web_name": "Wirtz",
-            "cost": 7.5
+            "id": 165,
+            "web_name": "Jo\u00e3o Pedro",
+            "cost": 7.7
         },
         {
-            "id": 379,
-            "web_name": "Isak",
-            "cost": 9.0
+            "id": 388,
+            "web_name": "Gu\u00e9hi",
+            "cost": 6.0
         },
         {
             "id": 399,
@@ -157,29 +157,29 @@
             "status": "a"
         },
         {
-            "id": 368,
-            "web_name": "Szoboszlai",
-            "element_type": 3,
-            "team": 14,
-            "cost": 7.0,
-            "xp": 6.63,
-            "p_play": 0.9633875958544379,
+            "id": 305,
+            "web_name": "Davis",
+            "element_type": 2,
+            "team": 12,
+            "cost": 4.0,
+            "xp": 4.7,
+            "p_play": 0.9996515399366851,
             "is_captain": false,
             "is_vice_captain": false,
-            "now_cost": 7.0,
+            "now_cost": 4.0,
             "status": "a"
         },
         {
-            "id": 388,
-            "web_name": "Gu\u00e9hi",
-            "element_type": 2,
-            "team": 15,
-            "cost": 6.0,
-            "xp": 4.06,
-            "p_play": 0.7324955811230717,
+            "id": 379,
+            "web_name": "Isak",
+            "element_type": 4,
+            "team": 14,
+            "cost": 9.0,
+            "xp": 5.36,
+            "p_play": 0.9995862318015603,
             "is_captain": false,
             "is_vice_captain": false,
-            "now_cost": 6.0,
+            "now_cost": 9.0,
             "status": "a"
         },
         {
@@ -224,16 +224,16 @@
             "status": "u"
         },
         {
-            "id": 165,
-            "web_name": "Jo\u00e3o Pedro",
-            "element_type": 4,
-            "team": 6,
-            "cost": 7.7,
-            "xp": 4.55,
-            "p_play": 0.999906408532263,
+            "id": 366,
+            "web_name": "Wirtz",
+            "element_type": 3,
+            "team": 14,
+            "cost": 7.5,
+            "xp": 4.54,
+            "p_play": 0.9970154454383837,
             "is_captain": false,
             "is_vice_captain": false,
-            "now_cost": 7.7,
+            "now_cost": 7.5,
             "status": "a"
         },
         {
@@ -263,6 +263,6 @@
             "status": "a"
         }
     ],
-    "expected_score": 75.92,
+    "expected_score": 75.38,
     "remaining_bank": 0.0
 }
