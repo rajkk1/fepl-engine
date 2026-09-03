@@ -17,6 +17,53 @@ from optimizer import solve_fpl_optimization
 sys.stdout.reconfigure(encoding='utf-8')
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
+# --- chip availability ----------------------------------------------------
+#
+# FPL splits the season in half for chips: the first-half set expires at the
+# GW19 deadline and a second set unlocks from GW20. So a wildcard played in GW2
+# is gone for the first half but does not rule one out later in the season.
+CHIP_HALF_SPLIT_GW = 20
+ALL_CHIPS = ("wc", "fh", "bb", "tc")
+# FPL's own names for them, as they appear in the API.
+CHIP_CODES = {"wildcard": "wc", "freehit": "fh", "bboost": "bb", "3xc": "tc"}
+CHIP_LABELS = {"wc": "Wildcard", "fh": "Free Hit", "bb": "Bench Boost",
+               "tc": "Triple Captain"}
+
+
+def _season_half(gw: int) -> int:
+    return 1 if int(gw) < CHIP_HALF_SPLIT_GW else 2
+
+
+def chips_from_history(history, current_gw: int):
+    """
+    Which chips are still in hand, read from the public chip history.
+
+    Returns (available, used_this_half). A chip played in the *current* half is
+    spent; one played in the other half has been replaced by the new set.
+    """
+    used = {}
+    for c in (history or {}).get("chips") or []:
+        code = CHIP_CODES.get(c.get("name"))
+        event = c.get("event")
+        if not code or not event:
+            continue
+        if _season_half(event) == _season_half(current_gw):
+            used[code] = int(event)
+    return [c for c in ALL_CHIPS if c not in used], used
+
+
+def _parse_used_chips(raw: str):
+    """`--used-chips wc,bb` -> {"wc", "bb"}, rejecting anything unrecognised."""
+    out = set()
+    for tok in (raw or "").replace(",", " ").split():
+        t = tok.strip().lower()
+        if t not in ALL_CHIPS:
+            raise ValueError(
+                f"unknown chip {tok!r}; expected any of {', '.join(ALL_CHIPS)}")
+        out.add(t)
+    return out
+
+
 def get_manager_team_state(team_id: int, current_gw: int):
     """Attempt to fetch manager's latest team state, bank balance, and selling prices."""
     try:
@@ -53,15 +100,38 @@ def get_manager_team_state(team_id: int, current_gw: int):
             except Exception as auth_err:
                 logging.warning(f"Failed to fetch authenticated my-team endpoint: {auth_err}")
                 
-        # Public fallback
+        # Public fallback. Chip state comes from the public history endpoint
+        # rather than being assumed: this path used to return the optimistic
+        # default and recommend a wildcard that had already been played.
         picks_data = fpl_api.get_manager_picks(team_id, current_gw - 1 if current_gw > 1 else 1)
         squad_ids = [p["element"] for p in picks_data.get("picks", [])]
         bank = picks_data.get("entry_history", {}).get("bank", 0) / 10.0
         ft = 100 if current_gw == 1 else 1
+        available_chips = chip_state(team_id, current_gw)
         return squad_ids, bank, ft, sell_prices, available_chips
     except Exception:
-        # Pre-season or no team found
-        return None, 100.0, 100, {}, ["wc", "fh", "bb", "tc"]
+        # Pre-season or no team found. Chips are still worth checking, and if
+        # even that fails we assume NONE rather than all: recommending a chip
+        # the manager does not hold is a worse failure than missing one.
+        return None, 100.0, 100, {}, chip_state(team_id, current_gw)
+
+
+def chip_state(team_id: int, current_gw: int):
+    """Chips still in hand, or an empty list if it cannot be established."""
+    try:
+        available, used = chips_from_history(
+            fpl_api.get_manager_history(team_id), current_gw)
+        if used:
+            spent = ", ".join(f"{CHIP_LABELS[c]} (GW{gw})"
+                              for c, gw in sorted(used.items(), key=lambda kv: kv[1]))
+            logging.info("Chips already played this half: %s", spent)
+        return available
+    except Exception as e:
+        logging.error(
+            "Could not read chip history (%s). Assuming NO chips are available "
+            "so nothing is recommended that you may not hold; pass --chip to "
+            "force one, or --used-chips to say what is spent.", e)
+        return []
 
 def print_separator(char="=", length=70):
     print(char * length)
@@ -99,6 +169,10 @@ def main():
     parser.add_argument("--team", type=int, default=4309239, help="Your FPL Team ID (can also be set via FPL_TEAM_ID env var)")
     parser.add_argument("--horizon", type=int, default=5, help="Planning horizon in gameweeks (default: 5)")
     parser.add_argument("--chip", type=str, default="", help="Chip to activate: wc, fh, tc, bb")
+    parser.add_argument("--used-chips", type=str, default="",
+                        help="Chips you have already played this half of the "
+                             "season, e.g. 'wc,bb'. Normally read from your "
+                             "public chip history; use this to correct it.")
     parser.add_argument("--ft", type=int, default=None, help="Number of free transfers currently available. Defaults to 1.")
     parser.add_argument("--export-json", type=str, default="", help="Path to export the weekly plan as JSON (e.g., plan.json)")
     parser.add_argument("--risk-aversion", type=float, default=0.0,
@@ -145,6 +219,27 @@ def main():
     # Get Manager State
     squad_ids, bank, default_ft, sell_prices, available_chips = get_manager_team_state(team_id, current_gw)
     ft = args.ft if args.ft is not None else default_ft
+
+    # A manual override always wins over what the API implied.
+    try:
+        manually_used = _parse_used_chips(args.used_chips)
+    except ValueError as e:
+        raise SystemExit(f"--used-chips: {e}")
+    if manually_used:
+        available_chips = [c for c in available_chips if c not in manually_used]
+
+    # Say plainly what the engine believes it holds. A wrong belief here is the
+    # difference between a usable plan and one built on a chip you do not have,
+    # and it used to be invisible.
+    if available_chips:
+        print(f"🃏 Chips available: "
+              f"{', '.join(CHIP_LABELS[c] for c in available_chips)}")
+    else:
+        print("🃏 Chips available: none")
+    spent = [c for c in ALL_CHIPS if c not in available_chips]
+    if spent:
+        print(f"   (already played or unavailable: "
+              f"{', '.join(CHIP_LABELS[c] for c in spent)})")
     
     if squad_ids:
         print(f"💰 Current Bank: £{bank:.1f}m | Free Transfers: {ft if ft < 100 else 'Unlimited (Wildcard/Pre-season)'}")
@@ -172,7 +267,16 @@ def main():
         lineup_overrides=lineups, draws_out=point_draws,
     )
 
-    active_chip = args.chip if args.chip else ""
+    active_chip = args.chip.strip().lower() if args.chip else ""
+    if active_chip and active_chip not in ALL_CHIPS:
+        raise SystemExit(f"--chip: unknown chip {args.chip!r}; "
+                         f"expected any of {', '.join(ALL_CHIPS)}")
+    if active_chip and active_chip not in available_chips:
+        # Forcing is allowed - the manager may know better than the API - but it
+        # must be a deliberate act rather than a silent assumption.
+        logging.warning(
+            "%s is being forced with --chip, but your chip history says it is "
+            "not available. Proceeding as instructed.", CHIP_LABELS[active_chip])
     active_chip_gw = horizon_gws[0]
 
     def _solve(chip=None, chip_gw=None):

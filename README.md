@@ -389,8 +389,17 @@ Fork the repo and set two repository secrets
 - `DISCORD_WEBHOOK_URL` — for deadline alerts.
 
 Optionally set `FPL_COOKIE` to let the engine read your exact selling prices,
-bank and remaining chips from the authenticated endpoint. Without it, it falls
-back to the public endpoint and assumes all chips are available.
+bank and free-transfer count from the authenticated endpoint. Without it those
+fall back to public data and sensible defaults.
+
+**Chips do not need the cookie.** They are read from your public chip history,
+and the engine accounts for FPL splitting the season in half: a wildcard played
+in GW2 is unavailable until the second-half set unlocks at GW20. It prints what
+it believes you hold on every run, so a wrong belief is visible rather than
+silently baked into the plan. If the history cannot be read it assumes **no**
+chips rather than all of them — recommending a chip you do not hold is a worse
+failure than missing one you do. Correct it with `--used-chips wc,bb`, or force
+one with `--chip`.
 
 Enable GitHub Pages on the `gh-pages` branch to publish `weekly_plan.json`.
 
