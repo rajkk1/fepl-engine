@@ -129,6 +129,18 @@ def get_manager_picks(team_id: int, event_id: int) -> Dict[str, Any]:
     url = f"{BASE_URL}entry/{team_id}/event/{event_id}/picks/"
     return fetch_json(url, use_cache=False)
 
+def get_manager_history(team_id: int, use_cache: bool = True) -> Dict[str, Any]:
+    """
+    A manager's gameweek history and, crucially, the chips they have played.
+
+    This is a *public* endpoint. Chip state does not need the authenticated
+    my-team call, which is what the engine used to rely on - and when that was
+    unavailable it assumed every chip was still in hand.
+    """
+    url = f"{BASE_URL}entry/{team_id}/history/"
+    return fetch_json(url, use_cache)
+
+
 def get_my_team(team_id: int, cookie: str) -> Dict[str, Any]:
     """Fetch the authenticated team state to retrieve exact selling prices."""
     url = f"{BASE_URL}my-team/{team_id}/"
