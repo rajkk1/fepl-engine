@@ -103,12 +103,20 @@ def test_optimizer_consumes_the_matrix(mini_league):
 
 
 def test_weekly_manager_state_arity():
-    """The CLI unpacks five values; a change here breaks the daily job."""
+    """
+    The CLI unpacks six values; a change here breaks the daily job.
+
+    The sixth says whether the free-transfer count is known or assumed - only
+    the authenticated endpoint knows it, and assuming wrongly turns a planned
+    free transfer into a -4 hit.
+    """
     import weekly_manager
     res = weekly_manager.get_manager_team_state(-1, 1)
-    assert len(res) == 5
-    _, _, _, _, chips = res
+    assert len(res) == 6
+    _, _, ft, _, chips, ft_known = res
     assert isinstance(chips, list)
+    assert isinstance(ft_known, bool)
+    assert isinstance(ft, int)
 
 
 @pytest.mark.network

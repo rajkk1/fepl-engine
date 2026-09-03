@@ -120,12 +120,24 @@ def _parse_used_chips(raw: str):
 
 
 def get_manager_team_state(team_id: int, current_gw: int):
-    """Attempt to fetch manager's latest team state, bank balance, and selling prices."""
+    """
+    The manager's squad, bank, free transfers, selling prices and chips.
+
+    Returns a sixth value saying whether the free-transfer count is *known* or
+    merely assumed. Only the authenticated endpoint knows it, and a wrong
+    assumption is expensive: the engine plans a transfer as free that actually
+    costs -4. It cannot be reconstructed from public data - `event_transfers`
+    does not distinguish "made none, banked one" from a pre-season or wildcard
+    week where nothing is banked at all, and the banking cap has changed between
+    seasons. So it is labelled rather than guessed at.
+    """
     try:
         cookie = os.getenv("FPL_COOKIE")
         squad_ids = []
         bank = 0.0
         ft = 100 if current_gw == 1 else 1
+        # GW1 is genuinely unlimited, so that much is a rule rather than a guess.
+        ft_known = current_gw == 1
         sell_prices = {}
         available_chips = ["wc", "fh", "bb", "tc"]
         
@@ -135,6 +147,7 @@ def get_manager_team_state(team_id: int, current_gw: int):
                 squad_ids = [p["element"] for p in my_team_data.get("picks", [])]
                 if "transfers" in my_team_data:
                     ft = max(0, my_team_data["transfers"].get("limit", 1) - my_team_data["transfers"].get("made", 0))
+                    ft_known = True
                     if "bank" in my_team_data["transfers"]:
                         bank = my_team_data["transfers"]["bank"] / 10.0
                 for p in my_team_data.get("picks", []):
@@ -151,7 +164,7 @@ def get_manager_team_state(team_id: int, current_gw: int):
                             if n == "bboost": available_chips.append("bb")
                             if n == "3xc": available_chips.append("tc")
                 
-                return squad_ids, bank, ft, sell_prices, available_chips
+                return squad_ids, bank, ft, sell_prices, available_chips, ft_known
             except Exception as auth_err:
                 logging.warning(f"Failed to fetch authenticated my-team endpoint: {auth_err}")
                 
@@ -184,12 +197,12 @@ def get_manager_team_state(team_id: int, current_gw: int):
                 "transfer may be rejected for want of a tenth. Set FPL_COOKIE "
                 "for exact figures.", e)
             sell_prices = {}
-        return squad_ids, bank, ft, sell_prices, available_chips
+        return squad_ids, bank, ft, sell_prices, available_chips, ft_known
     except Exception:
         # Pre-season or no team found. Chips are still worth checking, and if
         # even that fails we assume NONE rather than all: recommending a chip
         # the manager does not hold is a worse failure than missing one.
-        return None, 100.0, 100, {}, chip_state(team_id, current_gw)
+        return None, 100.0, 100, {}, chip_state(team_id, current_gw), False
 
 
 def chip_state(team_id: int, current_gw: int):
@@ -249,7 +262,12 @@ def main():
                         help="Chips you have already played this half of the "
                              "season, e.g. 'wc,bb'. Normally read from your "
                              "public chip history; use this to correct it.")
-    parser.add_argument("--ft", type=int, default=None, help="Number of free transfers currently available. Defaults to 1.")
+    parser.add_argument("--ft", type=int, default=None,
+                        help="Free transfers you actually have. Only the "
+                             "authenticated endpoint knows this; without "
+                             "FPL_COOKIE the engine assumes 1, and assuming "
+                             "wrongly turns a planned free transfer into a -4 "
+                             "hit. Pass 0 if you have already used yours.")
     parser.add_argument("--export-json", type=str, default="", help="Path to export the weekly plan as JSON (e.g., plan.json)")
     parser.add_argument("--risk-aversion", type=float, default=0.0,
                         help="Rank-aware risk weight. 0 = pure expected points; "
@@ -293,8 +311,12 @@ def main():
     print(f"🗓️  Current Target Gameweek: GW{current_gw}")
     
     # Get Manager State
-    squad_ids, bank, default_ft, sell_prices, available_chips = get_manager_team_state(team_id, current_gw)
+    (squad_ids, bank, default_ft, sell_prices, available_chips,
+     ft_known) = get_manager_team_state(team_id, current_gw)
     ft = args.ft if args.ft is not None else default_ft
+    # Being told beats inferring.
+    if args.ft is not None:
+        ft_known = True
 
     # A manual override always wins over what the API implied.
     try:
@@ -318,7 +340,12 @@ def main():
               f"{', '.join(CHIP_LABELS[c] for c in spent)})")
     
     if squad_ids:
-        print(f"💰 Current Bank: £{bank:.1f}m | Free Transfers: {ft if ft < 100 else 'Unlimited (Wildcard/Pre-season)'}")
+        ft_text = "Unlimited (Wildcard/Pre-season)" if ft >= 100 else str(ft)
+        if not ft_known:
+            # Say it is a guess. The number used to read as fact, which is how a
+            # planned "free" transfer quietly became a -4 hit.
+            ft_text += " (assumed - pass --ft to correct, or set FPL_COOKIE)"
+        print(f"💰 Current Bank: £{bank:.1f}m | Free Transfers: {ft_text}")
     else:
         print(f"⚠️ No active squad found (Assuming Pre-season/Wildcard state)")
         ft = 100
