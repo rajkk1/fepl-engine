@@ -88,3 +88,52 @@ def test_used_chips_override_parses_and_validates():
     assert W._parse_used_chips("") == set()
     with pytest.raises(ValueError):
         W._parse_used_chips("wc,wildcard")
+
+
+# ------------------------------------------------- free transfers are a guess
+
+
+def test_free_transfers_are_flagged_as_assumed_without_a_cookie(monkeypatch):
+    """
+    Only the authenticated endpoint knows the free-transfer count. Assuming 1
+    when the manager has 0 turns a planned free transfer into a -4 hit, so the
+    number must be labelled rather than presented as fact.
+    """
+    monkeypatch.delenv("FPL_COOKIE", raising=False)
+    monkeypatch.setattr(W.fpl_api, "get_manager_picks",
+                        lambda t, e: {"picks": [{"element": 1}],
+                                      "entry_history": {"bank": 3}})
+    monkeypatch.setattr(W.fpl_api, "get_manager_history",
+                        lambda t, use_cache=True: {"chips": []})
+    monkeypatch.setattr(W.fpl_api, "get_manager_transfers",
+                        lambda t, use_cache=True: [])
+    monkeypatch.setattr(W.fpl_api, "get_bootstrap_static",
+                        lambda: {"elements": [{"id": 1, "now_cost": 50,
+                                               "cost_change_start": 0}]})
+    *_, ft_known = W.get_manager_team_state(123, current_gw=5)
+    assert ft_known is False
+
+
+def test_gameweek_one_is_genuinely_unlimited_not_a_guess(monkeypatch):
+    """Pre-season is a rule, so it is knowledge rather than an assumption."""
+    monkeypatch.delenv("FPL_COOKIE", raising=False)
+    monkeypatch.setattr(W.fpl_api, "get_manager_picks",
+                        lambda t, e: {"picks": [], "entry_history": {"bank": 0}})
+    monkeypatch.setattr(W.fpl_api, "get_manager_history",
+                        lambda t, use_cache=True: {"chips": []})
+    monkeypatch.setattr(W.fpl_api, "get_manager_transfers",
+                        lambda t, use_cache=True: [])
+    monkeypatch.setattr(W.fpl_api, "get_bootstrap_static",
+                        lambda: {"elements": []})
+    _, _, ft, _, _, ft_known = W.get_manager_team_state(123, current_gw=1)
+    assert ft >= 100 and ft_known is True
+
+
+def test_an_unreachable_team_does_not_claim_to_know_the_count(monkeypatch):
+    def boom(*a, **k):
+        raise OSError("offline")
+
+    monkeypatch.setattr(W.fpl_api, "get_manager_picks", boom)
+    monkeypatch.setattr(W.fpl_api, "get_manager_history", boom)
+    *_, ft_known = W.get_manager_team_state(123, current_gw=5)
+    assert ft_known is False

@@ -443,6 +443,8 @@ Useful flags:
 |---|---|
 | `--horizon N` | Planning horizon in gameweeks (default 5) |
 | `--chip wc\|fh\|bb\|tc` | Force a chip instead of searching for one |
+| `--ft N` | Free transfers you actually have. **Only the authenticated endpoint knows this**; without `FPL_COOKIE` the engine assumes 1, and assuming wrongly turns a planned free transfer into a −4 hit. Pass `--ft 0` if you have used yours. |
+| `--used-chips wc,bb` | Chips already played this half of the season, if the public history is wrong |
 | `--risk-aversion 0.05` | Enable rank-aware (MERV) valuation |
 | `--lineups path.json` | Predicted-lineups feed (see below) |
 | `--horizon-decay 0.86` | Per-gameweek discount on future xP; `1.0` weights the horizon equally |
