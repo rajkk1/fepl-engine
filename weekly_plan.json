@@ -8,6 +8,11 @@
             "cost": 4.5
         },
         {
+            "id": 88,
+            "web_name": "Kayode",
+            "cost": 4.6
+        },
+        {
             "id": 154,
             "web_name": "Palmer",
             "cost": 9.6
@@ -18,14 +23,9 @@
             "cost": 5.5
         },
         {
-            "id": 250,
-            "web_name": "Leno",
-            "cost": 4.5
-        },
-        {
-            "id": 277,
-            "web_name": "Egan",
-            "cost": 4.0
+            "id": 572,
+            "web_name": "Tzolakis",
+            "cost": 4.6
         },
         {
             "id": 305,
@@ -36,11 +36,6 @@
             "id": 368,
             "web_name": "Szoboszlai",
             "cost": 7.0
-        },
-        {
-            "id": 379,
-            "web_name": "Isak",
-            "cost": 9.0
         },
         {
             "id": 426,
@@ -68,11 +63,6 @@
             "id": 40,
             "web_name": "Rogers",
             "cost": 7.5
-        },
-        {
-            "id": 165,
-            "web_name": "Jo\u00e3o Pedro",
-            "cost": 7.7
         },
         {
             "id": 171,
@@ -124,8 +114,8 @@
         "element_type": 3,
         "team": 16,
         "cost": 12.0,
-        "xp": 8.55,
-        "p_play": 0.9964174021660359,
+        "xp": 8.56,
+        "p_play": 0.9964515213922245,
         "is_captain": true,
         "is_vice_captain": false,
         "now_cost": 12.0,
@@ -137,8 +127,8 @@
         "element_type": 3,
         "team": 1,
         "cost": 9.5,
-        "xp": 7.79,
-        "p_play": 0.9977314433262694,
+        "xp": 7.81,
+        "p_play": 0.9982291016980855,
         "is_captain": false,
         "is_vice_captain": true,
         "now_cost": 9.5,
@@ -151,24 +141,11 @@
             "element_type": 3,
             "team": 1,
             "cost": 9.5,
-            "xp": 7.79,
-            "p_play": 0.9977314433262694,
+            "xp": 7.81,
+            "p_play": 0.9982291016980855,
             "is_captain": false,
             "is_vice_captain": true,
             "now_cost": 9.5,
-            "status": "a"
-        },
-        {
-            "id": 57,
-            "web_name": "Petrovi\u0107",
-            "element_type": 1,
-            "team": 3,
-            "cost": 4.5,
-            "xp": 3.68,
-            "p_play": 0.990486562451504,
-            "is_captain": false,
-            "is_vice_captain": false,
-            "now_cost": 4.5,
             "status": "a"
         },
         {
@@ -177,7 +154,7 @@
             "element_type": 4,
             "team": 4,
             "cost": 8.0,
-            "xp": 6.72,
+            "xp": 6.82,
             "p_play": 0.9927324260352443,
             "is_captain": false,
             "is_vice_captain": false,
@@ -190,7 +167,7 @@
             "element_type": 2,
             "team": 5,
             "cost": 4.7,
-            "xp": 6.55,
+            "xp": 6.46,
             "p_play": 0.9971283548324014,
             "is_captain": false,
             "is_vice_captain": false,
@@ -203,8 +180,8 @@
             "element_type": 3,
             "team": 6,
             "cost": 9.6,
-            "xp": 6.45,
-            "p_play": 0.9987333510266534,
+            "xp": 6.43,
+            "p_play": 0.9990998300049726,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 9.6,
@@ -216,11 +193,24 @@
             "element_type": 4,
             "team": 9,
             "cost": 5.5,
-            "xp": 5.87,
-            "p_play": 0.9916009973252435,
+            "xp": 5.9,
+            "p_play": 0.9945842577694302,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 5.5,
+            "status": "a"
+        },
+        {
+            "id": 572,
+            "web_name": "Tzolakis",
+            "element_type": 1,
+            "team": 11,
+            "cost": 4.6,
+            "xp": 3.64,
+            "p_play": 0.9661558084480374,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 4.6,
             "status": "a"
         },
         {
@@ -229,8 +219,8 @@
             "element_type": 2,
             "team": 12,
             "cost": 4.0,
-            "xp": 4.77,
-            "p_play": 0.9996181998395515,
+            "xp": 4.7,
+            "p_play": 0.9996515399366851,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 4.0,
@@ -242,8 +232,8 @@
             "element_type": 3,
             "team": 14,
             "cost": 7.0,
-            "xp": 6.65,
-            "p_play": 0.960729380252845,
+            "xp": 6.63,
+            "p_play": 0.9633875958544379,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 7.0,
@@ -255,8 +245,8 @@
             "element_type": 3,
             "team": 16,
             "cost": 12.0,
-            "xp": 8.55,
-            "p_play": 0.9964174021660359,
+            "xp": 8.56,
+            "p_play": 0.9964515213922245,
             "is_captain": true,
             "is_vice_captain": false,
             "now_cost": 12.0,
@@ -268,8 +258,8 @@
             "element_type": 3,
             "team": 16,
             "cost": 8.0,
-            "xp": 6.51,
-            "p_play": 0.9999361165068146,
+            "xp": 6.61,
+            "p_play": 0.9999367270608156,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 8.0,
@@ -281,8 +271,8 @@
             "element_type": 2,
             "team": 17,
             "cost": 5.1,
-            "xp": 5.03,
-            "p_play": 0.9077721520609452,
+            "xp": 5.26,
+            "p_play": 0.9331874360539832,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 5.1,
@@ -291,29 +281,29 @@
     ],
     "bench": [
         {
-            "id": 250,
-            "web_name": "Leno",
+            "id": 57,
+            "web_name": "Petrovi\u0107",
             "element_type": 1,
-            "team": 10,
+            "team": 3,
             "cost": 4.5,
-            "xp": 3.49,
-            "p_play": 0.9839816713602018,
+            "xp": 3.63,
+            "p_play": 0.990486562451504,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 4.5,
             "status": "a"
         },
         {
-            "id": 379,
-            "web_name": "Isak",
+            "id": 165,
+            "web_name": "Jo\u00e3o Pedro",
             "element_type": 4,
-            "team": 14,
-            "cost": 9.0,
-            "xp": 5.27,
-            "p_play": 0.9995549832279218,
+            "team": 6,
+            "cost": 7.7,
+            "xp": 4.55,
+            "p_play": 0.999906408532263,
             "is_captain": false,
             "is_vice_captain": false,
-            "now_cost": 9.0,
+            "now_cost": 7.7,
             "status": "a"
         },
         {
@@ -322,27 +312,27 @@
             "element_type": 2,
             "team": 18,
             "cost": 5.0,
-            "xp": 4.4,
-            "p_play": 0.9959668721986745,
+            "xp": 4.5,
+            "p_play": 0.9965704156478967,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 5.0,
             "status": "a"
         },
         {
-            "id": 277,
-            "web_name": "Egan",
+            "id": 88,
+            "web_name": "Kayode",
             "element_type": 2,
-            "team": 11,
-            "cost": 4.0,
-            "xp": 3.94,
-            "p_play": 0.9669515396390744,
+            "team": 4,
+            "cost": 4.6,
+            "xp": 4.37,
+            "p_play": 0.9960112078437112,
             "is_captain": false,
             "is_vice_captain": false,
-            "now_cost": 4.0,
+            "now_cost": 4.6,
             "status": "a"
         }
     ],
-    "expected_score": 78.75,
-    "remaining_bank": 0.0
+    "expected_score": 79.0,
+    "remaining_bank": 0.6
 }
