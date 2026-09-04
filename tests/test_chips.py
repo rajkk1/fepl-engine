@@ -137,3 +137,36 @@ def test_an_unreachable_team_does_not_claim_to_know_the_count(monkeypatch):
     monkeypatch.setattr(W.fpl_api, "get_manager_history", boom)
     *_, ft_known = W.get_manager_team_state(123, current_gw=5)
     assert ft_known is False
+
+
+def test_a_rejected_cookie_is_an_error_not_a_note(monkeypatch, caplog):
+    """
+    An expired cookie silently returns the engine to guessed chips, selling
+    prices and free transfers - the exact assumptions the authenticated path
+    exists to replace. FPL sessions expire, so this must be loud.
+    """
+    import logging as _logging
+
+    monkeypatch.setenv("FPL_COOKIE", "sentinel-not-a-real-cookie")
+
+    def rejected(team_id, cookie):
+        raise PermissionError("403")
+
+    monkeypatch.setattr(W.fpl_api, "get_my_team", rejected)
+    monkeypatch.setattr(W.fpl_api, "get_manager_picks",
+                        lambda t, e: {"picks": [], "entry_history": {"bank": 0}})
+    monkeypatch.setattr(W.fpl_api, "get_manager_history",
+                        lambda t, use_cache=True: {"chips": []})
+    monkeypatch.setattr(W.fpl_api, "get_manager_transfers",
+                        lambda t, use_cache=True: [])
+    monkeypatch.setattr(W.fpl_api, "get_bootstrap_static", lambda: {"elements": []})
+
+    with caplog.at_level(_logging.INFO):
+        *_, ft_known = W.get_manager_team_state(123, current_gw=5)
+
+    assert ft_known is False, "a rejected cookie cannot leave the count 'known'"
+    errors = [r for r in caplog.records if r.levelno >= _logging.ERROR]
+    assert errors, "a rejected cookie must be logged at ERROR"
+    assert "expired" in errors[0].getMessage().lower()
+    # The credential itself must never reach the log.
+    assert "sentinel-not-a-real-cookie" not in caplog.text

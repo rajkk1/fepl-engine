@@ -392,6 +392,26 @@ Optionally set `FPL_COOKIE` to let the engine read your exact bank and
 free-transfer count from the authenticated endpoint. Without it those fall back
 to public data and sensible defaults.
 
+### Setting `FPL_COOKIE`
+
+The cookie is a session credential — treat it like a password. Get it yourself
+from a browser logged in to FPL: open developer tools, Application (or Storage)
+→ Cookies → `fantasy.premierleague.com`, and copy the `pl_profile` and `sessionid`
+values into a single header string of the form `pl_profile=...; sessionid=...`.
+
+Install it in one of two places, never in a tracked file:
+
+- **CI** — repository *Settings → Secrets and variables → Actions*, as
+  `FPL_COOKIE`. The weekly workflow already reads it.
+- **Locally** — a `.env` file in the repo root (`FPL_COOKIE=...`). `.env` is
+  gitignored.
+
+The engine reports which state it is in on every run: whether the cookie is
+absent, accepted, or **set but rejected**. Sessions expire, and a rejected
+cookie silently returns bank, free transfers and selling prices to guesses — so
+that case is logged at `ERROR` rather than passed over. The value itself is
+never printed.
+
 **Selling prices do not need the cookie either.** FPL pays the purchase price
 plus *half* of any rise, rounded down — a player bought at 4.0 and now worth 4.1
 sells for 4.0, because that 0.1 is worth nothing. The engine used to fall back to
