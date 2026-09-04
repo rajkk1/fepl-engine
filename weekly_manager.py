@@ -141,6 +141,10 @@ def get_manager_team_state(team_id: int, current_gw: int):
         sell_prices = {}
         available_chips = ["wc", "fh", "bb", "tc"]
         
+        if not cookie:
+            logging.info(
+                "FPL_COOKIE not set: bank, free transfers and selling prices "
+                "come from public data or defaults. See the README.")
         if cookie:
             try:
                 my_team_data = fpl_api.get_my_team(team_id, cookie)
@@ -164,9 +168,22 @@ def get_manager_team_state(team_id: int, current_gw: int):
                             if n == "bboost": available_chips.append("bb")
                             if n == "3xc": available_chips.append("tc")
                 
+                logging.info("FPL_COOKIE accepted: bank, free transfers and "
+                             "selling prices read from your account.")
                 return squad_ids, bank, ft, sell_prices, available_chips, ft_known
             except Exception as auth_err:
-                logging.warning(f"Failed to fetch authenticated my-team endpoint: {auth_err}")
+                # A cookie that is set but rejected is an ERROR, not a note. It
+                # silently returns the engine to the very assumptions the
+                # authenticated path exists to replace: chips, selling prices
+                # and free transfers all fall back to guesses. FPL session
+                # cookies expire, so this will happen eventually and must be
+                # obvious when it does. The value is never logged.
+                logging.error(
+                    "FPL_COOKIE is set but the authenticated endpoint rejected "
+                    "it (%s). It has most likely expired - fetch a fresh one. "
+                    "Falling back to public data, so bank, free transfers and "
+                    "selling prices are now ASSUMED rather than read.",
+                    type(auth_err).__name__)
                 
         # Public fallback. Chip state comes from the public history endpoint
         # rather than being assumed: this path used to return the optimistic
