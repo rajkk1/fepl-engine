@@ -1,4 +1,5 @@
 import requests
+import datetime
 import logging
 from typing import Dict, Any, List, Optional
 
@@ -161,23 +162,57 @@ def get_my_team(team_id: int, cookie: str) -> Dict[str, Any]:
     return fetch_json(url, use_cache=False, cookie=cookie)
 
 def get_current_gameweek(bootstrap: Optional[Dict[str, Any]] = None) -> int:
-    """Determine current or next active gameweek ID."""
+    """
+    The earliest gameweek that can still be acted on.
+
+    Decided by deadline, not by FPL's flags. Once a deadline passes you cannot
+    transfer into that gameweek, whatever `is_current` says - and FPL leaves
+    `is_current` set on the just-played gameweek until the next deadline, while
+    flipping `finished` only once every match is finalised. The previous test
+    was `is_current and not finished`, which is true for exactly the window
+    between "matches played" and "results confirmed", so the engine planned
+    transfers for a gameweek that had been unplayable for days. It published such
+    a plan on 2026-09-07 for GW3, whose deadline had passed on 2026-09-04,
+    complete with a -8 point hit.
+
+    Iteration order made the flags unusable anyway: the check ran per event in
+    order, so `is_current` on an earlier gameweek returned before `is_next` on
+    the later one was ever reached.
+    """
     if bootstrap is None:
         bootstrap = get_bootstrap_static()
-    
-    events = bootstrap.get("events", [])
+
+    events = bootstrap.get("events") or []
+    now = datetime.datetime.now(datetime.timezone.utc)
+
+    upcoming = []
     for event in events:
-        if event.get("is_next"):
-            return event.get("id")
-        if event.get("is_current") and not event.get("finished"):
-            return event.get("id")
-    
-    # Default fallback
+        raw = event.get("deadline_time")
+        eid = event.get("id")
+        if not raw or eid is None:
+            continue
+        try:
+            deadline = datetime.datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            continue
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=datetime.timezone.utc)
+        if deadline > now:
+            upcoming.append((deadline, int(eid)))
+    if upcoming:
+        return min(upcoming)[1]
+
+    # No deadline ahead of us: the season is over, or no deadline could be
+    # parsed. Fall back to the flags, then to the last gameweek that exists.
     for event in events:
-        if not event.get("finished"):
-            return event.get("id")
-    
-    return 1
+        if event.get("is_next") and event.get("id") is not None:
+            return int(event["id"])
+    for event in events:
+        if event.get("is_current") and event.get("id") is not None:
+            return int(event["id"])
+    ids = [int(e["id"]) for e in events if e.get("id") is not None]
+    return max(ids) if ids else 1
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
