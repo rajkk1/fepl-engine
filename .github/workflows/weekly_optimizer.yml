@@ -33,29 +33,32 @@ jobs:
           FPL_COOKIE: ${{ secrets.FPL_COOKIE }}
         run: uv run python weekly_manager.py --export-json public/weekly_plan.json
 
-      - name: Is the forecast sound?
+      - name: Should this replace the published plan?
         id: quality
-        # A fixture-blind plan is worse than yesterday's good one, and
-        # actions-gh-pages replaces the whole directory - so publishing a
-        # degraded plan destroys the last usable one.
+        # Publishing is destructive - actions-gh-pages replaces the whole
+        # directory - but refusing to publish silently serves whatever is
+        # already there, which may belong to a gameweek that has been played.
+        # `publish_gate` decides by gameweek, not by quality alone.
         run: |
-          deg=$(python -c "import json;print(json.load(open('public/weekly_plan.json')).get('degraded', False))")
-          echo "degraded=$deg" >> "$GITHUB_OUTPUT"
-          if [ "$deg" = "True" ]; then
-            echo "::warning::Forecast degraded to flat team ratings (bookmaker odds unavailable). Keeping the previously published plan."
+          git fetch --depth=1 origin gh-pages || true
+          git show origin/gh-pages:weekly_plan.json > /tmp/published.json 2>/dev/null || true
+          uv run python publish_gate.py public/weekly_plan.json /tmp/published.json \
+            | tee -a "$GITHUB_OUTPUT"
+          if [ "$(grep -c '^publish=false' "$GITHUB_OUTPUT")" != "0" ]; then
+            echo "::warning::Keeping the currently published plan; see reason above."
           fi
 
       - name: Send Discord notification
         # A failed notification should never block publishing the plan, and a
         # degraded plan should not be announced at all.
-        if: steps.quality.outputs.degraded == 'False'
+        if: steps.quality.outputs.publish == 'true'
         continue-on-error: true
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: uv run python notify.py
 
       - name: Deploy JSON to GitHub Pages
-        if: steps.quality.outputs.degraded == 'False'
+        if: steps.quality.outputs.publish == 'true'
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}

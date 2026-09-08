@@ -151,16 +151,16 @@ def test_the_exported_plan_carries_the_flag():
     assert "status_out=fit_status" in src
 
 
-def test_the_workflow_gates_publishing_on_it():
+def test_the_workflow_will_not_publish_unconditionally():
     """
-    actions-gh-pages replaces the whole directory, so publishing a degraded plan
-    destroys the last usable one. Both the deploy and the Discord alert must be
-    conditional, and the check must come first.
+    The deploy and the alert must both be conditional. Which condition is
+    `publish_gate`'s business and is tested there; this only pins that neither
+    step publishes blind, since actions-gh-pages replaces the whole directory.
     """
     import pathlib
 
     wf = pathlib.Path(".github/workflows/weekly_optimizer.yml").read_text()
-    assert "steps.quality.outputs.degraded == 'False'" in wf
-    check = wf.index("Is the forecast sound?")
-    assert check < wf.index("Send Discord notification")
-    assert check < wf.index("Deploy JSON to GitHub Pages")
+    for step in ("Send Discord notification", "Deploy JSON to GitHub Pages"):
+        tail = wf[wf.index(step):]
+        assert "if:" in tail[:tail.index("- name:") if "- name:" in tail else len(tail)], \
+            f"{step} is unconditional"
