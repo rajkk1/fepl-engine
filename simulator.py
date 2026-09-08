@@ -159,7 +159,8 @@ def _baseline_matrix(df_gw, horizon_gws: List[int], source: str,
 def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
                           xp_source: str = "engine", from_gw: int = 1,
                           to_gw: Optional[int] = None, data=None,
-                          verbose: bool = True) -> Dict[str, Any]:
+                          verbose: bool = True, max_hits_per_gw: int = 2,
+                          xp_cache: Optional[Dict[Any, Any]] = None) -> Dict[str, Any]:
     """Replay a season, returning the result rather than only logging it."""
     if xp_source not in XP_SOURCES:
         raise ValueError(f"xp_source must be one of {XP_SOURCES}")
@@ -184,10 +185,20 @@ def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
         position = {p["id"]: int(p["element_type"]) for p in elements}
 
         if xp_source == "engine":
-            from xp_model import generate_merv_matrix
-            xp_matrix = generate_merv_matrix(
-                horizon_gws, bootstrap=bootstrap, fixtures=fixtures,
-                all_history=all_history, season=season_int)
+            # The forecast depends only on (season, gameweek, horizon) - never on
+            # the squad - so it can be shared across variants that differ only in
+            # how the optimiser is allowed to spend. Without this, comparing hit
+            # thresholds re-runs an identical forecast once per threshold.
+            key = (season_str, gw, tuple(horizon_gws))
+            if xp_cache is not None and key in xp_cache:
+                xp_matrix = xp_cache[key]
+            else:
+                from xp_model import generate_merv_matrix
+                xp_matrix = generate_merv_matrix(
+                    horizon_gws, bootstrap=bootstrap, fixtures=fixtures,
+                    all_history=all_history, season=season_int)
+                if xp_cache is not None:
+                    xp_cache[key] = xp_matrix
         else:
             xp_matrix = _baseline_matrix(
                 df_gw, horizon_gws, xp_source, [p["id"] for p in elements])
@@ -204,7 +215,7 @@ def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
             res = solve_fpl_optimization(
                 bootstrap, xp_matrix, horizon_gws, initial_squad_ids=squad_ids,
                 initial_bank=bank, initial_sell_prices=sell_prices,
-                initial_ft=free_transfers)
+                initial_ft=free_transfers, max_hits_per_gw=max_hits_per_gw)
         except Exception as e:
             logger.error("GW%d: solver failed (%s); holding the squad.", gw, e)
             res = None

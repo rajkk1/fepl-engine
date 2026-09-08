@@ -15,6 +15,8 @@ Changes over the original implementation:
   * multiple bookmakers are tried, with the consensus columns as backstop
 """
 import logging
+import random
+import time
 import math
 from typing import Dict, Any, List, Optional
 
@@ -54,6 +56,57 @@ def _devig(*probs: float) -> List[float]:
     return [p / total for p in probs]
 
 
+# football-data.co.uk answers a transient outage with a 503 and a `retry-after`
+# header. Probed three times four seconds apart during a real outage it returned
+# 341, 70 and 77 - so it is not a per-request estimate of recovery, which would
+# count down in step with elapsed time.
+#
+# It is very likely *deliberate jitter* rather than noise: the standard
+# load-shedding pattern randomises Retry-After precisely so that thousands of
+# clients hitting the same 503 do not all return at the same instant and
+# re-create the overload. Read that way the header is meaningful as a back-off
+# signal and meaningless as an ETA, which is the opposite of how it reads.
+#
+# Two consequences. We do not treat it as an ETA - a single daily client gains
+# nothing from an arbitrary 70-to-341-second wait, and it would make the job's
+# duration unpredictable. But we do add jitter of our own, because deterministic
+# backoff across many clients is exactly what the server's jitter exists to
+# prevent, and being a good citizen of a free data source costs nothing.
+#
+# The half that actually caused the bug is neither: a failure must not be
+# *cached*. The previous code stored None against the season, so one 503 left
+# the whole process fixture-blind - every later gameweek read that None, fell
+# back to flat team ratings, and the resulting forecast was published anyway.
+ODDS_MAX_ATTEMPTS = 4
+ODDS_BASE_DELAY = 4.0          # 4s, 8s, 16s plus jitter - bounded
+
+
+def _read_odds_csv(url: str, season_str: str):
+    """The odds CSV, or None if it could not be fetched. Never caches failure."""
+    for attempt in range(ODDS_MAX_ATTEMPTS):
+        try:
+            return pd.read_csv(url)
+        except Exception as e:
+            # 404 means the season is genuinely not published; retrying cannot
+            # help. Anything else - 5xx, timeouts, resets - is transient.
+            if getattr(e, "code", None) == 404:
+                logger.warning("No odds file published for %s (404).", season_str)
+                return None
+            if attempt == ODDS_MAX_ATTEMPTS - 1:
+                logger.error(
+                    "Could not fetch market odds for %s after %d attempts (%s). "
+                    "Team ratings will be FLAT and the forecast will carry no "
+                    "fixture signal.", season_str, ODDS_MAX_ATTEMPTS, e)
+                return None
+            # Jittered so repeated clients do not synchronise on the retry.
+            wait = ODDS_BASE_DELAY * (2 ** attempt) * (1.0 + random.random())
+            logger.warning(
+                "Market odds for %s unavailable (%s); retrying in %.0fs [%d/%d]",
+                season_str, e, wait, attempt + 1, ODDS_MAX_ATTEMPTS - 1)
+            time.sleep(wait)
+    return None
+
+
 class MarketOddsModel:
     def __init__(self):
         self.odds_df: Optional[pd.DataFrame] = None
@@ -86,11 +139,12 @@ class MarketOddsModel:
             return self.odds_df is not None and len(self.odds_df) > 0
 
         url = f"https://www.football-data.co.uk/mmz4281/{season_str}/E0.csv"
-        try:
-            df = pd.read_csv(url)
-        except Exception as e:
-            logger.warning("Could not fetch market odds for %s: %s", season_str, e)
-            _GLOBAL_ODDS_CACHE[season_str] = None
+        df = _read_odds_csv(url, season_str)
+        if df is None:
+            # NOT cached. A failed fetch is not the same fact as "this season
+            # has no odds", and conflating them meant one 503 left the whole
+            # process fixture-blind: every later gameweek read the cached None
+            # and fell back to flat team ratings.
             self.odds_df = None
             return False
 
@@ -106,6 +160,8 @@ class MarketOddsModel:
                 sub.columns = ["Date", "HomeTeam", "AwayTeam", "H", "D", "A", "O", "U"]
                 frames.append(sub)
         if not frames:
+            # This one is genuine and worth caching: the file arrived and does
+            # not carry prices, which no amount of retrying will change.
             logger.warning("Odds file for %s has no recognised bookmaker columns", season_str)
             _GLOBAL_ODDS_CACHE[season_str] = None
             self.odds_df = None
