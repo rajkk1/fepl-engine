@@ -444,6 +444,25 @@ https://<user>.github.io/<repo>/weekly_plan.json
 directly. `gh-pages` is a publish target and is *meant* to stay permanently
 divergent from `main` — never merge it.
 
+The published plan carries `gameweek` and `generated_at`, so a reader can always
+tell what it is for and when it was built.
+
+Publishing is destructive — `actions-gh-pages` replaces the whole directory, so
+a bad plan deletes the good one rather than sitting beside it. But refusing to
+publish is not automatically safe either, because the live plan has no expiry:
+"we kept the last good plan" and "we are silently serving a gameweek that has
+already been played" look identical to whoever opens it. That is how a GW3 plan
+came to be acted on days after GW3 finished.
+
+So `publish_gate.py` decides by gameweek rather than by quality alone:
+
+| new plan | already published | outcome |
+|---|---|---|
+| sound | anything | publish |
+| degraded | sound, **same** gameweek | **keep the published one** — still in play |
+| degraded | sound, earlier gameweek | publish the degraded plan; it is stale, and a degraded plan at least says so |
+| degraded | degraded, or nothing | publish; no good plan is being protected |
+
 Nothing writes the plan back to `main`, and `public/weekly_plan.json` is
 gitignored for that reason: a copy committed there would be frozen at whatever
 was checked in and would then sit in the obvious place looking authoritative

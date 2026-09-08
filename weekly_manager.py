@@ -6,6 +6,7 @@ import sys
 import logging
 import os
 import argparse
+import datetime
 import json
 from dotenv import load_dotenv
 
@@ -598,6 +599,13 @@ def main():
             # overwrite the last good plan.
             "degraded": degraded,
             "fixture_model": fit_status.get("source"),
+            # Staleness has to be visible. Without these, "we kept the last good
+            # plan" and "we are silently serving a gameweek that has already
+            # been played" read identically to whoever opens the file - which is
+            # how a GW3 plan came to be acted on days after GW3 finished. The
+            # gameweek is above; this says when it was built.
+            "generated_at": datetime.datetime.now(
+                datetime.timezone.utc).replace(microsecond=0).isoformat(),
         }
         os.makedirs(os.path.dirname(os.path.abspath(args.export_json)), exist_ok=True)
         with open(args.export_json, "w", encoding="utf-8") as f:
