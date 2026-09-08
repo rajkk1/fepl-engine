@@ -1729,9 +1729,13 @@ def _prepare(horizon_gws, bootstrap, fixtures, all_history, season,
         if f.get("team_h_score") is not None and f.get("team_a_score") is not None
     ]) if past_fixtures else None
 
-    ensemble.fit(teams, past_fixtures, current_gw, all_history, players,
-                 season=season, prior_ratings=prior_ratings, results_df=results_df,
-                 all_fixtures=fixtures)
+    fit_status = ensemble.fit(
+        teams, past_fixtures, current_gw, all_history, players,
+        season=season, prior_ratings=prior_ratings, results_df=results_df,
+        all_fixtures=fixtures)
+    # Carried out so a caller can refuse to act on a fixture-blind forecast.
+    # `fit` has always reported this; nothing ever read it.
+    ensemble.fit_status = fit_status or {}
 
     if calibrate:
         ensemble.fit_calibration(players, fixtures, all_history, current_gw)
@@ -1927,7 +1931,7 @@ def generate_merv_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None,
                          half_life: float = 5.0, prior_weight: float = 1.0,
                          calibrate: bool = False, prior_ratings=None,
                          calibration_method: str = "linear",
-                         lineup_overrides=None, draws_out=None
+                         lineup_overrides=None, draws_out=None, status_out=None
                          ) -> Dict[int, Dict[Any, float]]:
     """
     Marginal Expected Rank Value: expected points adjusted for how a pick moves
@@ -1936,6 +1940,11 @@ def generate_merv_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None,
     Variance now comes from the correlated match simulation rather than an
     independent per-player Monte Carlo, so team stacking is priced correctly.
     With risk_aversion == 0 this is exactly `generate_xp_matrix`.
+
+    Pass a dict as `status_out` to receive the team-rating fit status, whose
+    `degraded` flag says the forecast carries no fixture signal - every fixture
+    priced identically. A caller that publishes plans should refuse to overwrite
+    a good one with that.
 
     Pass a dict as `draws_out` to receive the raw correlated point draws, keyed
     by (player_id, gameweek). `match_sim.squad_score_draws` turns those into a
@@ -1950,6 +1959,8 @@ def generate_merv_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None,
      current_gw) = _prepare(horizon_gws, bootstrap, fixtures, all_history, season,
                             half_life, prior_weight, calibrate, prior_ratings,
                             calibration_method, lineup_overrides)
+    if status_out is not None:
+        status_out.update(getattr(ensemble, "fit_status", {}) or {})
 
     eo_matrix = build_eo_matrix(players)
     players_by_team: Dict[int, List] = {}

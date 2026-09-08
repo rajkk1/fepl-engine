@@ -86,3 +86,21 @@ def gw_frame():
                          "selected": 1000 * (21 - pid),
                          "value": 50 + pid, "xP": 2.0})
     return pd.DataFrame(rows)
+
+
+@pytest.fixture(autouse=True)
+def _no_odds_backoff(monkeypatch):
+    """
+    Never sleep in the test suite.
+
+    `test_smoke` reaches the real odds feed through `generate_xp_matrix`, which
+    is a hidden network dependency the suite has always had - invisible while
+    the feed was up. When football-data.co.uk went 503 the new retry turned each
+    call into four attempts with exponential backoff and the suite went from 18
+    seconds to 12 minutes. The retry is right for a daily job and wrong for a
+    test, so the delay is zeroed rather than the behaviour changed: the same
+    code paths run, just without waiting.
+    """
+    import market_odds
+
+    monkeypatch.setattr(market_odds, "ODDS_BASE_DELAY", 0.0)

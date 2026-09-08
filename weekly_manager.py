@@ -381,11 +381,28 @@ def main():
               "(--lineups / FPL_LINEUPS); minutes come from the model alone.")
 
     point_draws = {}
+    # The team-rating fit reports whether it degraded to flat ratings. Nothing
+    # used to read it, so a forecast with no fixture signal was published as if
+    # it were sound.
+    fit_status: dict = {}
     xp_matrix = generate_merv_matrix(
         horizon_gws, bootstrap=bootstrap, fixtures=fixtures,
         risk_aversion=args.risk_aversion, calibrate=args.calibrate,
         lineup_overrides=lineups, draws_out=point_draws,
-    )
+        status_out=fit_status)
+    degraded = bool(fit_status.get("degraded"))
+    if degraded:
+        print()
+        print("=" * 70)
+        print(" ⚠️  DEGRADED FORECAST - DO NOT ACT ON THIS PLAN")
+        print("=" * 70)
+        print(f" Team ratings could not be fitted ({fit_status.get('source')}), so")
+        print(" every fixture is priced identically: a home game against the")
+        print(" bottom club reads the same as an away game at the top. Transfers,")
+        print(" captaincy and chip timing below are all built on that.")
+        print(" Usually the bookmaker odds feed is temporarily unavailable;")
+        print(" re-run later.")
+        print("=" * 70)
 
     active_chip = args.chip.strip().lower() if args.chip else ""
     if active_chip and active_chip not in ALL_CHIPS:
@@ -575,7 +592,12 @@ def main():
             "starters": starters,
             "bench": sorted_bench,
             "expected_score": res.get("gameweeks", {}).get(current_gw, {}).get("gw_xp", sum(p["xp"] for p in starters)),
-            "remaining_bank": gw1_data.get("bank", 0.0)
+            "remaining_bank": gw1_data.get("bank", 0.0),
+            # Consumers must be able to tell a sound plan from a fixture-blind
+            # one; the publishing workflow reads this to decide whether to
+            # overwrite the last good plan.
+            "degraded": degraded,
+            "fixture_model": fit_status.get("source"),
         }
         os.makedirs(os.path.dirname(os.path.abspath(args.export_json)), exist_ok=True)
         with open(args.export_json, "w", encoding="utf-8") as f:
