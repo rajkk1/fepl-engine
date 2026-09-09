@@ -15,6 +15,7 @@ Changes over the original implementation:
   * multiple bookmakers are tried, with the consensus columns as backstop
 """
 import logging
+import os
 import random
 import time
 import math
@@ -81,6 +82,57 @@ ODDS_MAX_ATTEMPTS = 4
 ODDS_BASE_DELAY = 4.0          # 4s, 8s, 16s plus jitter - bounded
 
 
+# A last-good copy on disk, because the ratings barely care how fresh the odds
+# are. Team ratings decay with a 10-match half-life, so a file from yesterday is
+# missing at most one round and is worth far more than the fallbacks below it:
+# `results_poisson` uses real scorelines but knows nothing about *upcoming*
+# fixtures, which is the whole reason for using the market in the first place.
+#
+# This does not rescue an outage that begins before the first successful fetch -
+# there is nothing to fall back to - but it turns every later one into a
+# non-event. football-data.co.uk was 503 for more than a day in September 2026,
+# which cost two experiments and would have degraded every scheduled run.
+ODDS_CACHE_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "data", "odds")
+# Beyond this the copy is missing too many rounds to be worth preferring over a
+# fit on actual results.
+ODDS_CACHE_MAX_AGE_DAYS = 45.0
+
+
+def _cache_path(season_str: str) -> str:
+    return os.path.join(ODDS_CACHE_DIR, f"{season_str}.csv")
+
+
+def _save_cached_odds(season_str: str, df) -> None:
+    """Keep the last good copy. Never fatal: a cache miss beats a crash."""
+    try:
+        os.makedirs(ODDS_CACHE_DIR, exist_ok=True)
+        tmp = _cache_path(season_str) + ".tmp"
+        df.to_csv(tmp, index=False)
+        os.replace(tmp, _cache_path(season_str))   # atomic; no torn file
+    except Exception as e:
+        logger.debug("Could not cache odds for %s: %s", season_str, e)
+
+
+def _load_cached_odds(season_str: str):
+    """(dataframe, age_in_days), or (None, None)."""
+    path = _cache_path(season_str)
+    try:
+        if not os.path.exists(path):
+            return None, None
+        age = max(0.0, (time.time() - os.path.getmtime(path)) / 86400.0)
+        if age > ODDS_CACHE_MAX_AGE_DAYS:
+            logger.warning(
+                "Cached odds for %s are %.0f days old (limit %.0f); ignoring "
+                "them in favour of the fallback chain.",
+                season_str, age, ODDS_CACHE_MAX_AGE_DAYS)
+            return None, None
+        return pd.read_csv(path), age
+    except Exception as e:
+        logger.debug("Could not read cached odds for %s: %s", season_str, e)
+        return None, None
+
+
 def _read_odds_csv(url: str, season_str: str):
     """The odds CSV, or None if it could not be fetched. Never caches failure."""
     for attempt in range(ODDS_MAX_ATTEMPTS):
@@ -141,12 +193,27 @@ class MarketOddsModel:
         url = f"https://www.football-data.co.uk/mmz4281/{season_str}/E0.csv"
         df = _read_odds_csv(url, season_str)
         if df is None:
+            # Before giving up, the last good copy. Slightly stale market
+            # information still prices fixtures; the fallbacks below cannot.
+            df, age = _load_cached_odds(season_str)
+            if df is not None:
+                logger.warning(
+                    "Odds feed unavailable for %s; using the cached copy from "
+                    "%.1f days ago. Ratings will miss the most recent matches.",
+                    season_str, age)
+        if df is None:
             # NOT cached. A failed fetch is not the same fact as "this season
             # has no odds", and conflating them meant one 503 left the whole
             # process fixture-blind: every later gameweek read the cached None
             # and fell back to flat team ratings.
             self.odds_df = None
             return False
+
+        # Cache the file as fetched. Everything below rewrites `Date` into
+        # datetimes, and a datetime round-trips through CSV as ISO, which the
+        # `%d/%m/%Y` parse above turns into NaT - so caching the mutated frame
+        # produced a file that reloaded as zero matches.
+        as_fetched = df.copy()
 
         df["Date"] = pd.to_datetime(df["Date"], format="%d/%m/%Y", errors="coerce")
 
@@ -175,6 +242,7 @@ class MarketOddsModel:
         merged = merged.sort_values("Date").reset_index(drop=True)
         self.odds_df = self._augment_with_lambdas(merged)
         _GLOBAL_ODDS_CACHE[season_str] = self.odds_df
+        _save_cached_odds(season_str, as_fetched)
         logger.info("Loaded %d priced matches for season %s", len(self.odds_df), season_str)
         return len(self.odds_df) > 0
 
