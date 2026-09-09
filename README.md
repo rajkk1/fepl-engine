@@ -431,6 +431,41 @@ one with `--chip`.
 
 Enable GitHub Pages on the `gh-pages` branch to publish `weekly_plan.json`.
 
+## When the odds feed is down
+
+football-data.co.uk is a free static host and it does go down — it returned 503
+for every season for more than a day in September 2026. Team strength is the
+first stage of the forecast, so losing it costs the fixture signal entirely.
+
+What happens, in order:
+
+1. **Retry**, four attempts with jittered exponential backoff. A 404 is not
+   retried — a season that is not published will not become published, and
+   waiting would stall the job for nothing. The server's own `retry-after` is
+   *ignored as an estimate*: probed during the real outage it returned 341, 70
+   and 77 seconds four seconds apart, which is deliberate load-shedding jitter
+   rather than an ETA. It is still a signal to back off, so we do — on our own
+   schedule.
+2. **The last good copy on disk** (`data/odds/<season>.csv`, written on every
+   successful fetch). Slightly stale market prices still price fixtures; the
+   fallbacks below cannot. Ignored past `ODDS_CACHE_MAX_AGE_DAYS` (45), by which
+   point a fit on actual results is the better bet.
+3. **`results_poisson`** — real scorelines, but blind to *upcoming* fixtures,
+   which is the whole reason for using the market in the first place.
+4. **Flat ratings**, which means no fixture signal at all. This sets the
+   `degraded` flag, and the publish gate below is what stops such a plan from
+   replacing a sound one for the same gameweek.
+
+A failed fetch is never cached in memory. Conflating "the request failed" with
+"this season has no odds" meant a single 503 left the whole process
+fixture-blind: every later gameweek read the cached `None` and fell back to flat
+ratings.
+
+The disk cache is not in the repository (`data/` is gitignored), and a fresh CI
+runner starts without it, so the workflow carries it between runs with
+`actions/cache` under a rolling key. If the entry is evicted the job still
+succeeds — it just falls through to step 3.
+
 ## Where the plan lives
 
 The weekly job writes the plan and publishes the whole `public/` directory to the

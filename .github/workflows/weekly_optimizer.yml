@@ -22,6 +22,24 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
+      - name: Restore the last good odds file
+        # A fresh runner has no `data/odds`, so the on-disk fallback in
+        # market_odds.py can only help here if the cache is carried between
+        # runs. `key` is unique per run so the post-step always writes a new
+        # entry, and `restore-keys` picks up the most recent previous one -
+        # a rolling last-known-good copy. A restore counts as an access, so a
+        # daily job keeps the entry from being evicted.
+        #
+        # Losing it is not a failure: without it an outage means flat team
+        # ratings and a plan the publish gate refuses to promote. With it, an
+        # outage costs only the most recent round of matches.
+        uses: actions/cache@v4
+        with:
+          path: data/odds
+          key: odds-${{ github.run_id }}
+          restore-keys: |
+            odds-
+
       - name: Unit tests
         # Offline only - the daily job must not fail because an external API
         # is briefly unavailable.
