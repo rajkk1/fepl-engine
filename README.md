@@ -434,7 +434,10 @@ player the no-hit arm usually gets there first.
 
 `hit_cost` is exposed as a parameter on `solve_fpl_optimization` and
 `run_season_simulation` so the question can be re-asked cheaply against more
-seasons, which is what it would take to resolve a difference this small.
+seasons, which is what it would take to resolve a difference this small. The
+harness that produced all of the above is in `experiments/` — `hit_cap_sweep.py`
+to run it, `hit_cap_report.py` to read it, including the validity checks that
+stop it being over-read.
 
 ## Setup
 
@@ -649,6 +652,7 @@ Run the tests with `uv run pytest tests/ -q`. They are offline by default; add
 | `simulator.py` | Full-season replay of the engine's own decisions |
 | `weekly_manager.py` | CLI entry point |
 | `notify.py` | Discord deadline alerts |
+| `experiments/` | Slow one-off measurements, kept so conclusions can be re-checked |
 | `public/` | Published JSON plan |
 
 `public/index.html` redirects to the raw `weekly_plan.json`; `public/app.html`

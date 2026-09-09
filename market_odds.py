@@ -167,10 +167,17 @@ def _read_odds_csv(url: str, season_str: str):
                 logger.warning("No odds file published for %s (404).", season_str)
                 return None
             if attempt == ODDS_MAX_ATTEMPTS - 1:
-                logger.error(
-                    "Could not fetch market odds for %s after %d attempts (%s). "
-                    "Team ratings will be FLAT and the forecast will carry no "
-                    "fixture signal.", season_str, ODDS_MAX_ATTEMPTS, e)
+                # Only that the PRIMARY is unavailable. This function knows
+                # nothing about the cache, the mirror or the rating fallbacks,
+                # so it must not predict the outcome - it used to announce
+                # "team ratings will be FLAT" and was then immediately followed
+                # by a successful load from the cache, which makes an outage
+                # look far worse than it is when read back in a CI log.
+                # `fetch_odds` says what actually happened.
+                logger.warning(
+                    "Primary odds feed unavailable for %s after %d attempts "
+                    "(%s); trying the fallbacks.",
+                    season_str, ODDS_MAX_ATTEMPTS, e)
                 return None
             # Jittered so repeated clients do not synchronise on the retry.
             wait = ODDS_BASE_DELAY * (2 ** attempt) * (1.0 + random.random())
@@ -316,6 +323,13 @@ class MarketOddsModel:
             # cached, which is the case that actually bit.
             df = _fetch_mirror_odds(season_str)
         if df is None:
+            # Every source is exhausted, so this is the one place that can
+            # honestly say what the consequence is.
+            logger.error(
+                "No market odds for %s from the feed, the cache or the mirror. "
+                "Team ratings will fall back to results, or to FLAT if there "
+                "are none - the forecast will carry little or no fixture "
+                "signal and the plan will be marked degraded.", season_str)
             # NOT cached. A failed fetch is not the same fact as "this season
             # has no odds", and conflating them meant one 503 left the whole
             # process fixture-blind: every later gameweek read the cached None

@@ -265,7 +265,10 @@ def test_the_cache_reports_its_age(cache_dir):
     M._save_cached_odds("2526", _priced(days_ago=2))
     df, age = M._load_cached_odds("2526")
     assert df is not None
-    assert 1.9 < age < 2.6
+    # football-data dates carry no time of day, so a match "2 days ago" parses
+    # as that day's midnight and the age lands anywhere in [2, 3) depending on
+    # the hour the test runs. Only the day matters for a 45-day limit.
+    assert 2.0 <= age < 3.0
 
 
 def test_caching_never_raises(monkeypatch):
@@ -435,3 +438,48 @@ def test_the_committed_floor_is_present_and_usable():
         assert len(df) > 0, path
         d = pd.to_datetime(df["Date"], format="%d/%m/%Y", errors="coerce")
         assert d.notna().all(), f"{path} has dates the loader cannot parse"
+
+
+# ------------------------------------------------- the log must not lie either
+
+
+def test_a_rescued_outage_does_not_claim_flat_ratings(monkeypatch, caplog,
+                                                      cache_dir):
+    """
+    The retry used to sign off with "Team ratings will be FLAT and the forecast
+    will carry no fixture signal" - from inside a function that knows nothing
+    about the cache, the mirror, or the rating fallbacks. In the CI log that
+    line sat one line above "Loaded 380 priced matches", so a rescued outage
+    read as a broken run. Predicting the outcome is `fetch_odds`'s job.
+    """
+    import logging
+
+    M._save_cached_odds("2526", _priced())
+    M._GLOBAL_ODDS_CACHE.clear()
+    monkeypatch.setattr(M.pd, "read_csv", _reading_from_disk_only(cache_dir))
+
+    with caplog.at_level(logging.WARNING, logger="market_odds"):
+        assert M.MarketOddsModel().fetch_odds(season_str="2526") is True
+
+    text = caplog.text
+    assert "FLAT" not in text, "announced flat ratings on a run that recovered"
+    assert "Primary odds feed unavailable" in text, "the outage is still reported"
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR], \
+        "a recovered outage is not an error"
+
+
+def test_a_genuine_dead_end_is_still_loud(monkeypatch, caplog, cache_dir):
+    """The other half: when every source really is exhausted, say so plainly -
+    that run produces a degraded plan and someone should be able to see why."""
+    import logging
+
+    monkeypatch.setattr(M.pd, "read_csv",
+                        lambda *a, **k: (_ for _ in ()).throw(_Boom(503)))
+
+    with caplog.at_level(logging.WARNING, logger="market_odds"):
+        assert M.MarketOddsModel().fetch_odds(season_str="2526") is False
+
+    errors = [r.getMessage() for r in caplog.records
+              if r.levelno >= logging.ERROR]
+    assert errors, "a real dead end must be an error"
+    assert any("FLAT" in m and "degraded" in m for m in errors)
