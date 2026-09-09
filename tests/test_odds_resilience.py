@@ -76,10 +76,11 @@ def test_a_transient_failure_is_retried(monkeypatch):
     calls = {"n": 0}
 
     def always_503(path, *a, **k):
-        # Only the network attempts count. The cache fallback reads a local
-        # path through the same `read_csv`, and folding that in would make this
-        # assertion about plumbing rather than about retries.
-        if str(path).startswith("http"):
+        # Only attempts on the PRIMARY count. The cache fallback reads a local
+        # path and the mirror reads a different host, both through this same
+        # `read_csv`; folding either in would make this assertion about
+        # plumbing rather than about retries.
+        if "football-data.co.uk" in str(path):
             calls["n"] += 1
         raise _Boom(503)
 
@@ -94,8 +95,9 @@ def test_a_404_is_not_retried(monkeypatch):
     monkeypatch.setattr(M.time, "sleep", lambda *_: None)
     calls = {"n": 0}
 
-    def missing(*a, **k):
-        calls["n"] += 1
+    def missing(path, *a, **k):
+        if "football-data.co.uk" in str(path):
+            calls["n"] += 1
         raise _Boom(404)
 
     monkeypatch.setattr(M.pd, "read_csv", missing)
@@ -186,9 +188,16 @@ def cache_dir(tmp_path):
     return tmp_path / "odds"
 
 
-def _priced():
+def _priced(days_ago=3):
+    """One priced match, dated recently by default.
+
+    The date matters now: cache staleness is measured from the newest match in
+    the file, so a hardcoded past date would make every cache fixture stale and
+    the fallback tests would pass for the wrong reason.
+    """
+    when = (pd.Timestamp.now() - pd.Timedelta(days=days_ago)).strftime("%d/%m/%Y")
     return pd.DataFrame({
-        "Date": ["12/08/2025"], "HomeTeam": ["Arsenal"], "AwayTeam": ["Chelsea"],
+        "Date": [when], "HomeTeam": ["Arsenal"], "AwayTeam": ["Chelsea"],
         "B365H": [2.0], "B365D": [3.4], "B365A": [3.6],
         "B365>2.5": [1.9], "B365<2.5": [1.9],
     })
@@ -246,25 +255,20 @@ def _reading_from_disk_only(cache_dir, live=False):
 
 def test_a_cached_copy_beyond_the_age_limit_is_ignored(monkeypatch, cache_dir):
     """Too many missing rounds and a fit on real results is the better bet."""
-    import os
-
-    M._save_cached_odds("2526", _priced())
-    path = M._cache_path("2526")
-    old = M.time.time() - (M.ODDS_CACHE_MAX_AGE_DAYS + 5) * 86400
-    os.utime(path, (old, old))
+    M._save_cached_odds("2526", _priced(days_ago=M.ODDS_CACHE_MAX_AGE_DAYS + 5))
     assert M._load_cached_odds("2526") == (None, None)
 
 
 def test_the_cache_reports_its_age(cache_dir):
-    import os
-
-    M._save_cached_odds("2526", _priced())
-    path = M._cache_path("2526")
-    two_days = M.time.time() - 2 * 86400
-    os.utime(path, (two_days, two_days))
+    """The caller logs this to say how much the ratings are missing, so it has
+    to be the age of the market information, not of the file."""
+    M._save_cached_odds("2526", _priced(days_ago=2))
     df, age = M._load_cached_odds("2526")
     assert df is not None
-    assert 1.9 < age < 2.1
+    # football-data dates carry no time of day, so a match "2 days ago" parses
+    # as that day's midnight and the age lands anywhere in [2, 3) depending on
+    # the hour the test runs. Only the day matters for a 45-day limit.
+    assert 2.0 <= age < 3.0
 
 
 def test_caching_never_raises(monkeypatch):
@@ -282,3 +286,200 @@ def test_an_unreadable_cache_file_is_survivable(cache_dir):
         f.write("\x00\x00 not a csv \x00")
     df, _ = M._load_cached_odds("2526")
     assert df is None or len(df) >= 0          # either way, no exception
+
+
+# ------------------------------------------------------------------ the mirror
+
+
+def _mirror_rows():
+    """Two E0 matches in the mirror's own schema, one per season."""
+    return pd.DataFrame({
+        "Division": ["E0", "E0", "D1"],
+        "MatchDate": ["2025-08-16", "2024-08-17", "2025-08-16"],
+        "HomeTeam": ["Arsenal", "Chelsea", "Bayern Munich"],
+        "AwayTeam": ["Chelsea", "Arsenal", "Leverkusen"],
+        "FTHome": [1, 2, 3], "FTAway": [0, 2, 1],
+        "OddHome": [2.0, 2.5, 1.5], "OddDraw": [3.4, 3.3, 4.0],
+        "OddAway": [3.6, 2.8, 6.0],
+        "Over25": [1.9, 1.8, 1.6], "Under25": [1.9, 2.0, 2.3],
+    })
+
+
+@pytest.fixture
+def mirror(monkeypatch):
+    """Mirror content served from memory - the real code path, no download."""
+    monkeypatch.setitem(M._MIRROR_FRAME, "df", _mirror_rows())
+
+
+def test_the_mirror_translates_into_football_datas_own_schema(mirror):
+    """Downstream code - bookmaker-group selection, the cache format, the team
+    mapping - must not be able to tell where the numbers came from."""
+    out = M._fetch_mirror_odds("2526")
+    assert list(out.columns[:3]) == ["Date", "HomeTeam", "AwayTeam"]
+    for col in ("B365H", "B365D", "B365A", "B365>2.5", "B365<2.5"):
+        assert col in out.columns
+    assert out["Date"].iloc[0] == "16/08/2025", "dates must be dd/mm/yyyy"
+    assert len(out) == 1, "only E0, only the requested season"
+
+
+def test_the_mirror_rescues_an_outage_with_no_cache_at_all(monkeypatch, mirror,
+                                                           cache_dir):
+    """
+    The case the disk cache cannot cover, and the reason the mirror exists:
+    the feed is down and nothing was ever cached, so there is no last-good copy
+    to fall back to. This is what actually happened in September 2026.
+    """
+    monkeypatch.setattr(M.pd, "read_csv",
+                        lambda *a, **k: (_ for _ in ()).throw(_Boom(503)))
+    m = M.MarketOddsModel()
+    assert m.fetch_odds(season_str="2526") is True
+    assert m.odds_df is not None and m.odds_df["mu_h"].notna().all()
+
+
+def test_the_mirror_is_fetched_once_per_process(monkeypatch):
+    """It is one 40MB+ file and a run asks for two seasons (current, plus the
+    prior one for priors). Downloading it twice is not acceptable."""
+    M._MIRROR_FRAME.clear()
+    calls = {"n": 0}
+
+    def counted(*a, **k):
+        calls["n"] += 1
+        return _mirror_rows()
+
+    monkeypatch.setattr(M.pd, "read_csv", counted)
+    M._fetch_mirror_odds("2526")
+    M._fetch_mirror_odds("2425")
+    M._MIRROR_FRAME.clear()
+    assert calls["n"] == 1
+
+
+def test_a_season_boundary_gone_wrong_is_refused(monkeypatch, mirror):
+    """Two seasons in one frame would fit team ratings across a summer of
+    transfers. Better to fall through than to use that."""
+    big = pd.concat([_mirror_rows().iloc[[0]]] * 500, ignore_index=True)
+    M._MIRROR_FRAME["df"] = big
+    assert M._fetch_mirror_odds("2526") is None
+
+
+def test_the_season_boundary_is_august_not_july():
+    """
+    The covid-delayed 2019-20 season ran to 26 July 2020. A July cutoff files
+    those matches under 2020-21 and yields a 446-match season - which is what
+    the first version of this did.
+    """
+    d = pd.to_datetime(pd.Series(["2020-07-26", "2020-09-12", "2025-08-16"]))
+    assert list(M._season_start_year(d)) == [2019, 2020, 2025]
+
+
+def test_a_missing_season_in_the_mirror_is_not_fatal(mirror):
+    assert M._fetch_mirror_odds("9999") is None
+
+
+# ------------------------------------------- staleness is a fact about the data
+
+
+def test_cache_age_comes_from_the_data_not_the_file(cache_dir):
+    """
+    The whole reason this is not `os.path.getmtime`: `data/odds` is committed,
+    and a fresh git checkout stamps every file with the checkout time. An mtime
+    check would call a two-year-old odds file perfectly fresh. It also
+    mis-reads a cache written from the mirror, whose data can be weeks behind
+    the moment it was written.
+    """
+    import os
+
+    old_match = pd.Timestamp.now() - pd.Timedelta(days=200)
+    df = _priced()
+    df["Date"] = [old_match.strftime("%d/%m/%Y")]
+    M._save_cached_odds("2526", df)
+    os.utime(M._cache_path("2526"), None)          # touch: mtime is now
+
+    age = M._data_age_days(pd.read_csv(M._cache_path("2526")))
+    assert 199 < age < 201, "age must track the match date, not the mtime"
+
+
+def test_a_complete_season_never_goes_stale(cache_dir):
+    """A finished season is complete market information. It is years old by
+    construction and must still be usable for prior-season priors."""
+    rows = pd.concat([_priced()] * M.MATCHES_IN_A_FULL_SEASON, ignore_index=True)
+    rows["Date"] = (pd.Timestamp.now() - pd.Timedelta(days=800)).strftime("%d/%m/%Y")
+    M._save_cached_odds("2223", rows)
+    df, age = M._load_cached_odds("2223")
+    assert df is not None and age > M.ODDS_CACHE_MAX_AGE_DAYS
+
+
+def test_a_stale_part_played_season_is_still_rejected(cache_dir):
+    """The case the age limit is actually for: a part-season file that stopped
+    updating months ago is missing rounds that matter."""
+    rows = pd.concat([_priced()] * 20, ignore_index=True)
+    rows["Date"] = (pd.Timestamp.now() - pd.Timedelta(days=200)).strftime("%d/%m/%Y")
+    M._save_cached_odds("2627", rows)
+    assert M._load_cached_odds("2627") == (None, None)
+
+
+# ------------------------------------------------------ the committed cold floor
+
+
+def test_the_committed_floor_is_present_and_usable():
+    """
+    `data/odds` is in the repository so a cold CI run has something to fall
+    back to when the feed is down. If these files stop being committed, or stop
+    parsing, the failure is silent - the run just goes fixture-blind.
+    """
+    import glob
+    import pathlib
+
+    root = pathlib.Path(M.__file__).parent
+    files = sorted(glob.glob(str(root / "data" / "odds" / "*.csv")))
+    assert files, "no committed odds floor"
+    for path in files:
+        df = pd.read_csv(path)
+        assert {"Date", "HomeTeam", "AwayTeam", "B365H"} <= set(df.columns), path
+        assert len(df) > 0, path
+        d = pd.to_datetime(df["Date"], format="%d/%m/%Y", errors="coerce")
+        assert d.notna().all(), f"{path} has dates the loader cannot parse"
+
+
+# ------------------------------------------------- the log must not lie either
+
+
+def test_a_rescued_outage_does_not_claim_flat_ratings(monkeypatch, caplog,
+                                                      cache_dir):
+    """
+    The retry used to sign off with "Team ratings will be FLAT and the forecast
+    will carry no fixture signal" - from inside a function that knows nothing
+    about the cache, the mirror, or the rating fallbacks. In the CI log that
+    line sat one line above "Loaded 380 priced matches", so a rescued outage
+    read as a broken run. Predicting the outcome is `fetch_odds`'s job.
+    """
+    import logging
+
+    M._save_cached_odds("2526", _priced())
+    M._GLOBAL_ODDS_CACHE.clear()
+    monkeypatch.setattr(M.pd, "read_csv", _reading_from_disk_only(cache_dir))
+
+    with caplog.at_level(logging.WARNING, logger="market_odds"):
+        assert M.MarketOddsModel().fetch_odds(season_str="2526") is True
+
+    text = caplog.text
+    assert "FLAT" not in text, "announced flat ratings on a run that recovered"
+    assert "Primary odds feed unavailable" in text, "the outage is still reported"
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR], \
+        "a recovered outage is not an error"
+
+
+def test_a_genuine_dead_end_is_still_loud(monkeypatch, caplog, cache_dir):
+    """The other half: when every source really is exhausted, say so plainly -
+    that run produces a degraded plan and someone should be able to see why."""
+    import logging
+
+    monkeypatch.setattr(M.pd, "read_csv",
+                        lambda *a, **k: (_ for _ in ()).throw(_Boom(503)))
+
+    with caplog.at_level(logging.WARNING, logger="market_odds"):
+        assert M.MarketOddsModel().fetch_odds(season_str="2526") is False
+
+    errors = [r.getMessage() for r in caplog.records
+              if r.levelno >= logging.ERROR]
+    assert errors, "a real dead end must be an error"
+    assert any("FLAT" in m and "degraded" in m for m in errors)

@@ -434,7 +434,10 @@ player the no-hit arm usually gets there first.
 
 `hit_cost` is exposed as a parameter on `solve_fpl_optimization` and
 `run_season_simulation` so the question can be re-asked cheaply against more
-seasons, which is what it would take to resolve a difference this small.
+seasons, which is what it would take to resolve a difference this small. The
+harness that produced all of the above is in `experiments/` — `hit_cap_sweep.py`
+to run it, `hit_cap_report.py` to read it, including the validity checks that
+stop it being over-read.
 
 ## Setup
 
@@ -504,11 +507,17 @@ What happens, in order:
    schedule.
 2. **The last good copy on disk** (`data/odds/<season>.csv`, written on every
    successful fetch). Slightly stale market prices still price fixtures; the
-   fallbacks below cannot. Ignored past `ODDS_CACHE_MAX_AGE_DAYS` (45), by which
-   point a fit on actual results is the better bet.
-3. **`results_poisson`** — real scorelines, but blind to *upcoming* fixtures,
+   fallbacks below cannot.
+3. **The mirror** — [xgabora/Club-Football-Match-Data](https://github.com/xgabora/Club-Football-Match-Data),
+   an MIT-licensed redistribution of the same football-data.co.uk data,
+   translated back into football-data's own column names so nothing downstream
+   can tell the difference. It sits here rather than higher up because it is one
+   40MB+ file covering every league and season, and is memoised per run (a run
+   asks for two seasons). It is the *only* source that helps when the feed is
+   down and nothing was ever cached — which is exactly what happened.
+4. **`results_poisson`** — real scorelines, but blind to *upcoming* fixtures,
    which is the whole reason for using the market in the first place.
-4. **Flat ratings**, which means no fixture signal at all. This sets the
+5. **Flat ratings**, which means no fixture signal at all. This sets the
    `degraded` flag, and the publish gate below is what stops such a plan from
    replacing a sound one for the same gameweek.
 
@@ -517,10 +526,32 @@ A failed fetch is never cached in memory. Conflating "the request failed" with
 fixture-blind: every later gameweek read the cached `None` and fell back to flat
 ratings.
 
-The disk cache is not in the repository (`data/` is gitignored), and a fresh CI
-runner starts without it, so the workflow carries it between runs with
-`actions/cache` under a rolling key. If the entry is evicted the job still
-succeeds — it just falls through to step 3.
+The mirror was validated against outcomes before being trusted, across five
+seasons: de-vigged home-win prices track actual home wins to within 1–5 points,
+implied total goals to within 0.2, and the calibration is monotone by price
+bucket in every season — so no home/away swap and no column misalignment.
+
+### Staleness is a fact about the data, not the file
+
+`data/odds` **is** committed (~25KB a season), so a cold CI run has a floor even
+when the feed is down and the Actions cache is empty. That makes file mtimes
+useless for freshness — a fresh checkout stamps every file with the checkout
+time, and a copy written from the mirror can be weeks behind the moment it is
+written. So age is measured from the **newest match in the file**.
+
+A copy is rejected past `ODDS_CACHE_MAX_AGE_DAYS` (45) *unless* it holds a
+complete 380-match season, which is finished market information and cannot go
+stale — that is what makes prior-season files usable for priors years later.
+
+CI also carries `data/odds` between runs with `actions/cache` under a rolling
+key, so a successful fetch benefits later runs. Losing that entry is a
+non-event: the committed floor and the mirror are both still there.
+
+To refresh the committed floor, or seed a season that has never been fetched:
+
+```bash
+uv run python refresh_odds_cache.py
+```
 
 ## Where the plan lives
 
@@ -617,9 +648,11 @@ Run the tests with `uv run pytest tests/ -q`. They are offline by default; add
 | `optimizer.py` | Multi-gameweek ILP for squad, transfers, chips |
 | `monte_carlo.py`, `ownership_model.py` | Rank-aware valuation |
 | `backtest.py` | Walk-forward evaluation and the CI accuracy gate |
+| `refresh_odds_cache.py` | Reseed the committed `data/odds` floor |
 | `simulator.py` | Full-season replay of the engine's own decisions |
 | `weekly_manager.py` | CLI entry point |
 | `notify.py` | Discord deadline alerts |
+| `experiments/` | Slow one-off measurements, kept so conclusions can be re-checked |
 | `public/` | Published JSON plan |
 
 `public/index.html` redirects to the raw `weekly_plan.json`; `public/app.html`

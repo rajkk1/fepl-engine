@@ -104,3 +104,27 @@ def _no_odds_backoff(monkeypatch):
     import market_odds
 
     monkeypatch.setattr(market_odds, "ODDS_BASE_DELAY", 0.0)
+
+
+@pytest.fixture(autouse=True)
+def _no_mirror_download(monkeypatch):
+    """
+    Never fetch the odds mirror in the suite.
+
+    It is a single 40MB+ file, and the same hidden path through
+    `generate_xp_matrix` that reaches the primary feed also reaches the mirror
+    behind it. Without this the unit suite downloads it whenever
+    football-data.co.uk is unreachable.
+
+    Done by seeding the process-level frame rather than by patching
+    `_fetch_mirror_odds`: the real function then still runs, so tests exercise
+    the actual translation and season-slicing code, and a test that wants
+    mirror content only has to put a frame here.
+    """
+    import pandas as pd
+
+    import market_odds
+
+    monkeypatch.setitem(
+        market_odds._MIRROR_FRAME, "df",
+        pd.DataFrame(columns=["Division", "MatchDate", "HomeTeam", "AwayTeam"]))

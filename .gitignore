@@ -24,5 +24,12 @@ Thumbs.db
 public/weekly_plan.json
 public/sent_alerts.json
 
-# Manually downloaded season data (see backtest.LOCAL_DATA_DIR)
-data/
+# Manually downloaded season data (see backtest.LOCAL_DATA_DIR) - large, and
+# re-fetchable from the mirrors. `data/*` rather than `data/`, because git will
+# not descend into an ignored directory and the negation below has to be
+# reachable.
+data/*
+# The odds cache IS committed. It is ~25KB a season, and it gives a cold CI run
+# a floor when football-data.co.uk is down - which is the one case neither the
+# retries nor the Actions cache can cover. See "When the odds feed is down".
+!data/odds/
