@@ -160,7 +160,8 @@ def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
                           xp_source: str = "engine", from_gw: int = 1,
                           to_gw: Optional[int] = None, data=None,
                           verbose: bool = True, max_hits_per_gw: int = 2,
-                          xp_cache: Optional[Dict[Any, Any]] = None) -> Dict[str, Any]:
+                          xp_cache: Optional[Dict[Any, Any]] = None,
+                          hit_cost: float = 4.0) -> Dict[str, Any]:
     """Replay a season, returning the result rather than only logging it."""
     if xp_source not in XP_SOURCES:
         raise ValueError(f"xp_source must be one of {XP_SOURCES}")
@@ -171,6 +172,7 @@ def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
 
     bank, free_transfers = 100.0, 0
     squad_ids: Optional[List[int]] = None
+    prev_squad: List[int] = []
     buy_prices: Dict[int, float] = {}
     total_points = total_hits = total_transfers = 0
     history: List[Dict[str, Any]] = []
@@ -215,7 +217,8 @@ def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
             res = solve_fpl_optimization(
                 bootstrap, xp_matrix, horizon_gws, initial_squad_ids=squad_ids,
                 initial_bank=bank, initial_sell_prices=sell_prices,
-                initial_ft=free_transfers, max_hits_per_gw=max_hits_per_gw)
+                initial_ft=free_transfers, max_hits_per_gw=max_hits_per_gw,
+                hit_cost=hit_cost)
         except Exception as e:
             logger.error("GW%d: solver failed (%s); holding the squad.", gw, e)
             res = None
@@ -262,7 +265,15 @@ def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
             "bank": bank, "captain": captain_id, "leader": scored["leader"],
             "autosubs": len(scored["autosubs"]),
             "squad_value": sum(now_cost.get(p, 0.0) for p in squad_ids) / 10.0,
+            # Who moved, and what was held. Needed to ask how long a player the
+            # optimiser paid a hit for is actually kept: the hit is priced
+            # against a five-gameweek horizon, which is only the right price if
+            # he is still there in five gameweeks.
+            "in": list(transfers_in),
+            "out": sorted(set(prev_squad) - set(squad_ids)),
+            "squad": list(squad_ids),
         })
+        prev_squad = list(squad_ids)
         if verbose:
             logger.info("GW%-2d  %-6s  net %3d  running %4d  (hits %d, subs %d)",
                         gw, xp_source, net, total_points, hits,
