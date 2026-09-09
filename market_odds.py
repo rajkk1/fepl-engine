@@ -95,8 +95,9 @@ ODDS_BASE_DELAY = 4.0          # 4s, 8s, 16s plus jitter - bounded
 ODDS_CACHE_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "data", "odds")
 # Beyond this the copy is missing too many rounds to be worth preferring over a
-# fit on actual results.
+# fit on actual results - UNLESS it is a complete season, which cannot go stale.
 ODDS_CACHE_MAX_AGE_DAYS = 45.0
+MATCHES_IN_A_FULL_SEASON = 380
 
 
 def _cache_path(season_str: str) -> str:
@@ -114,20 +115,41 @@ def _save_cached_odds(season_str: str, df) -> None:
         logger.debug("Could not cache odds for %s: %s", season_str, e)
 
 
+def _data_age_days(df) -> float:
+    """
+    Days since the newest match in the file.
+
+    This is the honest measure of how stale the market information is, and the
+    file's mtime is not. An mtime says when the bytes were written, which is a
+    different thing in two ways that both matter here: a copy written today
+    from a mirror whose data ends six weeks ago is six weeks stale, and a fresh
+    git checkout resets every mtime to now - so once `data/odds` is committed,
+    an mtime check would declare a two-year-old file perfectly fresh.
+    """
+    d = pd.to_datetime(df["Date"], format="%d/%m/%Y", errors="coerce").dropna()
+    if d.empty:
+        return float("inf")
+    return max(0.0, (pd.Timestamp.now() - d.max()).total_seconds() / 86400.0)
+
+
 def _load_cached_odds(season_str: str):
     """(dataframe, age_in_days), or (None, None)."""
     path = _cache_path(season_str)
     try:
         if not os.path.exists(path):
             return None, None
-        age = max(0.0, (time.time() - os.path.getmtime(path)) / 86400.0)
-        if age > ODDS_CACHE_MAX_AGE_DAYS:
+        df = pd.read_csv(path)
+        age = _data_age_days(df)
+        # A finished season is complete market information and never goes off;
+        # only a part-played season can be missing rounds worth caring about.
+        if age > ODDS_CACHE_MAX_AGE_DAYS and len(df) < MATCHES_IN_A_FULL_SEASON:
             logger.warning(
-                "Cached odds for %s are %.0f days old (limit %.0f); ignoring "
-                "them in favour of the fallback chain.",
-                season_str, age, ODDS_CACHE_MAX_AGE_DAYS)
+                "Cached odds for %s stop %.0f days ago and cover only %d "
+                "matches (limit %.0f days); ignoring them in favour of the "
+                "fallback chain.",
+                season_str, age, len(df), ODDS_CACHE_MAX_AGE_DAYS)
             return None, None
-        return pd.read_csv(path), age
+        return df, age
     except Exception as e:
         logger.debug("Could not read cached odds for %s: %s", season_str, e)
         return None, None
@@ -157,6 +179,92 @@ def _read_odds_csv(url: str, season_str: str):
                 season_str, e, wait, attempt + 1, ODDS_MAX_ATTEMPTS - 1)
             time.sleep(wait)
     return None
+
+
+# ------------------------------------------------------------------ the mirror
+#
+# football-data.co.uk is one free static host, and in September 2026 it returned
+# 503 for every season for more than a day - homepage included, any user agent,
+# with `x-ws-origin: available`, so the CDN was shedding rather than the origin
+# being down. Retries cannot help with that and the disk cache cannot help at
+# all if the outage starts before the first successful fetch, which is exactly
+# what happened.
+#
+# xgabora/Club-Football-Match-Data is an MIT-licensed redistribution of the same
+# football-data.co.uk match data, updated periodically, carrying Bet365 1X2 and
+# over/under 2.5 for every EPL match. Validated against outcomes across five
+# seasons before being wired in: de-vigged home-win prices track actual home
+# wins to within 1-5 points, implied total goals to within 0.2, and the
+# price-bucket calibration is monotone in every season - so no swap and no
+# column misalignment.
+#
+# It is one 40MB+ file covering every league and season, which is why it sits
+# AFTER the disk cache in the chain and is memoised for the process: a run asks
+# for two seasons (current, plus the prior one for priors) and must not pay for
+# the download twice.
+ODDS_MIRROR_URL = (
+    "https://raw.githubusercontent.com/xgabora/Club-Football-Match-Data/"
+    "main/data/Matches.csv"
+)
+# Their column names -> football-data.co.uk's, so everything downstream - the
+# bookmaker-group selection, the disk cache format, the team-name mapping - is
+# untouched by where the numbers came from.
+_MIRROR_COLUMNS = {
+    "OddHome": "B365H", "OddDraw": "B365D", "OddAway": "B365A",
+    "Over25": "B365>2.5", "Under25": "B365<2.5",
+    "FTHome": "FTHG", "FTAway": "FTAG",
+}
+_MIRROR_FRAME: Dict[str, Any] = {}
+
+
+def _season_start_year(dates):
+    """
+    The season a match belongs to, by its date.
+
+    August rather than July: no EPL season has ever started before August, and
+    the covid-delayed 2019-20 ran to 26 July 2020. A July cutoff files those
+    final matches under 2020-21 and hands back a 446-match season.
+    """
+    return dates.dt.year.where(dates.dt.month >= 8, dates.dt.year - 1)
+
+
+def _fetch_mirror_odds(season_str: str):
+    """One season in football-data.co.uk's own format, or None."""
+    try:
+        if "df" not in _MIRROR_FRAME:
+            logger.warning(
+                "Falling back to the odds mirror (%s). One large file, fetched "
+                "once for this run.", ODDS_MIRROR_URL)
+            _MIRROR_FRAME["df"] = pd.read_csv(ODDS_MIRROR_URL, low_memory=False)
+        raw = _MIRROR_FRAME["df"]
+
+        want = int(f"20{season_str[:2]}")
+        e0 = raw[raw["Division"] == "E0"].copy()
+        dates = pd.to_datetime(e0["MatchDate"], errors="coerce")
+        sub = e0[_season_start_year(dates) == want].copy()
+        if sub.empty:
+            logger.warning("Odds mirror has no E0 matches for %s.", season_str)
+            return None
+
+        sub["Date"] = pd.to_datetime(sub["MatchDate"]).dt.strftime("%d/%m/%Y")
+        out = sub.rename(columns=_MIRROR_COLUMNS)
+        keep = ["Date", "HomeTeam", "AwayTeam"] + [
+            c for c in _MIRROR_COLUMNS.values() if c in out.columns]
+        out = out[keep].sort_values(
+            "Date", key=lambda x: pd.to_datetime(x, format="%d/%m/%Y"))
+
+        if len(out) > MATCHES_IN_A_FULL_SEASON + 20:
+            # A season boundary that has gone wrong, rather than data worth
+            # using. Better to fall through than to fit ratings on two seasons.
+            logger.error("Odds mirror returned %d matches for %s; refusing it.",
+                         len(out), season_str)
+            return None
+        logger.warning("Odds mirror supplied %d matches for %s.",
+                       len(out), season_str)
+        return out.reset_index(drop=True)
+    except Exception as e:
+        logger.error("Odds mirror unavailable for %s (%s).", season_str, e)
+        return None
 
 
 class MarketOddsModel:
@@ -198,9 +306,15 @@ class MarketOddsModel:
             df, age = _load_cached_odds(season_str)
             if df is not None:
                 logger.warning(
-                    "Odds feed unavailable for %s; using the cached copy from "
-                    "%.1f days ago. Ratings will miss the most recent matches.",
-                    season_str, age)
+                    "Odds feed unavailable for %s; using the cached copy, whose "
+                    "newest match is %.1f days old. Ratings will miss anything "
+                    "since.", season_str, age)
+        if df is None:
+            # Then the mirror. Last, because it is a single large file and the
+            # two cheaper sources are usually enough - but it is the only one
+            # that can help when the primary is down and nothing was ever
+            # cached, which is the case that actually bit.
+            df = _fetch_mirror_odds(season_str)
         if df is None:
             # NOT cached. A failed fetch is not the same fact as "this season
             # has no odds", and conflating them meant one 503 left the whole

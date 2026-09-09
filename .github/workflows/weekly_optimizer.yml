@@ -23,16 +23,18 @@ jobs:
         run: uv python install 3.12
 
       - name: Restore the last good odds file
-        # A fresh runner has no `data/odds`, so the on-disk fallback in
-        # market_odds.py can only help here if the cache is carried between
-        # runs. `key` is unique per run so the post-step always writes a new
-        # entry, and `restore-keys` picks up the most recent previous one -
-        # a rolling last-known-good copy. A restore counts as an access, so a
-        # daily job keeps the entry from being evicted.
+        # `data/odds` is committed, so a fresh runner already has a floor;
+        # this carries a *successful* fetch forward so later runs see the most
+        # recent rounds rather than whatever was last committed. `key` is
+        # unique per run so the post-step always writes a new entry, and
+        # `restore-keys` picks up the most recent previous one - a rolling
+        # last-known-good copy. A restore counts as an access, so a daily job
+        # keeps the entry from being evicted.
         #
-        # Losing it is not a failure: without it an outage means flat team
-        # ratings and a plan the publish gate refuses to promote. With it, an
-        # outage costs only the most recent round of matches.
+        # Losing it is a non-event: the committed floor and the mirror behind
+        # it both remain. Freshness is judged from the newest match in the
+        # file, not its mtime, so a restored or checked-out copy cannot claim
+        # to be newer than it is.
         uses: actions/cache@v4
         with:
           path: data/odds
