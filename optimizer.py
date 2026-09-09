@@ -25,6 +25,16 @@ HORIZON_DECAY = 0.86
 # first outfield sub.
 BENCH_WEIGHT_BY_POSITION = {POS_GKP: 0.02, POS_DEF: 0.12, POS_MID: 0.12, POS_FWD: 0.10}
 
+# What the solver is charged for a transfer beyond the free one. The rules say 4
+# points, but the number that belongs in the objective is not the rule's number:
+# a hit is a *certain* -4 bought against an *estimated* gain, and the estimate is
+# biased upward because the incoming player is chosen precisely for having the
+# highest forecast in the pool - so his forecast carries the largest of the
+# pool's errors. Charging the rule price makes the solver act as if the estimated
+# gain were unbiased. This is therefore a tunable, fitted by season replay, not a
+# constant of the game.
+HIT_COST = 4.0
+
 def solve_fpl_optimization(
     bootstrap: Dict[str, Any],
     xp_matrix: Dict[int, Dict[int, float]],
@@ -40,6 +50,7 @@ def solve_fpl_optimization(
     active_chip: Optional[str] = None,
     active_chip_gw: Optional[int] = None,
     horizon_decay: float = HORIZON_DECAY,
+    hit_cost: float = HIT_COST,
 ) -> Dict[str, Any]:
     """
     Solve multi-period FPL squad selection, transfer optimization, and chip strategies using PuLP ILP solver.
@@ -189,7 +200,7 @@ def solve_fpl_optimization(
         if is_chip_active_now and active_chip in ["wc", "fh"]:
             pass
         else:
-            obj_terms.append(-4.0 * decay * hits[t])
+            obj_terms.append(-hit_cost * decay * hits[t])
 
     # Add terminal value for remaining free transfers at the end of the horizon (+1.5 expected points per FT)
     if len(gws) > 0:

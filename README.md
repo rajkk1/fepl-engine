@@ -380,6 +380,62 @@ parameters back per gameweek, not just the history fed to them.
 > 0.00, giving it ~0.95 AUC at predicting participation. It is not a forecast you
 > could have had at the deadline, so treating it as a target is misleading.
 
+## Should it take a hit?
+
+The optimiser charges a transfer beyond the free one at `HIT_COST` (4.0, the
+rules' price) discounted alongside the points it buys, over a five-gameweek
+horizon decayed at `HORIZON_DECAY` (0.86). The gain multiplier is therefore
+1 + .86 + .74 + .64 + .55 = **3.78**, so a hit pays for itself at a forecast
+edge of 4 / 3.78 = **1.06 xP per gameweek**. That is a low bar, and it is fair
+to ask whether the engine over-trades — it will recommend a −8 without much
+hesitation.
+
+It was measured. Three full-xG seasons replayed end to end at four hit caps,
+with the forecast computed once per gameweek and **shared across arms**, so the
+only difference between arms is how freely the optimiser may spend. All arms
+build an identical GW1 squad, which makes the gameweeks matched pairs.
+
+| hit cap | 2023-24 | 2024-25 | 2025-26 | pooled | hits taken |
+|---|---|---|---|---|---|
+| 0 | 2215 | 2213 | 1934 | **6362** | 0 |
+| 1 | 1998 | 2146 | 2058 | 6202 | 46 |
+| 2 *(shipped)* | 2065 | 2278 | 2040 | **6383** | 64 |
+| 3 | 2035 | 2278 | 1980 | 6293 | 69 |
+
+Paired per-gameweek difference against never taking a hit: cap 2 is +0.18 pts/gw
+with a 95% interval of [−2.55, +2.90]. Every comparison contains zero, and the
+three seasons **disagree on the sign in every one of them**. 64 hits — 256 points
+paid — bought 21 points across three seasons. So the shipped defaults stay: the
+optimum is flat, and this is not where the remaining points are.
+
+Two plausible-sounding explanations for over-trading were both tested and are
+both false, recorded here so they are not re-derived:
+
+- *"It doesn't hold players long enough to earn the hit back."* It holds a
+  transferred-in player **7.75 gameweeks** on average (median 6) — longer than
+  the five it prices against, making 3.78 slightly conservative.
+- *"The optimiser's curse makes the edge illusory."* Over a fixed five-gameweek
+  window a paid transfer really does out-score the player it replaced, by
+  **+7.45** points.
+
+The trap is that neither of those is a measurement of a transfer's *value*.
+"Points of the player in, minus points of the player out" conditions on the
+outgoing player being the squad's worst-rated asset, so it comes out positive
+by construction under **any** transfer policy, including a worthless one — and
+if the window is "the weeks he was actually held" it is inflated further by
+optional stopping, since a player who hauls is kept and one who blanks is sold
+(that alone accounts for 5.5 of the 12.9 points the naive version reports).
+
+Only replaying the season against a different cap holds the alternative use of
+the roster slot and the budget fixed. Do that, and the extra transfers turn out
+to buy a *different* squad of about equal quality rather than a better one — the
+arms share only about 8 of 15 players by mid-season, and where they buy the same
+player the no-hit arm usually gets there first.
+
+`hit_cost` is exposed as a parameter on `solve_fpl_optimization` and
+`run_season_simulation` so the question can be re-asked cheaply against more
+seasons, which is what it would take to resolve a difference this small.
+
 ## Setup
 
 Fork the repo and set two repository secrets
