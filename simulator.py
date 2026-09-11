@@ -38,6 +38,7 @@ import numpy as np
 
 from backtest import build_baselines, fetch_data, build_mock_api
 from optimizer import solve_fpl_optimization
+import chip_policy
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -116,9 +117,18 @@ def apply_autosubs(starters: List[int], bench: List[int], played: Dict[int, bool
 def score_gameweek(starters: List[int], bench: List[int], captain_id: Optional[int],
                    vice_id: Optional[int], points: Dict[int, float],
                    played: Dict[int, bool], position: Dict[int, int],
-                   triple: bool = False) -> Dict[str, Any]:
-    """Points the eleven actually returned, autosubs and armband included."""
-    final = apply_autosubs(starters, bench, played, position)
+                   triple: bool = False, bench_boost: bool = False) -> Dict[str, Any]:
+    """
+    Points the eleven actually returned, autosubs and armband included.
+
+    `triple` is the triple captain chip. `bench_boost` scores all fifteen, and
+    with the whole squad already counted there is nothing for an autosub to do
+    - which is also why a bench boost cannot be scored by weighting the bench.
+    """
+    if bench_boost:
+        final = list(starters) + list(bench)
+    else:
+        final = apply_autosubs(starters, bench, played, position)
     total = sum(points.get(p, 0.0) for p in final)
 
     # The armband only moves when the captain does not appear at all. A captain
@@ -130,8 +140,12 @@ def score_gameweek(starters: List[int], bench: List[int], captain_id: Optional[i
     if leader is not None and leader in final:
         extra = points.get(leader, 0.0) * (2.0 if triple else 1.0)
 
+    # Under a bench boost the whole squad started, so nobody came on for
+    # anybody. Deriving this from `final` alone would report all four bench
+    # players as substitutes every week the chip is played.
+    autosubs = [] if bench_boost else [p for p in final if p not in starters]
     return {"points": total + extra, "eleven": final,
-            "leader": leader, "autosubs": [p for p in final if p not in starters]}
+            "leader": leader, "autosubs": autosubs}
 
 
 def _baseline_matrix(df_gw, horizon_gws: List[int], source: str,
@@ -161,8 +175,17 @@ def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
                           to_gw: Optional[int] = None, data=None,
                           verbose: bool = True, max_hits_per_gw: int = 2,
                           xp_cache: Optional[Dict[Any, Any]] = None,
-                          hit_cost: float = 4.0) -> Dict[str, Any]:
-    """Replay a season, returning the result rather than only logging it."""
+                          hit_cost: float = 4.0,
+                          play_chips: bool = True) -> Dict[str, Any]:
+    """
+    Replay a season, returning the result rather than only logging it.
+
+    `play_chips` runs the shipped chip policy (`chip_policy.choose_chip`), with
+    both halves' sets, exactly as the weekly job would. It defaults on because
+    a season in which no chip is ever played is not a season anyone plays --
+    but it is what this harness used to measure, and the chip machinery was
+    consequently covered by nothing. Pass False to reproduce the older numbers.
+    """
     if xp_source not in XP_SOURCES:
         raise ValueError(f"xp_source must be one of {XP_SOURCES}")
     df_gw, df_players, df_teams, df_fixtures = data or fetch_data(season_str)
@@ -171,6 +194,12 @@ def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
     last_gw = min(to_gw or max_gw, max_gw)
 
     bank, free_transfers = 100.0, 0
+    # chip code -> the gameweek it was played in. Both halves get a set.
+    used_chips: Dict[str, int] = {}
+    chips_played: List[Dict[str, Any]] = []
+    # State to restore the week after a free hit: the squad is borrowed, not
+    # bought, so the bank and the purchase prices come back with it.
+    free_hit_restore: Optional[Dict[str, Any]] = None
     squad_ids: Optional[List[int]] = None
     prev_squad: List[int] = []
     buy_prices: Dict[int, float] = {}
@@ -213,15 +242,45 @@ def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
             sell_prices[pid] = (bought + (cur - bought) // 2) / 10.0 if cur > bought \
                 else cur / 10.0
 
-        try:
-            res = solve_fpl_optimization(
+        def _solve(chip=None, chip_gw=None):
+            return solve_fpl_optimization(
                 bootstrap, xp_matrix, horizon_gws, initial_squad_ids=squad_ids,
                 initial_bank=bank, initial_sell_prices=sell_prices,
                 initial_ft=free_transfers, max_hits_per_gw=max_hits_per_gw,
-                hit_cost=hit_cost)
+                hit_cost=hit_cost, active_chip=chip, active_chip_gw=chip_gw)
+
+        chip_now = None
+        try:
+            # A chip is searched across the horizon and played only if the
+            # policy picks *this* gameweek for it; picked for a later one, the
+            # plan still accounts for it and the search runs again next week
+            # with a better forecast. That is what the weekly job does.
+            if play_chips and squad_ids is not None:
+                best = chip_policy.choose_chip(
+                    _solve, horizon_gws, gw,
+                    chip_policy.available_chips(used_chips, gw))
+                res = best["res"]
+                if best["chip"] and best["gw"] == gw:
+                    chip_now = best["chip"]
+            else:
+                res = _solve()
         except Exception as e:
             logger.error("GW%d: solver failed (%s); holding the squad.", gw, e)
             res = None
+            chip_now = None
+
+        if chip_now:
+            used_chips[chip_now] = gw
+            chips_played.append({"chip": chip_now, "gw": gw})
+            if chip_now == "fh":
+                # The free hit squad is borrowed for one week. Snapshot what is
+                # handed back: the squad, the bank, and the purchase prices,
+                # since none of the week's buying actually happened.
+                free_hit_restore = {
+                    "squad_ids": list(squad_ids or []),
+                    "bank": bank,
+                    "buy_prices": dict(buy_prices),
+                }
 
         if res and gw in res.get("gameweeks", {}):
             plan = res["gameweeks"][gw]
@@ -253,7 +312,9 @@ def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
         played = {int(k): v > 0 for k, v in mins.items()}
 
         scored = score_gameweek(starters, bench, captain_id, vice_id,
-                                pts, played, position)
+                                pts, played, position,
+                                triple=(chip_now == "tc"),
+                                bench_boost=(chip_now == "bb"))
         net = scored["points"] - 4 * hits
         total_points += net
         total_hits += hits
@@ -261,6 +322,7 @@ def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
 
         history.append({
             "gw": gw, "points": scored["points"], "hits": hits, "net": net,
+            "chip": chip_now,
             "cumulative": total_points, "transfers": len(transfers_in),
             "bank": bank, "captain": captain_id, "leader": scored["leader"],
             "autosubs": len(scored["autosubs"]),
@@ -273,14 +335,30 @@ def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
             "out": sorted(set(prev_squad) - set(squad_ids)),
             "squad": list(squad_ids),
         })
+        # A free hit squad is borrowed for the week it plays and then handed
+        # back, so the next gameweek resumes from the state saved above rather
+        # than from what the chip bought.
+        if chip_now == "fh" and free_hit_restore is not None:
+            squad_ids = free_hit_restore["squad_ids"]
+            bank = free_hit_restore["bank"]
+            buy_prices = free_hit_restore["buy_prices"]
+            free_hit_restore = None
+
         prev_squad = list(squad_ids)
         if verbose:
-            logger.info("GW%-2d  %-6s  net %3d  running %4d  (hits %d, subs %d)",
+            logger.info("GW%-2d  %-6s  net %3d  running %4d  (hits %d, subs %d)%s",
                         gw, xp_source, net, total_points, hits,
-                        len(scored["autosubs"]))
+                        len(scored["autosubs"]),
+                        f"  [{chip_now.upper()}]" if chip_now else "")
 
-        free_transfers = 1 if gw == 1 else \
-            max(1, min(5, free_transfers + 1 - len(transfers_in)))
+        if gw == 1:
+            free_transfers = 1
+        elif chip_now in ("wc", "fh"):
+            # The chip paid for the week's transfers, and saved free transfers
+            # survive it rather than being spent by it.
+            free_transfers = min(5, free_transfers + 1)
+        else:
+            free_transfers = max(1, min(5, free_transfers + 1 - len(transfers_in)))
 
     gws = max(1, len(history))
     return {
@@ -288,20 +366,22 @@ def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
         "total_points": float(total_points),
         "points_per_gw": float(total_points) / gws,
         "total_hits": total_hits, "total_transfers": total_transfers,
+        "chips_played": chips_played,
         "elapsed_s": round(time.time() - start, 1), "history": history,
     }
 
 
 def compare_sources(season_str: str = "2024-25", horizon: int = 5,
                     sources=XP_SOURCES, from_gw: int = 1,
-                    to_gw: Optional[int] = None) -> Dict[str, Any]:
+                    to_gw: Optional[int] = None,
+                    play_chips: bool = True) -> Dict[str, Any]:
     """Drive the same optimiser with each forecast and report the difference."""
     data = fetch_data(season_str)
     out = {}
     for src in sources:
         out[src] = run_season_simulation(
             season_str, horizon=horizon, xp_source=src,
-            from_gw=from_gw, to_gw=to_gw, data=data)
+            from_gw=from_gw, to_gw=to_gw, data=data, play_chips=play_chips)
     _print_comparison(out)
     return out
 
@@ -321,6 +401,15 @@ def _print_comparison(results: Dict[str, Any]):
         delta = "" if eng is None or src == "engine" else f"{r['total_points'] - eng:+.0f}"
         print(f" {src:<12}{r['total_points']:>9.0f}{r['points_per_gw']:>9.2f}"
               f"{r['total_hits']:>7d}{r['total_transfers']:>11d}{delta:>11}")
+
+    # Which chips were played and when. A season with none is a season this
+    # harness is not measuring the chip machinery in, which is worth seeing
+    # rather than inferring.
+    for src, r in sorted(results.items()):
+        played = r.get("chips_played") or []
+        detail = ", ".join(f"{c['chip'].upper()}@GW{c['gw']}" for c in played) \
+            if played else "none played"
+        print(f"   chips  {src:<10}{detail}")
 
     # Per-gameweek paired test: a season total is one sample, and one sample
     # cannot tell a better forecast from a luckier one.
@@ -372,11 +461,13 @@ def main():
                     choices=list(XP_SOURCES),
                     help="Forecasts to drive the optimiser with")
     ap.add_argument("--json-out", default="")
+    ap.add_argument("--no-chips", action="store_true",
+                    help="Replay without ever playing a chip (the old behaviour)")
     args = ap.parse_args()
 
     results = compare_sources(args.season, horizon=args.horizon,
                               sources=args.sources, from_gw=args.from_gw,
-                              to_gw=args.to_gw)
+                              to_gw=args.to_gw, play_chips=not args.no_chips)
     if args.json_out:
         with open(args.json_out, "w") as f:
             json.dump(results, f, indent=2, default=float)

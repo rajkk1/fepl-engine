@@ -103,29 +103,65 @@ regardless of where the chip sat. Since `weekly_manager` searches chip × gamewe
 across the whole horizon, every "hold it for GW+N" comparison was scored against
 rules the game does not have. Playing the chip *this* week was never affected.
 
-**What replaying the seasons did and did not settle.** Two full seasons were
-replayed end to end on an unchanged forecast, before and against the corrected
-rules:
+**What replaying the seasons settles.** The corrected rules change nothing on
+the path the engine spends most of a season on. Two seasons replayed end to end
+on an unchanged forecast, before and after, land on exactly their previous
+totals — 2023-24 on 2022 and 2024-25 on 2247 — with 75 of the 76 gameweeks
+identical decision for decision. The one that differs is 2023-24 GW1, where the
+squad build has an exact tie the tiebreak now settles the other way; it scored
+the same 44 either way.
 
-| season | before | after | hits | transfers |
+That was the right result to expect and it was **not** evidence about the chip
+rules, because `simulator.py` passed no `active_chip` at all. The replay — the
+repo's headline end-to-end number — never played a wildcard, free hit, bench
+boost or triple captain in any season it reported. The chip machinery was
+measured by nothing, which is exactly how rules keyed to a loop index survived
+in it.
+
+It plays them now, running the same `chip_policy.choose_chip` the weekly job
+runs, with both halves' sets. `--no-chips` reproduces the old behaviour:
+
+| season | no chips | chips | difference | chips played |
 |---|---|---|---|---|
-| 2023-24 | 2022 | **2022** | 35 | 72 |
-| 2024-25 | 2247 | **2247** | 13 | 50 |
+| 2023-24 | 2022 | **2109** | +87 | WC@2, BB@3, TC@4, FH@7, WC@20, BB@22, FH@25, TC@28 |
+| 2024-25 | 2247 | **2329** | +82 | WC@2, TC@7, BB@13, FH@15, TC@20, BB@21, WC@23, FH@29 |
+| 2025-26 | 2040 | **2129** | +89 | WC@3, BB@4, TC@6, BB@20, TC@21, WC@24, FH@26 |
+| pooled | 6309 | **6567** | **+258** | |
 
-Identical, and 75 of the 76 gameweeks are identical decision for decision. The
-one that differs is 2023-24 GW1, where the squad build has an exact tie that the
-tiebreak now settles the other way; it scored the same 44 either way.
++87, +82, +89 is about as consistent as this harness produces, and it is roughly
+what eight chips ought to be worth. Read the *timing* rather than the totals,
+though, because that is the part nobody has yet defended: in 2023-24 the policy
+spends the entire first-half set inside seven gameweeks, and in 2025-26 it never
+plays the first-half free hit at all. The thresholds in `chip_policy` were
+written to be reasonable, not fitted — the bar for a wildcard at GW2 is
+`20 × 17/19 ≈ 17.9` xP, which a squad built blind in GW1 clears without trying.
+Now that a policy change shows up in points, that is a cheap question to ask.
 
-That is the right result to expect, and it is worth being clear that it is
-**not** evidence the chip fixes work. `simulator.py` calls the optimiser with no
-`active_chip` at all, so the replay — the repo's headline end-to-end number —
-never plays a wildcard, free hit, bench boost or triple captain in any of the
-three seasons it reports. The chip machinery was consequently measured by
-nothing, which is how rules keyed to a loop index survived in it. What the
-replay does establish is that the corrected free-transfer accounting costs
-nothing on the path it *does* cover, which is the one the engine spends most of
-a season on. The chip rules are covered by unit tests only, and extending the
-replay to play chips is the obvious way to put a number on them.
+> **The older table below does not reproduce.** It records 2069 / 2218 / 2090
+> against the 2022 / 2247 / 2040 a no-chip replay produces on this commit. The
+> gap is not from anything in this section: a replay driven by the optimiser as
+> it stood *before* these fixes returns 2022 and 2247 as well. So the numbers
+> were recorded against an earlier state of the code or the upstream archive and
+> have not been re-run since. They are left as they were rather than quietly
+> restated, because a number nobody can reproduce should say so.
+
+**A timed-out solve is not a slow solve, it is a dropped option.** Searching
+chip × gameweek means 21 solves where there used to be one, and a solve that
+exceeds the 300s CBC limit comes back not-optimal, raises, and is *skipped* by
+the search — so the chip quietly stops being considered for that gameweek
+rather than being considered and rejected. Correcting the free hit made this
+reachable: handing the squad back couples three gameweeks of transfer decisions
+where the old formulation coupled none.
+
+The fix is a cut, not a time limit. `s == s_prev + tin - tout` is satisfied
+equally by `tin = tout = 1` for a player who is simply held, so every held
+player carried a pair of symmetric assignments for the solver to rule out.
+Forbidding a player to be transferred in and out in the same gameweek removes
+only dominated solutions — a self-transfer buys nothing — and the whole sweep
+went from 190s to **47s**, faster than the 141s it took before any of this. Per
+gameweek on real forecasts, the replay costs about 10s including the forecast
+and all 21 solves; the synthetic worst case above is what random xP does to an
+ILP that has no structure to exploit.
 
 Free transfers accrue to a cap of 5 and are spent before a hit is ever charged.
 Both of those are constraints now rather than conventions: the bank cap sat on
@@ -242,6 +278,30 @@ reports the rest as advisory: gating on a statistic whose CI spans zero fails
 builds at random, and this repo has already watched that happen — a change whose
 true effect on precision@15 was −0.118 [−0.324, +0.059] drifted the metric below
 the baseline on noise alone.
+
+**Beating the baselines is the floor, not the bar.** Everything above asks
+whether FEPL still beats trailing points-per-game and the rolling means. That is
+the right thing to require and a weak thing to be measured by: pooled, the engine
+leads `ppg` by 0.154 RMSE and 0.127 rank correlation, so a change could hand back
+most of the edge this repo was built to find and still pass every check on the
+page, reported as a clean build.
+
+So each run is also measured against `gate_baseline.json` — what this same
+configuration previously achieved — and fails if it is more than 1% worse. The
+tolerance is not a significance test. On a completed season the harness is
+deterministic, same data and seeds and answer, so a real regression shows up
+exactly; the slack is there only to absorb upstream backfills of the archive.
+
+The PR run and the scheduled run cover different seasons and gameweeks and are
+not comparable, so each keeps its own record keyed by configuration. A
+configuration with nothing recorded prints `[ -- ] ratchet` and does not fail, so
+adding one does not need a baseline first. Moving the bar is deliberate and
+shows up in the diff:
+
+```bash
+uv run python backtest.py --seasons 2025-26 --from-gw 8 --to-gw 16 \
+  --gate-metric rmse spearman --update-gate-baseline
+```
 
 **The error gate is RMSE, not MAE, and that is a correction.** FPL points are
 heavily right-skewed: over 11,114 scored player-gameweeks the mean is 2.37 and
@@ -712,8 +772,10 @@ outbound socket blocked.
 | `match_sim.py` | Correlated match simulation: bonus and risk |
 | `calibration.py` | Per-position recalibration of expected points (off by default) |
 | `optimizer.py` | Multi-gameweek ILP for squad, transfers, chips |
+| `chip_policy.py` | When to play a chip; shared by the weekly job and the replay |
 | `monte_carlo.py`, `ownership_model.py` | Rank-aware valuation |
 | `backtest.py` | Walk-forward evaluation and the CI accuracy gate |
+| `gate_baseline.json` | What the gate's configurations previously achieved |
 | `refresh_odds_cache.py` | Reseed the committed `data/odds` floor |
 | `simulator.py` | Full-season replay of the engine's own decisions |
 | `weekly_manager.py` | CLI entry point |

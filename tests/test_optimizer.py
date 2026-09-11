@@ -441,3 +441,57 @@ def test_the_tiebreak_cannot_outvote_a_real_difference(base_bootstrap):
         initial_squad_ids=initial, initial_bank=10.0, initial_ft=1)
 
     assert [p["id"] for p in res["gameweeks"][1]["transfers_in"]] == [20]
+
+
+def test_a_player_is_never_transferred_in_and_out_in_the_same_week(base_bootstrap):
+    """
+    `s == s_prev + tin - tout` is satisfied just as well by tin = tout = 1 for a
+    player who is simply held, so every held player carried a pair of symmetric
+    assignments for the solver to rule out. Cutting them changes no optimum --
+    a self-transfer buys nothing -- and made the chip search roughly four times
+    faster, which matters because a timed-out solve is silently dropped from
+    the chip comparison rather than merely being slow.
+    """
+    import pulp
+    from optimizer import solve_fpl_optimization as solve
+
+    initial = list(range(1, 16))
+    xp = {pid: {1: 3.0, 2: 3.0} for pid in range(1, 31)}
+
+    # Inspect the model rather than the plan: the constraint is about which
+    # solutions exist, and the reported plan cannot show a self-transfer.
+    captured = {}
+    real_solve = pulp.LpProblem.solve
+
+    def spy(self, *a, **kw):
+        captured["names"] = set(self.constraints)
+        return real_solve(self, *a, **kw)
+
+    pulp.LpProblem.solve = spy
+    try:
+        solve(bootstrap=base_bootstrap, xp_matrix=xp, horizon_gws=[1, 2],
+              initial_squad_ids=initial, initial_bank=10.0, initial_ft=1)
+    finally:
+        pulp.LpProblem.solve = real_solve
+
+    cuts = [n for n in captured["names"] if n.startswith("No_Self_Transfer_")]
+    assert cuts, "the symmetry cut is missing; the chip search will be ~4x slower"
+
+
+def test_the_symmetry_cut_does_not_change_the_answer(base_bootstrap):
+    """It removes only dominated solutions, so the plan must be unchanged."""
+    initial = list(range(1, 16))
+    xp = {pid: {1: 2.0, 2: 2.0, 3: 2.0} for pid in range(1, 31)}
+    for pid in (20, 21, 22):
+        xp[pid] = {1: 9.0, 2: 9.0, 3: 9.0}
+
+    res = solve_fpl_optimization(
+        bootstrap=base_bootstrap, xp_matrix=xp, horizon_gws=[1, 2, 3],
+        initial_squad_ids=initial, initial_bank=10.0, initial_ft=1)
+
+    assert res["status"] == "Optimal"
+    # The three better players are still bought, one per free transfer.
+    owned = set()
+    for gw in (1, 2, 3):
+        owned |= {p["id"] for p in res["gameweeks"][gw]["transfers_in"]}
+    assert {20, 21, 22} <= owned

@@ -137,3 +137,233 @@ def test_every_declared_source_can_build_a_matrix(gw_frame):
         if src == "engine":
             continue
         assert _baseline_matrix(gw_frame, [5], src, [1, 2])
+
+
+# --- chips -----------------------------------------------------------------
+#
+# The replay used to pass no `active_chip` at all, so a wildcard, free hit,
+# bench boost and triple captain were never played in any season it reported.
+# The chip machinery was therefore measured by nothing, which is how optimiser
+# rules keyed to a loop index rather than a gameweek survived in it.
+
+def test_bench_boost_scores_all_fifteen():
+    points = {i: 2.0 for i in range(1, 16)}
+    plain = score_gameweek(STARTERS, BENCH, 1, 2, points, ALL_PLAYED, POSITION)
+    boosted = score_gameweek(STARTERS, BENCH, 1, 2, points, ALL_PLAYED, POSITION,
+                             bench_boost=True)
+    # Eleven plus the armband, against fifteen plus the armband.
+    assert plain["points"] == 12 * 2.0
+    assert boosted["points"] == 16 * 2.0
+    assert set(boosted["eleven"]) == set(STARTERS) | set(BENCH)
+
+
+def test_bench_boost_has_nothing_for_an_autosub_to_do():
+    """
+    Every player is already counted, so a bench player coming on for an absent
+    starter must not be counted twice.
+    """
+    points = {i: 2.0 for i in range(1, 16)}
+    boosted = score_gameweek(STARTERS, BENCH, 1, 2, points, _absent(p10=True),
+                             POSITION, bench_boost=True)
+    assert boosted["autosubs"] == []
+    assert len(boosted["eleven"]) == len(set(boosted["eleven"])) == 15
+
+
+def test_bench_boost_still_pays_the_armband_once():
+    points = {i: 0.0 for i in range(1, 16)}
+    points[1] = 10.0
+    boosted = score_gameweek(STARTERS, BENCH, 1, 2, points, ALL_PLAYED, POSITION,
+                             bench_boost=True)
+    assert boosted["points"] == 20.0
+
+
+def test_triple_captain_and_bench_boost_are_independent():
+    points = {i: 1.0 for i in range(1, 16)}
+    both = score_gameweek(STARTERS, BENCH, 1, 2, points, ALL_PLAYED, POSITION,
+                          triple=True, bench_boost=True)
+    assert both["points"] == 15 + 2.0
+
+
+# --- the policy ------------------------------------------------------------
+
+def test_a_chip_is_spent_for_the_half_it_was_played_in():
+    from chip_policy import available_chips
+
+    assert set(available_chips({}, 5)) == {"wc", "fh", "bb", "tc"}
+    assert "wc" not in available_chips({"wc": 2}, 5)
+    # ...but the second-half set is a fresh one.
+    assert "wc" in available_chips({"wc": 2}, 25)
+    assert "wc" not in available_chips({"wc": 25}, 30)
+
+
+def test_the_bar_for_a_chip_falls_as_the_season_runs_out():
+    from chip_policy import chip_thresholds
+
+    early, late = chip_thresholds(2), chip_thresholds(35)
+    for chip in ("tc", "bb", "fh", "wc"):
+        assert late[chip] < early[chip], chip
+
+
+def test_choose_chip_holds_a_chip_for_the_gameweek_that_wants_it():
+    """
+    Searching gameweeks as well as chips is the whole point: a chip worth
+    playing in GW+2 must not be reported as a chip for this week.
+    """
+    from chip_policy import choose_chip
+
+    def solve(chip, gw):
+        # Nothing is worth a chip except a bench boost two weeks out.
+        gain = 60.0 if (chip == "bb" and gw == 12) else 0.0
+        return {"total_xp": 100.0 + gain}
+
+    best = choose_chip(solve, [10, 11, 12, 13, 14], 10, ["wc", "fh", "bb", "tc"])
+    assert best["chip"] == "bb"
+    assert best["gw"] == 12
+
+
+def test_choose_chip_declines_a_gain_under_the_threshold():
+    from chip_policy import choose_chip
+
+    def solve(chip, gw):
+        return {"total_xp": 100.0 + (1.0 if chip else 0.0)}
+
+    best = choose_chip(solve, [10, 11], 10, ["wc", "fh", "bb", "tc"])
+    assert best["chip"] == ""
+
+
+def test_a_chip_already_spent_is_never_searched():
+    from chip_policy import choose_chip
+
+    asked = []
+
+    def solve(chip, gw):
+        asked.append(chip)
+        return {"total_xp": 100.0 + (99.0 if chip else 0.0)}
+
+    best = choose_chip(solve, [10], 10, ["tc"])
+    assert set(a for a in asked if a) == {"tc"}
+    assert best["chip"] == "tc"
+
+
+# --- the free hit hands the squad back --------------------------------------
+#
+# A free hit squad is borrowed for one week. Nothing here tested that, because
+# nothing here played a chip at all, and the same blind spot in the optimiser
+# meant a free hit planned for a later gameweek was solved as a permanent
+# rebuild. This drives a whole (small) season to check the bookkeeping: the
+# squad, the bank and the purchase prices all come back.
+
+@pytest.fixture
+def tiny_season():
+    """
+    Four gameweeks, 20 clubs, 60 players: enough for a legal squad under the
+    3-per-club cap, small enough to solve in a moment.
+    """
+    import pandas as pd
+
+    n_teams, per_team = 20, 3
+    players, teams = [], [{"id": t, "name": f"T{t}", "short_name": f"T{t}"}
+                          for t in range(1, n_teams + 1)]
+    pid = 1
+    for t in range(1, n_teams + 1):
+        for k in range(per_team):
+            players.append({
+                "id": pid, "web_name": f"P{pid}",
+                # 1 GK, 1 DEF, 1 MID per club, plus forwards from the last few.
+                "element_type": [1, 2, 3][k] if t <= 14 else [1, 2, 4][k],
+                "team": t, "now_cost": 45,
+                "penalties_order": None,
+                "corners_and_indirect_freekicks_order": None,
+                "direct_freekicks_order": None,
+            })
+            pid += 1
+
+    gw_rows, fixtures = [], []
+    for gw in range(1, 5):
+        for t in range(1, n_teams, 2):
+            fixtures.append({
+                "event": gw, "team_h": t, "team_a": t + 1,
+                "team_h_score": 1, "team_a_score": 1,
+                "kickoff_time": f"2024-08-{10 + gw:02d}T14:00:00Z",
+                "team_h_difficulty": 3, "team_a_difficulty": 3,
+            })
+        for p in players:
+            gw_rows.append({
+                "GW": gw, "element": p["id"], "minutes": 90,
+                "total_points": 2, "value": 45, "was_home": True,
+                "opponent_team": 1, "selected": 1000, "xP": 2.0,
+            })
+    return (pd.DataFrame(gw_rows), pd.DataFrame(players),
+            pd.DataFrame(teams), pd.DataFrame(fixtures))
+
+
+def test_a_free_hit_squad_is_handed_back_the_following_week(tiny_season, monkeypatch):
+    import chip_policy
+    import simulator
+
+    df_gw, df_players, _, _ = tiny_season
+    all_ids = list(df_players["id"])
+    # Players 31+ are worth everything in GW3 and nothing otherwise, so the
+    # free hit squad must differ sharply and must not survive the week.
+    spike = set(all_ids[30:])
+
+    def fake_matrix(df_gw_, horizon_gws, source, population):
+        out = {}
+        for p in population:
+            out[p] = {gw: (9.0 if (gw == 3 and p in spike) else
+                           (0.5 if p in spike else 3.0))
+                      for gw in horizon_gws}
+        return out
+
+    monkeypatch.setattr(simulator, "_baseline_matrix", fake_matrix)
+
+    def force_free_hit(solve, horizon_gws, current_gw, available):
+        if current_gw == 3:
+            return {"chip": "fh", "gw": 3, "gain": 99.0, "res": solve("fh", 3)}
+        return {"chip": "", "gw": horizon_gws[0], "gain": 0.0, "res": solve(None, None)}
+
+    monkeypatch.setattr(chip_policy, "choose_chip", force_free_hit)
+
+    res = simulator.run_season_simulation(
+        "2024-25", horizon=2, xp_source="ppg", from_gw=1, to_gw=4,
+        data=tiny_season, verbose=False)
+
+    by_gw = {h["gw"]: h for h in res["history"]}
+    assert res["chips_played"] == [{"chip": "fh", "gw": 3}]
+
+    before = set(by_gw[2]["squad"])
+    during = set(by_gw[3]["squad"])
+    after = set(by_gw[4]["squad"])
+
+    # The chip actually bought a different squad...
+    assert len(during & spike) > len(before & spike)
+    # ...and it was handed back, not kept. One free transfer may then move a
+    # single player, so allow exactly that much drift and no more.
+    assert len(after - before) <= 1, "the free hit squad survived its week"
+    assert by_gw[4]["hits"] == 0, "paid to undo a free hit"
+
+
+def test_a_free_hit_does_not_spend_the_free_transfer_bank(tiny_season, monkeypatch):
+    """
+    The chip pays for its own transfers and saved free transfers survive it, so
+    the week after must not find the bank emptied by the rebuild.
+    """
+    import chip_policy
+    import simulator
+
+    def force_free_hit(solve, horizon_gws, current_gw, available):
+        if current_gw == 3:
+            return {"chip": "fh", "gw": 3, "gain": 99.0, "res": solve("fh", 3)}
+        return {"chip": "", "gw": horizon_gws[0], "gain": 0.0, "res": solve(None, None)}
+
+    monkeypatch.setattr(chip_policy, "choose_chip", force_free_hit)
+
+    res = simulator.run_season_simulation(
+        "2024-25", horizon=2, xp_source="ppg", from_gw=1, to_gw=4,
+        data=tiny_season, verbose=False)
+
+    by_gw = {h["gw"]: h for h in res["history"]}
+    # A free hit week makes many transfers but none of them are charged, and
+    # none of them come out of the bank.
+    assert by_gw[3]["hits"] == 0
+    assert by_gw[4]["hits"] == 0

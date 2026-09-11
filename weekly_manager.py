@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 import fpl_api
 from xp_model import generate_xp_matrix
 from optimizer import solve_fpl_optimization
+import chip_policy
 
 # Configure UTF-8 encoding for terminal output
 sys.stdout.reconfigure(encoding='utf-8')
@@ -432,40 +433,18 @@ def main():
         # evaluated a chip at the first gameweek of the horizon, so "hold it for
         # a double gameweek" was unreachable, and it crashed on the result:
         # `int(best_chip.split("_")[1])` raised IndexError for any bare chip code.
+        #
+        # The policy itself lives in `chip_policy` so the season replay can run
+        # the same one. It used to sit here, where nothing scored it.
         print("🤖 Evaluating chip strategies across the horizon...")
 
-        base_res = _solve(None, None)
-        base_xp = base_res.get("total_xp", 0.0)
-
-        # Value of waiting: the later in the season, the lower the bar for using
-        # a chip now, because there are fewer remaining chances to beat it.
-        gws_until_wc1_expiry = max(1, 19 - current_gw) if current_gw <= 19 else max(1, 38 - current_gw)
-        gws_until_season_end = max(1, 38 - current_gw)
-        chip_thresholds = {
-            "tc": 10.0 * (gws_until_season_end / 38.0),
-            "bb": 12.0 * (gws_until_season_end / 38.0),
-            "fh": 15.0 * (gws_until_season_end / 38.0),
-            "wc": 20.0 * (gws_until_wc1_expiry / 19.0),
-        }
-
-        # Only consider chips the manager still holds.
-        candidates = [c for c in chip_thresholds if c in available_chips]
-        skipped = [c for c in chip_thresholds if c not in available_chips]
+        skipped = [c for c in chip_policy.CHIP_BASE_THRESHOLD
+                   if c not in available_chips]
         if skipped:
             print(f"   (already used / unavailable: {', '.join(sorted(skipped)).upper()})")
 
-        best = {"chip": "", "gw": horizon_gws[0], "gain": 0.0, "res": base_res}
-        for c in candidates:
-            threshold = chip_thresholds[c]
-            for gw in horizon_gws:
-                try:
-                    c_res = _solve(c, gw)
-                except Exception as e:
-                    logging.warning("Chip %s @ GW%s failed to solve: %s", c, gw, e)
-                    continue
-                gain = c_res.get("total_xp", 0.0) - base_xp
-                if gain > threshold and gain > best["gain"]:
-                    best = {"chip": c, "gw": gw, "gain": gain, "res": c_res}
+        best = chip_policy.choose_chip(
+            _solve, horizon_gws, current_gw, available_chips)
 
         active_chip = best["chip"]
         active_chip_gw = best["gw"]

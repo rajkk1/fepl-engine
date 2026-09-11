@@ -490,3 +490,147 @@ def test_gameweek_evaluation_reports_the_new_metrics():
         list(actual), p_play={}, played={})
     for key in ("captured_at_15", "ndcg_at_15"):
         assert 0.0 <= res["models"]["m"][key] <= 1.0
+
+
+# --- the ratchet -----------------------------------------------------------
+#
+# `check_gate` asks only whether FEPL still beats trailing points-per-game and
+# the rolling means. Pooled, the engine leads `ppg` by 0.154 RMSE, so a change
+# could give back most of that edge and still be reported as a clean build.
+# The ratchet holds the run against what it previously achieved.
+
+def _summary(**fepl):
+    return {"season": "2025-26", "gameweeks": 9, "models": {"fepl": fepl}}
+
+
+def test_the_ratchet_passes_an_unchanged_result():
+    from backtest import check_ratchet
+
+    ok, msg = check_ratchet(_summary(rmse=2.722, spearman=0.589),
+                            {"rmse": 2.722, "spearman": 0.589})
+    assert ok, msg
+
+
+def test_the_ratchet_catches_a_regression_the_baselines_would_not():
+    """
+    Worse than it was, but still far better than points-per-game, so
+    `check_gate` would report a pass.
+    """
+    from backtest import check_ratchet
+
+    ok, msg = check_ratchet(_summary(rmse=2.80, spearman=0.55),
+                            {"rmse": 2.722, "spearman": 0.589})
+    assert not ok
+    assert "rmse" in msg and "spearman" in msg
+
+
+def test_the_ratchet_knows_which_direction_is_better():
+    from backtest import check_ratchet
+
+    # Lower RMSE and higher rank correlation are both improvements.
+    ok, _ = check_ratchet(_summary(rmse=2.60, spearman=0.62),
+                          {"rmse": 2.722, "spearman": 0.589})
+    assert ok
+
+
+def test_the_ratchet_tolerance_absorbs_drift_but_not_a_real_loss():
+    from backtest import check_ratchet
+
+    recorded = {"rmse": 2.722}
+    # 0.3% worse: upstream data drift, let it through.
+    ok, _ = check_ratchet(_summary(rmse=2.730), recorded, metrics=("rmse",))
+    assert ok
+    # 2% worse: a real loss.
+    ok, _ = check_ratchet(_summary(rmse=2.777), recorded, metrics=("rmse",))
+    assert not ok
+
+
+def test_a_run_with_nothing_recorded_is_not_a_failure():
+    from backtest import check_ratchet
+
+    ok, msg = check_ratchet(_summary(rmse=2.722), {})
+    assert ok
+    assert "nothing to hold" in msg
+
+
+def test_the_baseline_key_separates_configurations():
+    """
+    The PR run is one season over nine gameweeks and the scheduled run is four
+    over thirty-four. Comparing one against the other's record would fail builds
+    for no reason, so each keeps its own.
+    """
+    from backtest import gate_key
+
+    pr = gate_key(["2025-26"], 8, 16)
+    deep = gate_key(["2022-23", "2023-24", "2024-25", "2025-26"], 5, 38)
+    assert pr != deep
+    # Order of the seasons must not change the key.
+    assert gate_key(["2024-25", "2023-24"], 5, 38) == gate_key(["2023-24", "2024-25"], 5, 38)
+
+
+def test_recording_and_reading_back_a_baseline(tmp_path):
+    from backtest import record_gate_baseline, load_gate_baseline, check_ratchet
+
+    path = str(tmp_path / "gate_baseline.json")
+    summary = _summary(rmse=2.722, spearman=0.589, precision_at_15=2.7)
+    entry = record_gate_baseline([summary], "k", path, metrics=("rmse", "spearman"))
+
+    assert entry["rmse"] == 2.722
+    # Advisory metrics are recorded for a human reading the diff, never gated.
+    assert "precision_at_15" in entry["_advisory"]
+
+    recorded = load_gate_baseline(path)["k"]
+    ok, _ = check_ratchet(summary, recorded, metrics=("rmse", "spearman"))
+    assert ok
+
+
+def test_a_missing_baseline_file_is_not_fatal(tmp_path):
+    from backtest import load_gate_baseline
+
+    assert load_gate_baseline(str(tmp_path / "nope.json")) == {}
+
+
+def test_a_corrupt_baseline_file_is_not_fatal(tmp_path):
+    from backtest import load_gate_baseline
+
+    p = tmp_path / "gate_baseline.json"
+    p.write_text("{not json")
+    assert load_gate_baseline(str(p)) == {}
+
+
+def test_the_baseline_key_separates_prior_season_settings():
+    """
+    Without `history_past` the engine runs on weaker priors, so it is a
+    different model and not comparable to the default run's record. Only
+    non-default values are appended, so existing keys keep their shape.
+    """
+    from backtest import gate_key
+
+    assert gate_key(["2025-26"], 8, 16) == "2025-26@8-16"
+    assert gate_key(["2025-26"], 8, 16, "auto") == "2025-26@8-16"
+    assert gate_key(["2025-26"], 8, 16, "none") != "2025-26@8-16"
+
+
+def test_the_committed_baseline_is_usable():
+    """
+    The file CI gates against. A malformed or half-written entry would not fail
+    the build - `load_gate_baseline` is deliberately forgiving so a bad file
+    cannot block a deploy - so it is checked here instead, where it is safe to
+    be strict.
+    """
+    from backtest import (GATE_BASELINE_PATH, DEFAULT_GATE_METRICS,
+                          load_gate_baseline, check_ratchet)
+
+    data = load_gate_baseline(GATE_BASELINE_PATH)
+    assert data, "gate_baseline.json is missing or empty; the ratchet gates nothing"
+
+    for key, entry in data.items():
+        assert "@" in key, f"{key!r} does not name a configuration"
+        recorded = [m for m in DEFAULT_GATE_METRICS if m in entry]
+        assert recorded, f"{key} records none of {DEFAULT_GATE_METRICS}"
+        for metric in recorded:
+            assert isinstance(entry[metric], (int, float)), f"{key}/{metric}"
+        # An entry must accept its own numbers, or the first CI run after
+        # recording it fails.
+        ok, msg = check_ratchet({"models": {"fepl": dict(entry)}}, entry)
+        assert ok, msg

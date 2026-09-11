@@ -335,6 +335,18 @@ def solve_fpl_optimization(
                     prob += s[pid, t] == s[pid, src_gw] + tin[pid, t] - tout[pid, t], f"Trans_{pid}_{t}"
                 prob += bank[t] == bank[src_gw] + pulp.lpSum([tout[pid, t] * sell_cost[pid] for pid in player_ids]) - pulp.lpSum([tin[pid, t] * now_cost[pid] for pid in player_ids]), f"Bank_{t}"
 
+        # 6b. A player cannot be transferred in and out in the same gameweek.
+        #
+        # `s == s_prev + tin - tout` is satisfied just as well by tin = tout = 1
+        # for a player who is simply held, so every held player carried a pair
+        # of symmetric, equally optimal assignments and the branch-and-bound
+        # tree explored them. The optimum never used one (it buys nothing and
+        # now costs the tiebreak), but the relaxation still had to rule them
+        # out. Cutting them is free: any solution using a self-transfer has an
+        # identical-or-better twin without it.
+        for pid in player_ids:
+            prob += tin[pid, t] + tout[pid, t] <= 1, f"No_Self_Transfer_{pid}_{t}"
+
         # 7. Free transfers and hits.
         if is_gw1_wildcard and idx == 0:
             pass  # Unlimited and free: there is no squad yet to transfer from.
