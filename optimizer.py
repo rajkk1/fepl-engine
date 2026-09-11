@@ -35,6 +35,12 @@ BENCH_WEIGHT_BY_POSITION = {POS_GKP: 0.02, POS_DEF: 0.12, POS_MID: 0.12, POS_FWD
 # constant of the game.
 HIT_COST = 4.0
 
+# A nudge toward not transferring, used only to settle exact ties. Free
+# transfers are free, so a swap worth nothing scores the same as holding, and
+# the solver would pick either -- which reads as a recommendation. Far below the
+# resolution of any forecast, so it cannot outvote a real difference.
+TRANSFER_TIEBREAK = 1e-4
+
 def solve_fpl_optimization(
     bootstrap: Dict[str, Any],
     xp_matrix: Dict[int, Dict[int, float]],
@@ -123,14 +129,25 @@ def solve_fpl_optimization(
     tout = {}
     hits = {}
     ft_carried = {}
+    ft_avail = {}
+    ft_banks = {}
     bank = {}
 
     gws = sorted(horizon_gws)
-    
+
     for t in gws:
         hits[t] = pulp.LpVariable(f"hits_{t}", lowBound=0, cat=pulp.LpInteger)
         # O-04: Free transfers bank up to 5
         ft_carried[t] = pulp.LpVariable(f"ft_carried_{t}", lowBound=0, upBound=5, cat=pulp.LpInteger)
+        # What may actually be spent this gameweek: one earned per week on top
+        # of whatever was banked, and the bank is capped at 5 -- so 1 + 5 is
+        # still 5. Carrying the cap only on `ft_carried` let a manager sitting
+        # on five banked transfers make six of them free in a single week.
+        ft_avail[t] = pulp.LpVariable(f"ft_avail_{t}", lowBound=0, upBound=5, cat=pulp.LpInteger)
+        # 1 if this gameweek banks a transfer rather than taking a hit. FPL does
+        # not let a manager decline a free transfer in order to save it and pay
+        # -4 instead, so the two are mutually exclusive; see `FT_Bank_Or_Hit`.
+        ft_banks[t] = pulp.LpVariable(f"ft_banks_{t}", cat=pulp.LpBinary)
         bank[t] = pulp.LpVariable(f"bank_{t}", lowBound=0, cat=pulp.LpContinuous)
         
         for pid in player_ids:
@@ -141,12 +158,42 @@ def solve_fpl_optimization(
             tin[pid, t] = pulp.LpVariable(f"tin_{pid}_{t}", cat=pulp.LpBinary)
             tout[pid, t] = pulp.LpVariable(f"tout_{pid}_{t}", cat=pulp.LpBinary)
 
+    # Chip timing. A chip may be planned for any gameweek in the horizon, not
+    # only the first, so every rule below keys off the target gameweek rather
+    # than the loop index. Getting this wrong did not raise -- it quietly
+    # modelled a future Wildcard as three transfers and a future Free Hit as a
+    # permanent rebuild, so "hold the chip for GW+N" was priced against a game
+    # nobody plays.
+    chip_target_gw = active_chip_gw if active_chip_gw is not None else gws[0]
+
+    def is_chip_gw(t: int) -> bool:
+        return active_chip is not None and t == chip_target_gw
+
+    fh_gw = chip_target_gw if active_chip == "fh" else None
+
+    def reverts_from(idx: int) -> Optional[int]:
+        """
+        The gameweek whose squad and bank the gameweek at `idx` inherits, or
+        None for the manager's starting state.
+
+        Normally that is simply the gameweek before. A Free Hit squad lasts one
+        week and is then handed back, so the week *after* the chip inherits the
+        state held *before* it -- resolved the same way, so a Free Hit in the
+        first gameweek of the horizon reverts to the initial squad and one
+        later in the horizon reverts to a squad the solver itself chose.
+        """
+        if idx == 0:
+            return None
+        prev_t = gws[idx - 1]
+        if fh_gw is not None and prev_t == fh_gw:
+            return reverts_from(idx - 1)
+        return prev_t
+
     # Objective Function incorporating Triple Captain & Bench Boost chips
     obj_terms = []
 
     for idx, t in enumerate(gws):
-        chip_target_gw = active_chip_gw if active_chip_gw is not None else gws[0]
-        is_chip_active_now = (active_chip is not None and t == chip_target_gw)
+        is_chip_active_now = is_chip_gw(t)
         tc_mult = 2.0 if (is_chip_active_now and active_chip == "tc") else 1.0
         # Confidence in a gameweek's forecast decays with how far away it is.
         decay = horizon_decay ** idx
@@ -192,15 +239,21 @@ def solve_fpl_optimization(
             if idx == len(gws) - 1:
                 obj_terms.append(s[pid, t] * (now_cost[pid] * 0.01))
 
-        # Subtract hit penalties (-4 points per hit, 0 if Wildcard/Free Hit chip
-        # active). Discounted alongside the points they buy: a hit taken in a
-        # later gameweek is as speculative as the gain it is chasing, and
-        # charging it at full price while discounting the reward would make the
-        # solver structurally refuse every future transfer.
-        if is_chip_active_now and active_chip in ["wc", "fh"]:
-            pass
-        else:
-            obj_terms.append(-hit_cost * decay * hits[t])
+        # Subtract hit penalties (-4 points per hit). Discounted alongside the
+        # points they buy: a hit taken in a later gameweek is as speculative as
+        # the gain it is chasing, and charging it at full price while
+        # discounting the reward would make the solver structurally refuse every
+        # future transfer. A Wildcard or Free Hit week is free because `hits` is
+        # constrained to zero there, not because the charge is skipped.
+        obj_terms.append(-hit_cost * decay * hits[t])
+
+        # Break ties toward doing nothing. A free transfer that gains no points
+        # is exactly as good as not making it, so the solver was free to
+        # recommend one -- and did, churning a player for an identically rated
+        # one and reporting it as the week's move. This is smaller than any
+        # forecast difference the model can resolve, so it decides nothing
+        # except an exact tie, where holding the transfer is the better answer.
+        obj_terms.append(-TRANSFER_TIEBREAK * pulp.lpSum([tin[pid, t] for pid in player_ids]))
 
     # Add terminal value for remaining free transfers at the end of the horizon (+1.5 expected points per FT)
     if len(gws) > 0:
@@ -210,32 +263,16 @@ def solve_fpl_optimization(
 
     # Initial state (if initial squad provided, e.g. from team import or GW1 wildcard)
     is_gw1_wildcard = (initial_squad_ids is None or len(initial_squad_ids) != 15)
-    
+    initial_set = set(initial_squad_ids or [])
+    first_gw = gws[0]
+
     if is_gw1_wildcard:
         # Single wildcard setup for first GW in horizon
-        first_gw = gws[0]
         # Budget cap £100.0m (fallback bank is 100.0, so use it directly)
         budget = initial_bank if initial_bank >= 90.0 else 100.0
         prob += bank[first_gw] == budget - pulp.lpSum([s[pid, first_gw] * now_cost[pid] for pid in player_ids]), f"Bank_{first_gw}"
-        prob += ft_carried[first_gw] == 0, f"No_FT_Carry_Wildcard"
-    else:
-        # Pre-existing squad transition
-        first_gw = gws[0]
-        initial_set = set(initial_squad_ids)
-        for pid in player_ids:
-            in_initial = 1 if pid in initial_set else 0
-            prob += s[pid, first_gw] == in_initial + tin[pid, first_gw] - tout[pid, first_gw], f"Init_Trans_{pid}_{first_gw}"
-        
-        # Initial Bank equation (O-05: Use sell_cost for transfers out)
-        prob += bank[first_gw] == initial_bank + pulp.lpSum([tout[pid, first_gw] * sell_cost[pid] for pid in player_ids]) - pulp.lpSum([tin[pid, first_gw] * now_cost[pid] for pid in player_ids]), f"Bank_{first_gw}"
-        
-        # FT Rollover math for first GW
-        if active_chip in ["wc", "fh"] and first_gw == (active_chip_gw if active_chip_gw is not None else gws[0]):
-            # Free Hit and Wildcard allow unlimited transfers
-            prob += ft_carried[first_gw] == 0, f"No_FT_Carry_Chip"
-        else:
-            num_transfers_first = pulp.lpSum([tin[pid, first_gw] for pid in player_ids])
-            prob += num_transfers_first + ft_carried[first_gw] <= initial_ft + hits[first_gw], f"FT_Math_{first_gw}"
+        prob += ft_carried[first_gw] == 0, "No_FT_Carry_Wildcard"
+        prob += hits[first_gw] == 0, "No_Hits_Wildcard"
 
     # Constraints per Gameweek
     for idx, t in enumerate(gws):
@@ -280,38 +317,57 @@ def solve_fpl_optimization(
             if pid in player_dict:
                 prob += s[pid, t] == 0, f"Ban_{pid}_{t}"
 
-        # 6. Squad Transitions for subsequent GWs
-        if idx > 0:
-            prev_t = gws[idx - 1]
-            
-            if active_chip == "fh" and idx == 1:
-                # FREE HIT REVERT: In the week after a Free Hit, the squad reverts to the original team
+        # 6. Squad and bank continuity.
+        #
+        # `reverts_from` resolves what this gameweek inherits, which is the
+        # gameweek before it except after a Free Hit, where the one-week squad
+        # is handed back and the state before the chip resumes.
+        src_gw = reverts_from(idx)
+        if not (is_gw1_wildcard and idx == 0):
+            if src_gw is None:
                 for pid in player_ids:
-                    in_initial = 1 if pid in set(initial_squad_ids or []) else 0
+                    in_initial = 1 if pid in initial_set else 0
                     prob += s[pid, t] == in_initial + tin[pid, t] - tout[pid, t], f"Trans_{pid}_{t}"
-                
-                # Bank balance also reverts to initial (O-05)
-                prob += bank[t] == initial_bank + pulp.lpSum([tout[pid, t] * sell_cost[pid] for pid in player_ids]) - pulp.lpSum([tin[pid, t] * now_cost[pid] for pid in player_ids]), f"Bank_Cont_{t}"
-                
-                # FT math operates normally, assuming 1 FT carried over from the FH week
-                num_transfers = pulp.lpSum([tin[pid, t] for pid in player_ids])
-                prob += num_transfers + ft_carried[t] <= initial_ft + hits[t], f"FT_Math_{t}"
+                # O-05: transfers out are sold at the selling price, not the current one.
+                prob += bank[t] == initial_bank + pulp.lpSum([tout[pid, t] * sell_cost[pid] for pid in player_ids]) - pulp.lpSum([tin[pid, t] * now_cost[pid] for pid in player_ids]), f"Bank_{t}"
             else:
                 for pid in player_ids:
-                    prob += s[pid, t] == s[pid, prev_t] + tin[pid, t] - tout[pid, t], f"Trans_{pid}_{t}"
-                
-                # Bank balance continuity (O-05)
-                prob += bank[t] == bank[prev_t] + pulp.lpSum([tout[pid, t] * sell_cost[pid] for pid in player_ids]) - pulp.lpSum([tin[pid, t] * now_cost[pid] for pid in player_ids]), f"Bank_Cont_{t}"
-                
-                # FT Rollover math for subsequent GWs
-                num_transfers = pulp.lpSum([tin[pid, t] for pid in player_ids])
-                prob += num_transfers + ft_carried[t] <= 1 + ft_carried[prev_t] + hits[t], f"FT_Math_{t}"
+                    prob += s[pid, t] == s[pid, src_gw] + tin[pid, t] - tout[pid, t], f"Trans_{pid}_{t}"
+                prob += bank[t] == bank[src_gw] + pulp.lpSum([tout[pid, t] * sell_cost[pid] for pid in player_ids]) - pulp.lpSum([tin[pid, t] * now_cost[pid] for pid in player_ids]), f"Bank_{t}"
 
-        # Max hits limit per GW
-        if idx == 0 and active_chip in ["wc", "fh"]:
-            pass # No hit limit on Wildcard or Free Hit
+        # 7. Free transfers and hits.
+        if is_gw1_wildcard and idx == 0:
+            pass  # Unlimited and free: there is no squad yet to transfer from.
         else:
-            prob += hits[t] <= max_hits_per_gw, f"Max_Hits_{t}"
+            # What is available to spend: this week's transfer on top of the
+            # bank, and the bank is capped at 5.
+            if idx == 0:
+                prob += ft_avail[t] <= initial_ft, f"FT_Avail_{t}"
+            else:
+                prob += ft_avail[t] <= 1 + ft_carried[gws[idx - 1]], f"FT_Avail_{t}"
+
+            # A free transfer can only be carried out of a week if it was
+            # available in it.
+            prob += ft_carried[t] <= ft_avail[t], f"FT_Carry_Cap_{t}"
+
+            num_transfers = pulp.lpSum([tin[pid, t] for pid in player_ids])
+            if is_chip_gw(t) and active_chip in ("wc", "fh"):
+                # Unlimited and free, in whichever gameweek the chip is played.
+                # Saved free transfers survive a chip rather than being spent by
+                # it, so the bank carries through untouched.
+                prob += hits[t] == 0, f"No_Hits_{t}"
+            else:
+                prob += num_transfers + ft_carried[t] <= ft_avail[t] + hits[t], f"FT_Math_{t}"
+                prob += hits[t] <= max_hits_per_gw, f"Max_Hits_{t}"
+                # Bank a transfer or take a hit -- never both in one gameweek.
+                # `hits` sits on the right of the constraint above, so without
+                # this the solver can decline a free transfer it holds, pay an
+                # extra -4, and carry the declined one forward to fund a bigger
+                # move later. FPL offers no such trade: free transfers are spent
+                # before a hit is ever charged. Left open it showed up as -4s
+                # billed against gameweeks with no transfer in them at all.
+                prob += ft_carried[t] <= 15 * ft_banks[t], f"FT_Bank_Flag_{t}"
+                prob += hits[t] <= 15 * (1 - ft_banks[t]), f"FT_Bank_Or_Hit_{t}"
 
     # Solve the model using default PuLP solver (PULP_CBC_CMD)
     # Removing threads to prevent Windows CBC deadlocks, but keeping timeLimit at 300s to ensure true optimality.
@@ -385,8 +441,7 @@ def solve_fpl_optimization(
         bench.sort(key=lambda p: p["p_play"] * p["xp"], reverse=True)
         
         # Compute true expected points for the gameweek
-        chip_gw = active_chip_gw if active_chip_gw is not None else gws[0]
-        is_chip_active_now = (active_chip is not None and t == chip_gw)
+        is_chip_active_now = is_chip_gw(t)
         tc_mult = 2.0 if (is_chip_active_now and active_chip == "tc") else 1.0
         
         gw_xp = 0.0

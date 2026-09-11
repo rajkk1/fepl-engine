@@ -4,6 +4,8 @@ Everything here is synthetic so the unit suite runs without network access.
 The one test that touches the live FPL API is marked `network` and skipped by
 default (`-m network` to opt in).
 """
+import os
+
 import pytest
 
 
@@ -104,6 +106,75 @@ def _no_odds_backoff(monkeypatch):
     import market_odds
 
     monkeypatch.setattr(market_odds, "ODDS_BASE_DELAY", 0.0)
+
+
+@pytest.fixture(scope="session")
+def _odds_cache_copy(tmp_path_factory):
+    """A scratch copy of the committed `data/odds` floor, seeded once."""
+    import shutil
+
+    import market_odds
+
+    dest = tmp_path_factory.mktemp("odds_cache")
+    src = market_odds.ODDS_CACHE_DIR
+    if os.path.isdir(src):
+        shutil.copytree(src, dest, dirs_exist_ok=True)
+    return str(dest)
+
+
+@pytest.fixture(autouse=True)
+def _odds_cache_is_scratch(monkeypatch, _odds_cache_copy):
+    """
+    The suite must never write to the committed `data/odds` floor.
+
+    `test_smoke` reaches the live feed through `generate_xp_matrix` (see
+    `_fast_odds_retry`), and a *successful* fetch writes the last good copy
+    back to disk -- which is the repo's own committed floor. Running the tests
+    therefore rewrote two tracked files, in football-data's full ~120-column
+    form rather than the trimmed ten the repo commits: 24KB became 201KB, and
+    it showed up as an unexplained 762-line diff next to whatever change was
+    actually being made.
+
+    The copy is seeded from the committed files so reads still see a realistic
+    floor; only writes are diverted. `test_odds_resilience` points the same
+    attribute at its own tmp_path and still overrides this, because an autouse
+    fixture is applied before the test's own.
+    """
+    import market_odds
+
+    monkeypatch.setattr(market_odds, "ODDS_CACHE_DIR", _odds_cache_copy)
+
+
+@pytest.fixture(autouse=True)
+def _no_live_odds_fetch(monkeypatch):
+    """
+    The unit suite must not reach football-data.co.uk.
+
+    The README says the tests are offline by default and the daily workflow
+    runs them with the comment "the daily job must not fail because an external
+    API is briefly unavailable" -- but `test_smoke` reached the live feed
+    through `generate_xp_matrix`, so an outage of the feed the engine is built
+    to survive could fail the test step and stop the plan being published. That
+    is the one failure mode the fallback chain exists to prevent.
+
+    Blocked at `pd.read_csv` rather than at `_read_odds_csv`, for two reasons:
+    the retry, the disk cache, the mirror and the rating fallbacks all still
+    run for real, which is the behaviour worth exercising; and every test in
+    `test_odds_resilience` patches this same attribute, so its own stub simply
+    replaces this one.
+    """
+    import pandas as pd
+
+    import market_odds
+
+    real_read_csv = pd.read_csv
+
+    def offline_read_csv(path_or_url, *args, **kwargs):
+        if isinstance(path_or_url, str) and path_or_url.startswith(("http://", "https://")):
+            raise OSError(f"network disabled in tests: {path_or_url}")
+        return real_read_csv(path_or_url, *args, **kwargs)
+
+    monkeypatch.setattr(market_odds.pd, "read_csv", offline_read_csv)
 
 
 @pytest.fixture(autouse=True)

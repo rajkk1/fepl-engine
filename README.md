@@ -86,6 +86,55 @@ A multi-gameweek ILP over the £100.0m budget, 3-per-club cap, valid formations,
 free-transfer banking, selling-price mechanics and all four chips (wildcard,
 free hit, bench boost, triple captain), including chip timing across the horizon.
 
+**Optimal within a pruned pool, not over all ~700 players.** The solver is
+handed the top 30 per position by horizon xP, the 10 cheapest per position as
+fodder, and anything already owned or locked. Everything below is exact over
+*that* pool. The pruning is a speed decision and is almost certainly harmless —
+a player outside the top 30 of his position over five gameweeks is not in a
+15-man squad — but "mathematically optimal" should be read with it in mind.
+
+**A chip is priced in whichever gameweek it is planned for.** Every structural
+chip rule used to key off the loop index rather than the gameweek the chip was
+actually assigned to, and only the first gameweek of the horizon had both. So a
+wildcard held for GW+2 was solved as three transfers rather than unlimited ones,
+and a free hit held for GW+2 was solved as a *permanent* rebuild whose squad had
+then to be unwound with paid transfers — while the revert fired against GW+1
+regardless of where the chip sat. Since `weekly_manager` searches chip × gameweek
+across the whole horizon, every "hold it for GW+N" comparison was scored against
+rules the game does not have. Playing the chip *this* week was never affected.
+
+**What replaying the seasons did and did not settle.** Two full seasons were
+replayed end to end on an unchanged forecast, before and against the corrected
+rules:
+
+| season | before | after | hits | transfers |
+|---|---|---|---|---|
+| 2023-24 | 2022 | **2022** | 35 | 72 |
+| 2024-25 | 2247 | **2247** | 13 | 50 |
+
+Identical, and 75 of the 76 gameweeks are identical decision for decision. The
+one that differs is 2023-24 GW1, where the squad build has an exact tie that the
+tiebreak now settles the other way; it scored the same 44 either way.
+
+That is the right result to expect, and it is worth being clear that it is
+**not** evidence the chip fixes work. `simulator.py` calls the optimiser with no
+`active_chip` at all, so the replay — the repo's headline end-to-end number —
+never plays a wildcard, free hit, bench boost or triple captain in any of the
+three seasons it reports. The chip machinery was consequently measured by
+nothing, which is how rules keyed to a loop index survived in it. What the
+replay does establish is that the corrected free-transfer accounting costs
+nothing on the path it *does* cover, which is the one the engine spends most of
+a season on. The chip rules are covered by unit tests only, and extending the
+replay to play chips is the obvious way to put a number on them.
+
+Free transfers accrue to a cap of 5 and are spent before a hit is ever charged.
+Both of those are constraints now rather than conventions: the bank cap sat on
+the carried-out variable alone, so five banked made six available in a week, and
+`hits` sat on the right of the transfer constraint with nothing forcing it to be
+a consequence — so the solver could decline a free transfer it held, pay an extra
+−4, and bank the declined one to fund a bigger move later. That surfaced in the
+plan as recommended hits against gameweeks with no transfer in them at all.
+
 Future gameweeks are discounted at 0.86 per week (`--horizon-decay`). A forecast
 four weeks out carries injuries, rotation, form and fixture reschedules that have
 not happened yet, and the plan will be re-solved next week with better
@@ -635,6 +684,23 @@ cannot leak into the retrospective forecasts the calibrator trains on.
 
 Run the tests with `uv run pytest tests/ -q`. They are offline by default; add
 `-m network` to include the live API check.
+
+That claim used to be false in a way that mattered. `test_smoke` reached
+football-data.co.uk through `generate_xp_matrix`, so the unit suite depended on
+the very feed the fallback chain exists to survive — and the daily workflow runs
+that suite before building the plan, with the comment "the daily job must not
+fail because an external API is briefly unavailable". An outage could therefore
+fail the test step and stop a publishable plan, which is precisely the failure
+the odds work was defending against. A successful fetch was worse: it wrote the
+last-good copy back over the repo's own committed `data/odds` floor, in
+football-data's full ~120-column form rather than the trimmed ten committed here,
+so running the tests turned 24KB into 201KB and left an unexplained 762-line diff
+next to whatever was actually being changed.
+
+The suite now blocks outbound reads of the odds feed and points the cache at a
+scratch copy seeded from the committed floor, so the retry, cache, mirror and
+rating fallbacks all still run for real against fixed data. It passes with every
+outbound socket blocked.
 
 ## Repository layout
 
