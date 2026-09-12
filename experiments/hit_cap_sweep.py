@@ -18,7 +18,12 @@ The design that makes it measurable:
     charged as transfers), which makes each gameweek a matched pair;
   - `--caps` sweeps the hard limit on hits per gameweek, `--costs` sweeps the
     price instead. The cap answers "should it be allowed to?"; the cost answers
-    "what should it believe a hit is worth?".
+    "what should it believe a hit is worth?";
+  - chips are OFF unless `--chips` is passed. The replay plays them by default
+    now, but this sweep must not inherit that: a wildcard or free hit suspends
+    the transfer budget the sweep exists to vary, so chip weeks are exactly the
+    weeks that carry no signal about the price of a hit. The published table was
+    measured without them, and re-running with them on would not be comparable.
 
     uv run python experiments/hit_cap_sweep.py
     uv run python experiments/hit_cap_sweep.py --costs 4 6 8 --caps 3
@@ -41,16 +46,26 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # question: a weaker forecast means more noise-chasing, which makes hits look
 # worse, which is the direction the hypothesis already points.
 DEFAULT_SEASONS = ["2023-24", "2024-25", "2025-26"]
+DEFAULT_CAPS = [0, 1, 2, 3]
+# Held fixed while `--costs` sweeps the price. High enough that the price is
+# what binds, rather than the cap.
+DEFAULT_COST_SWEEP_CAP = 3
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--seasons", nargs="+", default=DEFAULT_SEASONS)
-    ap.add_argument("--caps", nargs="+", type=int, default=[0, 1, 2, 3],
+    ap.add_argument("--caps", nargs="+", type=int, default=None,
                     help="max hits per gameweek per arm")
     ap.add_argument("--costs", nargs="+", type=float, default=None,
                     help="sweep the hit price instead of the cap; "
                          "uses the first --caps value as a fixed limit")
+    ap.add_argument("--chips", action="store_true",
+                    help="Play chips during the replay. OFF by default, and "
+                         "deliberately: the published hit-cap table was "
+                         "measured without them, a chip week suspends the very "
+                         "transfer budget this sweep varies, and searching "
+                         "chip x gameweek multiplies the solves per arm by ~21.")
     ap.add_argument("--out", default="hit_cap_results.json")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args(argv)
@@ -66,9 +81,19 @@ def main(argv=None) -> int:
     market_odds.ODDS_BASE_DELAY = 0.0
 
     sweep_costs = args.costs is not None
-    arms = args.costs if sweep_costs else args.caps
+    arms = args.costs if sweep_costs else (args.caps or DEFAULT_CAPS)
     label = "cost" if sweep_costs else "cap"
-    fixed_cap = args.caps[0] if sweep_costs else None
+    # The cap to hold fixed while the *price* is swept. It has to be permissive
+    # or the sweep measures nothing: `--caps` used to default to [0, 1, 2, 3],
+    # so a bare `--costs 4 6 8` pinned the cap at its first element - zero - and
+    # every arm replayed a season in which no hit was affordable at any price.
+    # The arms came out identical and the sweep looked like strong evidence that
+    # the price does not matter.
+    fixed_cap = (args.caps[0] if args.caps else DEFAULT_COST_SWEEP_CAP) \
+        if sweep_costs else None
+    if sweep_costs and fixed_cap == 0:
+        ap.error("--costs with --caps 0 forbids every hit, so the price cannot "
+                 "change anything; pass a permissive --caps (e.g. 3)")
 
     results, t0 = {}, time.time()
     for season in args.seasons:
@@ -81,7 +106,7 @@ def main(argv=None) -> int:
                 season, xp_source="engine", data=data, verbose=args.verbose,
                 max_hits_per_gw=fixed_cap if sweep_costs else int(arm),
                 hit_cost=float(arm) if sweep_costs else 4.0,
-                xp_cache=xp_cache)
+                xp_cache=xp_cache, play_chips=args.chips)
             results[f"{season}|{arm}"] = {
                 "season": season, label: arm,
                 "total": r["total_points"], "hits": r["total_hits"],

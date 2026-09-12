@@ -271,8 +271,25 @@ def main(argv=None) -> int:
     print("\n=== 4. COUNTERFACTUAL: what the extra transfers bought ===")
     print("  The only comparison that holds the alternative use of the roster")
     print("  slot and the budget fixed is the replay itself.")
+
+    # Compare the examined arm against the most *restrictive* one - the arm that
+    # spent least on transfers - since the question is what the extra ones
+    # bought. Which end that is depends on the sweep: the tightest budget is the
+    # LOWEST cap but the HIGHEST price. This used to take `arms[0]` either way,
+    # so on a cost sweep it compared the shipped arm with itself and reported a
+    # 15/15 overlap and "got there first in 0" - which reads like a finding
+    # rather than a tautology.
+    strict = arms[0] if label == "cap" else arms[-1]
+    if strict == arm:
+        strict = arms[1] if label == "cap" else arms[0]
+    if strict == arm:
+        print(f"  (only one arm in this sweep; nothing to compare {label}={arm} "
+              "against)")
+        return 0
+    print(f"  ({label}={arm} against the tightest budget swept, {label}={strict})")
+
     for s in seasons:
-        a = {h["gw"]: set(h["squad"]) for h in runs[f"{s}|{base}"]["history"]}
+        a = {h["gw"]: set(h["squad"]) for h in runs[f"{s}|{strict}"]["history"]}
         b = {h["gw"]: set(h["squad"]) for h in runs[f"{s}|{arm}"]["history"]}
         gws = sorted(set(a) & set(b))
         marks = [g for g in (1, 6, 12, 19, 26, 32, 38) if g in a and g in b]
@@ -281,7 +298,7 @@ def main(argv=None) -> int:
             + f"   mean {np.mean([len(a[g] & b[g]) for g in gws]):.1f}")
 
         first_a, first_b = {}, {}
-        for h in runs[f"{s}|{base}"]["history"]:
+        for h in runs[f"{s}|{strict}"]["history"]:
             if h["gw"] > 1:
                 for p in h["in"]:
                     first_a.setdefault(p, h["gw"])
@@ -292,7 +309,7 @@ def main(argv=None) -> int:
         shared = set(first_a) & set(first_b)
         ahead = [p for p in shared if first_b[p] < first_a[p]]
         print(f"       {label}={arm} bought {len(first_b)} distinct players, "
-              f"{label}={base} {len(first_a)}; {len(shared)} shared, of which "
+              f"{label}={strict} {len(first_a)}; {len(shared)} shared, of which "
               f"{label}={arm} got there first in {len(ahead)}")
     return 0
 
