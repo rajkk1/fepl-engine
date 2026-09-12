@@ -1,11 +1,28 @@
 {
-    "gameweek": 4,
+    "gameweek": 5,
     "team_id": 4309239,
     "transfers_in": [
         {
-            "id": 68,
-            "web_name": "Tavernier",
+            "id": 631,
+            "web_name": "Mbaye",
             "cost": 6.0
+        },
+        {
+            "id": 633,
+            "web_name": "Ahanor",
+            "cost": 4.5
+        },
+        {
+            "id": 368,
+            "web_name": "Szoboszlai",
+            "cost": 7.0
+        }
+    ],
+    "transfers_out": [
+        {
+            "id": 12,
+            "web_name": "Saka",
+            "cost": 9.5
         },
         {
             "id": 388,
@@ -13,26 +30,9 @@
             "cost": 6.0
         },
         {
-            "id": 449,
-            "web_name": "Hall",
-            "cost": 5.1
-        }
-    ],
-    "transfers_out": [
-        {
-            "id": 84,
-            "web_name": "Collins",
-            "cost": 5.5
-        },
-        {
-            "id": 366,
-            "web_name": "Wirtz",
-            "cost": 7.4
-        },
-        {
-            "id": 201,
-            "web_name": "Mu\u00f1oz",
-            "cost": 5.4
+            "id": 427,
+            "web_name": "Mbeumo",
+            "cost": 7.9
         }
     ],
     "hits": 2,
@@ -44,38 +44,38 @@
         "element_type": 3,
         "team": 16,
         "cost": 12.0,
-        "xp": 8.33,
-        "p_play": 0.9996894066928661,
+        "xp": 6.27,
+        "p_play": 0.8666555572346206,
         "is_captain": true,
         "is_vice_captain": false,
         "now_cost": 12.0,
         "status": "a"
     },
     "vice_captain": {
-        "id": 12,
-        "web_name": "Saka",
+        "id": 631,
+        "web_name": "Mbaye",
         "element_type": 3,
-        "team": 1,
-        "cost": 9.5,
-        "xp": 6.66,
-        "p_play": 0.9995452719345287,
+        "team": 2,
+        "cost": 6.0,
+        "xp": 4.24,
+        "p_play": 0.9847000806892112,
         "is_captain": false,
         "is_vice_captain": true,
-        "now_cost": 9.5,
+        "now_cost": 6.0,
         "status": "a"
     },
     "starters": [
         {
-            "id": 12,
-            "web_name": "Saka",
+            "id": 631,
+            "web_name": "Mbaye",
             "element_type": 3,
-            "team": 1,
-            "cost": 9.5,
-            "xp": 6.66,
-            "p_play": 0.9995452719345287,
+            "team": 2,
+            "cost": 6.0,
+            "xp": 4.24,
+            "p_play": 0.9847000806892112,
             "is_captain": false,
             "is_vice_captain": true,
-            "now_cost": 9.5,
+            "now_cost": 6.0,
             "status": "a"
         },
         {
@@ -84,8 +84,8 @@
             "element_type": 3,
             "team": 3,
             "cost": 6.0,
-            "xp": 6.63,
-            "p_play": 0.9972513043623995,
+            "xp": 4.08,
+            "p_play": 0.9603782977315706,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 6.0,
@@ -97,24 +97,37 @@
             "element_type": 4,
             "team": 4,
             "cost": 7.9,
-            "xp": 5.46,
-            "p_play": 0.9982240282549706,
+            "xp": 3.84,
+            "p_play": 0.971921436456024,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 7.9,
             "status": "a"
         },
         {
-            "id": 40,
-            "web_name": "Rogers",
-            "element_type": 3,
-            "team": 6,
-            "cost": 7.6,
-            "xp": 6.03,
-            "p_play": 0.9994506763247865,
+            "id": 115,
+            "web_name": "De Cuyper",
+            "element_type": 2,
+            "team": 5,
+            "cost": 4.8,
+            "xp": 3.35,
+            "p_play": 0.9844765326011882,
             "is_captain": false,
             "is_vice_captain": false,
-            "now_cost": 7.6,
+            "now_cost": 4.8,
+            "status": "a"
+        },
+        {
+            "id": 633,
+            "web_name": "Ahanor",
+            "element_type": 2,
+            "team": 8,
+            "cost": 4.5,
+            "xp": 3.9,
+            "p_play": 0.9996310726740343,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 4.5,
             "status": "a"
         },
         {
@@ -123,8 +136,8 @@
             "element_type": 1,
             "team": 9,
             "cost": 5.5,
-            "xp": 3.22,
-            "p_play": 0.9999931657125768,
+            "xp": 1.74,
+            "p_play": 0.9257042991614937,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 5.5,
@@ -136,8 +149,8 @@
             "element_type": 4,
             "team": 9,
             "cost": 5.6,
-            "xp": 5.65,
-            "p_play": 0.9826564740316656,
+            "xp": 3.35,
+            "p_play": 0.9655003167147216,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 5.6,
@@ -149,24 +162,37 @@
             "element_type": 2,
             "team": 12,
             "cost": 4.0,
-            "xp": 4.11,
-            "p_play": 0.9996658517046193,
+            "xp": 2.69,
+            "p_play": 0.9848264003600913,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 4.0,
             "status": "a"
         },
         {
-            "id": 388,
-            "web_name": "Gu\u00e9hi",
-            "element_type": 2,
-            "team": 15,
-            "cost": 6.0,
-            "xp": 4.11,
-            "p_play": 0.9979092950989995,
+            "id": 368,
+            "web_name": "Szoboszlai",
+            "element_type": 3,
+            "team": 14,
+            "cost": 7.0,
+            "xp": 3.96,
+            "p_play": 0.9851049090668673,
             "is_captain": false,
             "is_vice_captain": false,
-            "now_cost": 6.0,
+            "now_cost": 7.0,
+            "status": "a"
+        },
+        {
+            "id": 379,
+            "web_name": "Isak",
+            "element_type": 4,
+            "team": 14,
+            "cost": 9.1,
+            "xp": 3.73,
+            "p_play": 0.997704213803283,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 9.1,
             "status": "a"
         },
         {
@@ -175,37 +201,11 @@
             "element_type": 3,
             "team": 16,
             "cost": 12.0,
-            "xp": 8.33,
-            "p_play": 0.9996894066928661,
+            "xp": 6.27,
+            "p_play": 0.8666555572346206,
             "is_captain": true,
             "is_vice_captain": false,
             "now_cost": 12.0,
-            "status": "a"
-        },
-        {
-            "id": 427,
-            "web_name": "Mbeumo",
-            "element_type": 3,
-            "team": 16,
-            "cost": 7.9,
-            "xp": 6.43,
-            "p_play": 0.9998769436763835,
-            "is_captain": false,
-            "is_vice_captain": false,
-            "now_cost": 7.9,
-            "status": "a"
-        },
-        {
-            "id": 449,
-            "web_name": "Hall",
-            "element_type": 2,
-            "team": 17,
-            "cost": 5.1,
-            "xp": 4.67,
-            "p_play": 0.995999272758995,
-            "is_captain": false,
-            "is_vice_captain": false,
-            "now_cost": 5.1,
             "status": "a"
         }
     ],
@@ -224,16 +224,16 @@
             "status": "u"
         },
         {
-            "id": 379,
-            "web_name": "Isak",
-            "element_type": 4,
-            "team": 14,
-            "cost": 9.1,
-            "xp": 5.18,
-            "p_play": 0.9992445248145377,
+            "id": 449,
+            "web_name": "Hall",
+            "element_type": 2,
+            "team": 17,
+            "cost": 5.2,
+            "xp": 1.93,
+            "p_play": 0.9639933761073632,
             "is_captain": false,
             "is_vice_captain": false,
-            "now_cost": 9.1,
+            "now_cost": 5.2,
             "status": "a"
         },
         {
@@ -241,31 +241,31 @@
             "web_name": "Ajayi",
             "element_type": 2,
             "team": 11,
-            "cost": 4.1,
-            "xp": 2.96,
-            "p_play": 0.9602229623647158,
+            "cost": 4.2,
+            "xp": 1.67,
+            "p_play": 0.9567661895527662,
             "is_captain": false,
             "is_vice_captain": false,
-            "now_cost": 4.1,
+            "now_cost": 4.2,
             "status": "a"
         },
         {
-            "id": 115,
-            "web_name": "De Cuyper",
-            "element_type": 2,
-            "team": 5,
-            "cost": 4.8,
-            "xp": 2.32,
-            "p_play": 0.9425030651589126,
+            "id": 40,
+            "web_name": "Rogers",
+            "element_type": 3,
+            "team": 6,
+            "cost": 7.6,
+            "xp": 1.6,
+            "p_play": 0.9999999999992757,
             "is_captain": false,
             "is_vice_captain": false,
-            "now_cost": 4.8,
+            "now_cost": 7.6,
             "status": "a"
         }
     ],
-    "expected_score": 70.78,
-    "remaining_bank": 1.2,
+    "expected_score": 48.61,
+    "remaining_bank": 7.1,
     "degraded": false,
     "fixture_model": "market_odds",
-    "generated_at": "2026-09-11T15:54:56+00:00"
+    "generated_at": "2026-09-12T15:01:57+00:00"
 }
