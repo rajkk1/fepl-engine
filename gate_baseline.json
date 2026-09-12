@@ -1,0 +1,11 @@
+{
+  "2025-26@8-16": {
+    "_advisory": {
+      "captain_regret": 12.111111,
+      "precision_at_15": 2.222222
+    },
+    "_recorded_gameweeks": 9,
+    "rmse": 2.911094,
+    "spearman": 0.594903
+  }
+}

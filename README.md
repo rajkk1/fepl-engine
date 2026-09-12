@@ -86,6 +86,87 @@ A multi-gameweek ILP over the £100.0m budget, 3-per-club cap, valid formations,
 free-transfer banking, selling-price mechanics and all four chips (wildcard,
 free hit, bench boost, triple captain), including chip timing across the horizon.
 
+**Optimal within a pruned pool, not over all ~700 players.** The solver is
+handed the top 30 per position by horizon xP, the 10 cheapest per position as
+fodder, and anything already owned or locked. Everything below is exact over
+*that* pool. The pruning is a speed decision and is almost certainly harmless —
+a player outside the top 30 of his position over five gameweeks is not in a
+15-man squad — but "mathematically optimal" should be read with it in mind.
+
+**A chip is priced in whichever gameweek it is planned for.** Every structural
+chip rule used to key off the loop index rather than the gameweek the chip was
+actually assigned to, and only the first gameweek of the horizon had both. So a
+wildcard held for GW+2 was solved as three transfers rather than unlimited ones,
+and a free hit held for GW+2 was solved as a *permanent* rebuild whose squad had
+then to be unwound with paid transfers — while the revert fired against GW+1
+regardless of where the chip sat. Since `weekly_manager` searches chip × gameweek
+across the whole horizon, every "hold it for GW+N" comparison was scored against
+rules the game does not have. Playing the chip *this* week was never affected.
+
+**What replaying the seasons settles.** The corrected rules change nothing on
+the path the engine spends most of a season on. Two seasons replayed end to end
+on an unchanged forecast, before and after, land on exactly their previous
+totals — 2023-24 on 2022 and 2024-25 on 2247 — with 75 of the 76 gameweeks
+identical decision for decision. The one that differs is 2023-24 GW1, where the
+squad build has an exact tie the tiebreak now settles the other way; it scored
+the same 44 either way.
+
+That was the right result to expect and it was **not** evidence about the chip
+rules, because `simulator.py` passed no `active_chip` at all. The replay — the
+repo's headline end-to-end number — never played a wildcard, free hit, bench
+boost or triple captain in any season it reported. The chip machinery was
+measured by nothing, which is exactly how rules keyed to a loop index survived
+in it.
+
+It plays them now, running the same `chip_policy.choose_chip` the weekly job
+runs, with both halves' sets. `--no-chips` reproduces the old behaviour:
+
+| season | no chips | chips | difference | chips played |
+|---|---|---|---|---|
+| 2023-24 | 2022 | **2109** | +87 | WC@2, BB@3, TC@4, FH@7, WC@20, BB@22, FH@25, TC@28 |
+| 2024-25 | 2247 | **2329** | +82 | WC@2, TC@7, BB@13, FH@15, TC@20, BB@21, WC@23, FH@29 |
+| 2025-26 | 2040 | **2129** | +89 | WC@3, BB@4, TC@6, BB@20, TC@21, WC@24, FH@26 |
+| pooled | 6309 | **6567** | **+258** | |
+
++87, +82, +89 is about as consistent as this harness produces, and it is roughly
+what eight chips ought to be worth. Read the *timing* rather than the totals,
+though, because that is the part nobody has yet defended: in 2023-24 the policy
+spends the entire first-half set inside seven gameweeks, and in 2025-26 it never
+plays the first-half free hit at all. The thresholds in `chip_policy` were
+written to be reasonable, not fitted — the bar for a wildcard at GW2 is
+`20 × 17/19 ≈ 17.9` xP, which a squad built blind in GW1 clears without trying.
+Now that a policy change shows up in points, that is a cheap question to ask.
+
+The whole end-to-end table further down has been re-run against this commit for
+both variants, and it did not come back saying what it used to — see *Does any
+of it put points on the board?*
+
+**A timed-out solve is not a slow solve, it is a dropped option.** Searching
+chip × gameweek means 21 solves where there used to be one, and a solve that
+exceeds the 300s CBC limit comes back not-optimal, raises, and is *skipped* by
+the search — so the chip quietly stops being considered for that gameweek
+rather than being considered and rejected. Correcting the free hit made this
+reachable: handing the squad back couples three gameweeks of transfer decisions
+where the old formulation coupled none.
+
+The fix is a cut, not a time limit. `s == s_prev + tin - tout` is satisfied
+equally by `tin = tout = 1` for a player who is simply held, so every held
+player carried a pair of symmetric assignments for the solver to rule out.
+Forbidding a player to be transferred in and out in the same gameweek removes
+only dominated solutions — a self-transfer buys nothing — and the whole sweep
+went from 190s to **47s**, faster than the 141s it took before any of this. Per
+gameweek on real forecasts, the replay costs about 10s including the forecast
+and all 21 solves; the synthetic worst case above is what random xP does to an
+ILP that has no structure to exploit.
+
+Free transfers accrue to a cap of 5 and are spent before a hit is ever charged.
+Both of those are constraints now rather than conventions: the bank cap sat on
+the carried-out variable alone, so five banked made six available in a week, and
+`hits` sat on the right of the transfer constraint with nothing forcing it to be
+a consequence — so the solver could decline a free transfer it held, pay an extra
+−4, and bank the declined one to fund a bigger move later. That surfaced in the
+plan as recommended hits against gameweeks with no transfer in them at all.
+
 Future gameweeks are discounted at 0.86 per week (`--horizon-decay`). A forecast
 four weeks out carries injuries, rotation, form and fixture reschedules that have
 not happened yet, and the plan will be re-solved next week with better
@@ -194,6 +275,30 @@ builds at random, and this repo has already watched that happen — a change who
 true effect on precision@15 was −0.118 [−0.324, +0.059] drifted the metric below
 the baseline on noise alone.
 
+**Beating the baselines is the floor, not the bar.** Everything above asks
+whether FEPL still beats trailing points-per-game and the rolling means. That is
+the right thing to require and a weak thing to be measured by: pooled, the engine
+leads `ppg` by 0.154 RMSE and 0.127 rank correlation, so a change could hand back
+most of the edge this repo was built to find and still pass every check on the
+page, reported as a clean build.
+
+So each run is also measured against `gate_baseline.json` — what this same
+configuration previously achieved — and fails if it is more than 1% worse. The
+tolerance is not a significance test. On a completed season the harness is
+deterministic, same data and seeds and answer, so a real regression shows up
+exactly; the slack is there only to absorb upstream backfills of the archive.
+
+The PR run and the scheduled run cover different seasons and gameweeks and are
+not comparable, so each keeps its own record keyed by configuration. A
+configuration with nothing recorded prints `[ -- ] ratchet` and does not fail, so
+adding one does not need a baseline first. Moving the bar is deliberate and
+shows up in the diff:
+
+```bash
+uv run python backtest.py --seasons 2025-26 --from-gw 8 --to-gw 16 \
+  --gate-metric rmse spearman --update-gate-baseline
+```
+
 **The error gate is RMSE, not MAE, and that is a correction.** FPL points are
 heavily right-skewed: over 11,114 scored player-gameweeks the mean is 2.37 and
 the median is 1. A forecast minimises MAE at the median and RMSE at the mean, so
@@ -260,45 +365,87 @@ biggest defect at −0.515; that was mostly 2022-23's understated xG.
 **Does any of it put points on the board?** Everything above measures the
 *forecast*. `simulator.py` measures what the forecast is for: it replays a season
 following the engine's own transfers, captaincy and bench order, driving the
-**same optimiser** with each forecast so any difference is attributable to the
-forecast alone.
+**same optimiser** — and the same chip policy — with each forecast, so any
+difference is attributable to the forecast alone.
 
+```bash
+uv run python simulator.py --seasons 2023-24 2024-25 2025-26            # as it runs
+uv run python simulator.py --seasons 2023-24 2024-25 2025-26 --no-chips # chips off
 ```
- season      engine     ppg   roll3   hits
- 2023-24       2069    1937    1833     32
- 2024-25       2218    2010    1776     16
- 2025-26       2090    1964    1629     16
-```
+
+Chips off, which is what this table used to measure:
+
+| season | engine | `ppg` | `roll3` |
+|---|---|---|---|
+| 2023-24 | 2022 | 1968 | 1808 |
+| 2024-25 | 2247 | 2066 | 1712 |
+| 2025-26 | 2040 | 1973 | 1616 |
+| **pooled** | **6309** | 6007 | 5136 |
+
+Chips played, which is what the engine actually does:
+
+| season | engine | `ppg` | `roll3` |
+|---|---|---|---|
+| 2023-24 | 2109 | 2027 | 1850 |
+| 2024-25 | 2329 | 2119 | 1755 |
+| 2025-26 | 2129 | 2056 | 1679 |
+| **pooled** | **6567** | 6202 | 5284 |
 
 Pooled over all three clean seasons — **114 gameweeks**, paired by gameweek:
 
-| baseline | mean | 95% CI | 3-season total | win rate | |
-|---|---|---|---|---|---|
-| `ppg` | **+4.09** | [+0.81, +7.35] | **+466** | 0.553 | significant |
-| `roll3` | **+9.07** | [+5.28, +12.71] | **+1034** | 0.711 | significant |
+| | baseline | mean | 95% CI | 3-season total | win rate | |
+|---|---|---|---|---|---|---|
+| chips off | `ppg` | +2.65 | [−0.63, +5.81] | +302 | 0.544 | **not significant** |
+| | `roll3` | **+10.29** | [+6.30, +14.18] | **+1173** | 0.719 | significant |
+| chips played | `ppg` | +3.20 | [−0.18, +6.48] | +365 | 0.553 | **not significant** |
+| | `roll3` | **+11.25** | [+7.52, +14.92] | **+1283** | 0.754 | significant |
 
-Read the interval rather than the verdict on the first row. The lower bound is
-**+0.81** — better than the +0.13 it sat at before the price-anchored priors, but
-still close enough that this is evidence for a real end-to-end edge over
-points-per-game rather than a settled result. Two seasons (76 gameweeks) gave
-[−0.13, +6.33] and did not clear zero at all.
+**The edge over points-per-game does not clear zero, and an earlier version of
+this file said it did.** It reported +4.09 [+0.81, +7.35] and called it
+significant. Re-run on the current code the same comparison gives +2.65
+[−0.63, +5.81] with chips off and +3.20 [−0.18, +6.48] with them played: the
+same direction, a smaller mean, and an interval that now contains zero in both
+variants. Nothing here was re-measured between those two states, so the honest
+reading is that the earlier number was recorded against a state of the code or
+the upstream archive that no longer exists and was never re-derived — which is
+exactly the failure the `gate_baseline.json` ratchet now exists to prevent for
+the forecast metrics, and which nothing yet prevents for this table.
+
+So: **beating trailing points-per-game end to end is not established.** It is not
+significant pooled, and it is not significant in any single season in either
+variant — the six season-by-variant intervals against `ppg` all contain zero.
+What *is* established is the margin over the rolling means: large, significant
+pooled in both variants, and significant in five of those same six cells (the
+exception is 2023-24 with chips off, +5.63 [−2.42, +13.03]).
+
+That is a narrower claim than the file used to make, and it is worth being
+precise about what it does *not* say. It does not say the forecast work was
+wasted — the forecast metrics clear `ppg` comfortably and significantly on RMSE,
+rank correlation and points-captured@15 (above), on the same three seasons. It
+says the *end-to-end* translation of that edge into points, through an optimiser
+and a chip policy, is within noise of a baseline that owns whoever scored most
+recently. Somewhere between a forecast that is measurably better and a season
+total that is not, the advantage is being spent.
+
+Note where the margin over `roll3` comes from, because it is not player
+selection: with chips off the engine takes 63 hits across three seasons against
+`roll3`'s 215, and 173 transfers against 326. A forecast that is stable week to
+week does not churn the squad, and that discipline is much of the gap.
 
 The mean is the right statistic, which is worth recording because the obvious
 alternative is wrong. Rank-based tests are the usual answer to a noisy paired
-difference, but this one is not heavy-tailed (excess kurtosis −0.41) and the
-engine wins *bigger* rather than *more often* — a 55% win rate against a +3.17
-mean. A rank test therefore discards the signal: on the two-season sample the
-t-test gave p = 0.066, Wilcoxon 0.158, and a sign test 0.909.
+difference, but this one is not heavy-tailed and the engine wins *bigger* rather
+than *more often* — a 54.4% win rate against a +2.65 mean. A rank or sign test
+therefore discards exactly the signal that is there.
 
-Note where much of the margin over `roll3` comes from: the engine takes 16 hits
-in a recent season where `roll3` takes 71, and ~53 transfers against ~108. A
-forecast that is stable week to week does not churn the squad, and that
-discipline is much of the gap rather than better player selection.
-
-The forecast corrections here do carry through. Replaying 2024-25 before and
-after the prior and expected-assists fixes, on an unchanged optimiser, moves the
-season from **2124 to 2186** (+62) — itself +1.63 pts/gw [−1.63, +4.95], so not
-individually significant, but consistent in direction.
+The forecast corrections here did carry through when they were made: replaying
+2024-25 before and after the prior and expected-assists fixes, on an unchanged
+optimiser, moved the season from **2124 to 2186** (+62) — itself +1.63 pts/gw
+[−1.63, +4.95], so not individually significant, but consistent in direction.
+Those two figures are a *difference* measured in one sitting, which is the only
+thing that makes them safe to keep: neither endpoint matches what 2024-25
+returns today (2247 with chips off), for the same reason the pooled numbers
+moved. A before-and-after is robust to the baseline drifting; a level is not.
 
 **The £7.5–10.0m band, diagnosed and closed.** That band carries the largest
 remaining bias, and it is not a model defect. Decomposed on the current model
@@ -636,6 +783,23 @@ cannot leak into the retrospective forecasts the calibrator trains on.
 Run the tests with `uv run pytest tests/ -q`. They are offline by default; add
 `-m network` to include the live API check.
 
+That claim used to be false in a way that mattered. `test_smoke` reached
+football-data.co.uk through `generate_xp_matrix`, so the unit suite depended on
+the very feed the fallback chain exists to survive — and the daily workflow runs
+that suite before building the plan, with the comment "the daily job must not
+fail because an external API is briefly unavailable". An outage could therefore
+fail the test step and stop a publishable plan, which is precisely the failure
+the odds work was defending against. A successful fetch was worse: it wrote the
+last-good copy back over the repo's own committed `data/odds` floor, in
+football-data's full ~120-column form rather than the trimmed ten committed here,
+so running the tests turned 24KB into 201KB and left an unexplained 762-line diff
+next to whatever was actually being changed.
+
+The suite now blocks outbound reads of the odds feed and points the cache at a
+scratch copy seeded from the committed floor, so the retry, cache, mirror and
+rating fallbacks all still run for real against fixed data. It passes with every
+outbound socket blocked.
+
 ## Repository layout
 
 | File | Role |
@@ -646,8 +810,10 @@ Run the tests with `uv run pytest tests/ -q`. They are offline by default; add
 | `match_sim.py` | Correlated match simulation: bonus and risk |
 | `calibration.py` | Per-position recalibration of expected points (off by default) |
 | `optimizer.py` | Multi-gameweek ILP for squad, transfers, chips |
+| `chip_policy.py` | When to play a chip; shared by the weekly job and the replay |
 | `monte_carlo.py`, `ownership_model.py` | Rank-aware valuation |
 | `backtest.py` | Walk-forward evaluation and the CI accuracy gate |
+| `gate_baseline.json` | What the gate's configurations previously achieved |
 | `refresh_odds_cache.py` | Reseed the committed `data/odds` floor |
 | `simulator.py` | Full-season replay of the engine's own decisions |
 | `weekly_manager.py` | CLI entry point |

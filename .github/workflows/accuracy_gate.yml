@@ -41,6 +41,21 @@ name: Forecast Accuracy Gate
 # FPL's own `xP` column is reported for reference but never gates anything - it is
 # scraped post-gameweek and zeroed for players who did not feature, so it leaks
 # realised minutes.
+#
+# Beating the baselines is the floor, not the bar. Pooled, FEPL leads `ppg` by
+# 0.154 RMSE and 0.127 rank correlation, so a change could hand back most of the
+# edge this repo exists to find and still pass every check above, reported as a
+# clean build. So the run is also measured against `gate_baseline.json`, the
+# result this same configuration previously achieved, and fails if it is more
+# than 1% worse. The PR and scheduled runs cover different seasons and gameweeks
+# and each keeps its own record, keyed by configuration.
+#
+# A run with no record yet prints `[ -- ] ratchet` and does not fail, so adding a
+# configuration does not need a baseline first. To move the bar deliberately -
+# after a change that is expected to shift the numbers - re-record and commit it:
+#
+#   uv run python backtest.py --seasons 2025-26 --from-gw 8 --to-gw 16 \
+#     --gate-metric rmse spearman --update-gate-baseline
 
 on:
   push:

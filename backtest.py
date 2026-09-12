@@ -110,6 +110,13 @@ def fetch_data(season_str: str = "2024-25"):
 # --------------------------------------------------------------- mock the API
 
 
+def _column_sum(group, column: str) -> float:
+    """Total of a column that may not exist, as 0.0 rather than an exception."""
+    if column not in group.columns:
+        return 0.0
+    return float(pd.to_numeric(group[column], errors="coerce").fillna(0.0).sum())
+
+
 def build_mock_api(df_gw, df_players, df_teams, df_fixtures, current_gw: int,
                    prior_season_gw=None):
     """
@@ -146,8 +153,12 @@ def build_mock_api(df_gw, df_players, df_teams, df_fixtures, current_gw: int,
     stats: Dict[int, Dict[str, float]] = {}
     for pid, group in df_past.groupby("element"):
         mins = group["minutes"].sum()
-        xg = pd.to_numeric(group.get("expected_goals", 0), errors="coerce").sum()
-        xa = pd.to_numeric(group.get("expected_assists", 0), errors="coerce").sum()
+        # `DataFrame.get(col, 0)` hands back a bare `0`, not a Series, when the
+        # column is absent - and `.sum()` on that raises. Seasons before 2022-23
+        # carry no expected_goals/expected_assists at all, so the harness
+        # crashed on exactly the case it documents as "the column is missing".
+        xg = _column_sum(group, "expected_goals")
+        xa = _column_sum(group, "expected_assists")
         pts = group["total_points"].sum()
         games = len(group)
         stats[int(pid)] = {
@@ -744,6 +755,124 @@ def _compare(fepl: Dict[str, Any], baseline: Dict[str, Any], metric: str) -> boo
     return fepl[metric] > baseline[metric]
 
 
+# --- the ratchet -----------------------------------------------------------
+#
+# The gate above asks whether FEPL still beats trailing points-per-game and the
+# rolling means. That is the right *floor*, but it is a weak opponent: pooled,
+# the engine leads `ppg` by 0.154 RMSE and 0.127 rank correlation, so a change
+# could give back most of the edge this repo was built to find and still pass
+# every check, reported as a clean build.
+#
+# So the numbers actually achieved are committed, and a run is also measured
+# against its own recorded result. This catches the regression the baseline
+# comparison structurally cannot see: not "is it still better than doing almost
+# nothing", but "is it still as good as it was".
+#
+# The tolerance is not a significance test. On a completed season the harness is
+# deterministic - same data, same seeds, same answer - so a real regression
+# shows up exactly, and the slack exists only to absorb upstream data drift
+# (vaastav's archive does get backfilled). It is deliberately tight for that
+# reason. Widen it and the ratchet stops ratcheting.
+GATE_BASELINE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "gate_baseline.json")
+RATCHET_TOLERANCE = 0.01   # relative, i.e. 1% worse than recorded fails
+
+
+def gate_key(seasons: List[str], from_gw: int, to_gw: Optional[int],
+             prior_season: str = "auto") -> str:
+    """
+    Identifies what was measured, so a baseline is never applied to a different
+    run. The PR and the scheduled runs cover different seasons and gameweeks and
+    are not comparable; keying by config keeps both in one file without either
+    pretending to speak for the other.
+
+    `prior_season` belongs in the key because it changes the model being
+    measured, not just the sample: without `history_past` the engine runs on
+    weaker priors, so scoring a `--prior-season none` run against the default
+    run's record would fail the build for a reason that is not a regression.
+    Only non-default values are appended, so the keys the default run writes
+    stay readable.
+    """
+    key = f"{'+'.join(sorted(seasons))}@{from_gw}-{to_gw or 38}"
+    if prior_season and prior_season != "auto":
+        key += f"/prior={prior_season}"
+    return key
+
+
+def load_gate_baseline(path: str = GATE_BASELINE_PATH) -> Dict[str, Any]:
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        logger.warning("Could not read the gate baseline at %s: %s", path, e)
+        return {}
+
+
+def check_ratchet(summary: Dict[str, Any], recorded: Dict[str, float],
+                  metrics=DEFAULT_GATE_METRICS,
+                  tolerance: float = RATCHET_TOLERANCE) -> Tuple[bool, str]:
+    """Has FEPL held on to what it had, on every gated metric?"""
+    if isinstance(metrics, str):
+        metrics = (metrics,)
+    fepl = (summary.get("models") or {}).get("fepl")
+    if not fepl:
+        return False, "no FEPL results produced"
+    if not recorded:
+        return True, "no recorded result for this configuration; nothing to hold"
+
+    failures, passes = [], []
+    for metric in metrics:
+        if metric not in recorded or metric not in fepl:
+            continue
+        was, now = float(recorded[metric]), float(fepl[metric])
+        slack = abs(was) * tolerance
+        worse = (now > was + slack) if LOWER_IS_BETTER[metric] else (now < was - slack)
+        if worse:
+            failures.append(f"{metric} {now:.4f} vs {was:.4f} recorded")
+        else:
+            passes.append(f"{metric} {now:.4f} (was {was:.4f})")
+
+    if failures:
+        return False, ("FEPL regressed against its own recorded result on: "
+                       + "; ".join(failures)
+                       + f" [tolerance {tolerance:.1%}; "
+                         "re-record with --update-gate-baseline if intended]")
+    if not passes:
+        return True, "nothing comparable recorded"
+    return True, "FEPL held its recorded result on " + ", ".join(passes)
+
+
+def record_gate_baseline(summaries: List[Dict[str, Any]], key: str,
+                         path: str = GATE_BASELINE_PATH,
+                         metrics=DEFAULT_GATE_METRICS) -> Dict[str, Any]:
+    """
+    Write what this run achieved, under `key`. Records the pooled result when
+    there is more than one season, because that is what the gate treats as the
+    verdict, and the per-season numbers alongside it for context.
+    """
+    if isinstance(metrics, str):
+        metrics = (metrics,)
+    data = load_gate_baseline(path)
+
+    verdict = summaries[0] if len(summaries) == 1 else \
+        summarise(pool_gameweeks(summaries), "pooled", verbose=False)
+    fepl = (verdict.get("models") or {}).get("fepl") or {}
+
+    entry = {m: round(float(fepl[m]), 6) for m in metrics if m in fepl}
+    # Kept for a human reading the diff, never compared against.
+    entry["_recorded_gameweeks"] = int(verdict.get("gameweeks") or 0)
+    entry["_advisory"] = {m: round(float(fepl[m]), 6)
+                          for m in ADVISORY_GATE_METRICS if m in fepl}
+    data[key] = entry
+
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+        f.write("\n")
+    return entry
+
+
 def check_gate(summary: Dict[str, Any], metrics=DEFAULT_GATE_METRICS) -> Tuple[bool, str]:
     """
     The engine must beat every clean point-in-time baseline on every gated
@@ -982,6 +1111,18 @@ def main():
                          "xp_model.load_lineup_overrides). Normally absent in a "
                          "backtest: no such feed exists retrospectively.")
     ap.add_argument("--json-out", default="")
+    ap.add_argument("--gate-baseline", default=GATE_BASELINE_PATH,
+                    help="Committed record of what FEPL previously achieved. "
+                         "The gate also fails if this run is meaningfully worse "
+                         "than it, which beating the baselines does not catch.")
+    ap.add_argument("--ratchet-tolerance", type=float, default=RATCHET_TOLERANCE,
+                    help=f"Relative slack before a regression fails the "
+                         f"build (default {RATCHET_TOLERANCE}). Absorbs upstream "
+                         "data drift, not statistical noise: on a completed "
+                         "season the harness is deterministic.")
+    ap.add_argument("--update-gate-baseline", action="store_true",
+                    help="Record this run's result as the new bar and exit "
+                         "without gating on it. Commit the file.")
     args = ap.parse_args()
 
     # Production always has `history_past` from the API, so a backtest without it
@@ -1013,6 +1154,17 @@ def main():
             json.dump(all_summaries, f, indent=2, default=float)
         print(f"\nWrote {args.json_out}")
 
+    key = gate_key(args.seasons, args.from_gw, args.to_gw, args.prior_season)
+
+    if args.update_gate_baseline:
+        entry = record_gate_baseline(all_summaries, key, args.gate_baseline,
+                                     args.gate_metric)
+        print(f"\nRecorded {key} as the bar to hold: "
+              + ", ".join(f"{m} {v:.4f}" for m, v in entry.items()
+                          if not m.startswith("_")))
+        print(f"Wrote {args.gate_baseline} - commit it.")
+        raise SystemExit(0)
+
     if args.gate:
         failed = False
         for s in all_summaries:
@@ -1021,15 +1173,31 @@ def main():
             for line in advisory_report(s):
                 print(f"        {line}")
             failed = failed or not ok
+
+        # The pooled result is the verdict when there is more than one season: a
+        # season is a small sample and one bad one should not sink the build on
+        # its own. It is also what the ratchet is recorded against.
+        verdict = all_summaries[0]
         if len(all_summaries) > 1:
-            # A season is a small sample and one bad one should not sink the
-            # build on its own, but the pooled result is the real verdict.
-            pooled = summarise(pool_gameweeks(all_summaries), "pooled", verbose=False)
-            ok, msg = check_gate(pooled, args.gate_metric)
+            verdict = summarise(pool_gameweeks(all_summaries), "pooled", verbose=False)
+            ok, msg = check_gate(verdict, args.gate_metric)
             print(f"[{'PASS' if ok else 'FAIL'}] pooled: {msg}")
-            for line in advisory_report(pooled):
+            for line in advisory_report(verdict):
                 print(f"        {line}")
             failed = failed or not ok
+
+        # ...and beating the baselines is only the floor. Also hold the line
+        # against what this configuration previously achieved.
+        recorded = load_gate_baseline(args.gate_baseline).get(key)
+        if recorded is None:
+            print(f"[ -- ] ratchet: nothing recorded for {key}; "
+                  "run --update-gate-baseline to set the bar")
+        else:
+            ok, msg = check_ratchet(verdict, recorded, args.gate_metric,
+                                    args.ratchet_tolerance)
+            print(f"[{'PASS' if ok else 'FAIL'}] ratchet {key}: {msg}")
+            failed = failed or not ok
+
         raise SystemExit(1 if failed else 0)
 
 
