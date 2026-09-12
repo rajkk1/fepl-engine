@@ -427,10 +427,96 @@ and a chip policy, is within noise of a baseline that owns whoever scored most
 recently. Somewhere between a forecast that is measurably better and a season
 total that is not, the advantage is being spent.
 
-Note where the margin over `roll3` comes from, because it is not player
-selection: with chips off the engine takes 63 hits across three seasons against
-`roll3`'s 215, and 173 transfers against 326. A forecast that is stable week to
-week does not churn the squad, and that discipline is much of the gap.
+**Where it is being spent: the transfer window.** A season total says only
+whether a forecast is ahead. FPL pays one in three separable currencies — the
+squad you own and start, the armband, and what the churn costs at a flat −4 —
+and net is exactly `squad + armband − 4 × hits`, so the replay decomposes its own
+margin rather than leaving it to be guessed at. Pooled over the 114 gameweeks,
+chips off:
+
+| vs | squad | armband | hits | = net |
+|---|---|---|---|---|
+| `ppg` | **+368** | +78 | **−144** | +302 |
+| `roll3` | +363 | +202 | **+608** | +1173 |
+
+So the forecast does buy a better squad — +368, about +3.2 a gameweek, which is
+roughly the size of the forecast edge measured above. It is not captaincy: the
+armband is +78 in the engine's favour, which is worth saying because the gate's
+advisory line reports FEPL's captain regret as *no better* than `ppg`'s, and the
+obvious reading of that — the engine cannot pick a captain — is wrong.
+
+What costs it is the churn. 63 hits against `ppg`'s 27 is 144 points of penalty
+against a +446 gross advantage: **roughly a third of the edge is handed back at
+the transfer window**. The same discipline is what wins against `roll3`, which
+takes 215 hits and gives back 608.
+
+Playing chips does not change the diagnosis, which is worth checking rather than
+assuming: the engine's squad advantage grows to +414 and the armband to +95, and
+the hit differential is **−144 again** — 49 hits against 13, the same 36-hit gap
+as with chips off.
+
+Note the trap in reading that −144 as 144 points lying on the table. It is not:
+part of the +368 exists *because* of those extra transfers, so the penalty
+cannot be subtracted while the gain is kept. The only way to ask what the
+transfers were worth is to replay the seasons at a different price for a hit,
+holding the alternative use of the roster slot and the budget fixed — which is
+what `experiments/hit_cap_sweep.py --costs` does.
+
+**Asked, and not settled.** Sweeping the price over the three clean seasons at a
+fixed cap of 3:
+
+| price | pooled | hits | transfers | vs 4.0 | per season | |
+|---|---|---|---|---|---|---|
+| 4.0 *(shipped)* | 6295 | 71 | 181 | — | | |
+| 5.0 | **6401** | 48 | 158 | **+106** | +52 +44 +10 | seasons agree |
+| 6.0 | 6289 | 32 | 141 | −6 | +43 −54 +5 | disagree |
+| 8.0 | 6366 | 13 | 123 | +71 | +95 −62 +38 | disagree |
+
+Read the shape before the winner. If a higher price were straightforwardly
+better, 6.0 would sit between 5.0 and 8.0; instead it is the only arm *worse*
+than shipped. Paired per-gameweek over all 114 gameweeks, 5.0 is +0.93 with a
+block-bootstrap interval of [−0.75, +2.65] — the best arm in the sweep, and its
+interval still contains zero, as do the other two.
+
+What 5.0 has that no arm of the earlier cap sweep had is agreement: all three
+seasons move the same way, by +52, +44 and +10. That is three independent
+samples, which is not enough to act on and is exactly enough to be worth
+recording. **`HIT_COST` stays at 4.0**, the rules' price, because tuning it to
+the only three seasons that exist is fitting to the sample rather than to the
+game — the same reason the gate refuses to enforce a statistic whose interval
+spans zero.
+
+And the counterfactual says what the extra transfers actually buy: at the
+shipped price the engine holds only ~8.6 of 15 players in common with the
+tightest-budget arm by mid-season, and where both eventually buy the same
+player, the free-spending arm gets there first in barely a third of cases. The
+extra churn buys a *different* squad of about equal quality, not a better one —
+which is the same answer the cap sweep gave, now confirmed for the price.
+
+**And this table is now held to its own record.** It drifted once — the numbers
+above replaced 2069/2218/2090, and the verdict against `ppg` went from "+4.09,
+significant" to an interval containing zero — and nothing caught it, because
+nothing re-ran it. `replay_baseline.json` commits what each configuration
+produced and `simulator.py --gate` fails when a run stops reproducing it:
+
+```bash
+uv run python simulator.py --seasons 2023-24 2024-25 2025-26 --gate
+uv run python simulator.py --seasons 2023-24 2024-25 2025-26 --update-baseline
+```
+
+It gates the **totals**, not the margins, because a pooled mean of +2.65 has no
+sensible relative tolerance and every margin is derived from the same
+per-gameweek rows anyway — a total that holds is a margin that holds. The
+tolerance is 1%, and it is a compromise rather than a measurement: for fixed
+upstream data this replay is exactly reproducible (three separate runs returned
+2022/2247/2040 to the point), but upstream does move, a season replay amplifies
+a small forecast change rather than averaging it out, and nobody has measured
+how large that amplification is. 1% still catches what actually went wrong here,
+which was 1.1% pooled and up to 2.4% in a season.
+
+It runs weekly rather than on pull requests (`.github/workflows/replay_gate.yml`)
+because a replay takes tens of minutes against the accuracy gate's ~45 seconds,
+and a check that slow on every push is one people learn to skip.
 
 The mean is the right statistic, which is worth recording because the obvious
 alternative is wrong. Rank-based tests are the usual answer to a noisy paired
@@ -814,6 +900,7 @@ outbound socket blocked.
 | `monte_carlo.py`, `ownership_model.py` | Rank-aware valuation |
 | `backtest.py` | Walk-forward evaluation and the CI accuracy gate |
 | `gate_baseline.json` | What the gate's configurations previously achieved |
+| `replay_baseline.json` | What the season replay's configurations previously produced |
 | `refresh_odds_cache.py` | Reseed the committed `data/odds` floor |
 | `simulator.py` | Full-season replay of the engine's own decisions |
 | `weekly_manager.py` | CLI entry point |

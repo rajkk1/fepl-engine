@@ -1,0 +1,89 @@
+name: Season Replay Gate
+
+# The accuracy gate proves the *forecast* is still worth running. This proves
+# the table that says what the forecast is worth still says it.
+#
+# It exists because that table drifted and nothing caught it. The README
+# recorded 2069/2218/2090 for the three clean seasons; the same replay returns
+# 2022/2247/2040, and the pooled margin over trailing points-per-game went from
+# "+4.09, significant" to an interval containing zero. The numbers had been
+# computed outside the repo and were never re-derived, so nothing could notice.
+#
+# Why this is not on pull requests: a replay is three seasons x three forecasts
+# x 38 gameweeks, each gameweek a full forecast plus up to 21 ILP solves. It
+# runs in tens of minutes, not the ~45 seconds the accuracy gate takes, and a
+# check that slow on every push is a check people learn to skip. Weekly is
+# enough for a number that is only allowed to change deliberately.
+#
+# Both variants are gated because the README quotes both, and they answer
+# different questions: `no-chips` is the like-for-like history of this table,
+# `chips` is what the engine actually does.
+#
+# When a change is *meant* to move these numbers, re-record and commit, and
+# update the README table in the same change:
+#
+#   uv run python simulator.py --seasons 2023-24 2024-25 2025-26 --update-baseline
+#   uv run python simulator.py --seasons 2023-24 2024-25 2025-26 --no-chips --update-baseline
+
+on:
+  schedule:
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+    inputs:
+      seasons:
+        description: 'Seasons to replay'
+        default: '2023-24 2024-25 2025-26'
+      tolerance:
+        description: 'Relative slack before a move fails the gate'
+        default: '0.01'
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      # Both variants always run: a failure in one is worth seeing even when
+      # the other has already failed.
+      fail-fast: false
+      matrix:
+        include:
+          - variant: chips
+            flags: ''
+          - variant: no-chips
+            flags: '--no-chips'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Restore the last good odds file
+        # Same rolling cache as the weekly job. The replay reads market odds for
+        # every gameweek of every season, so a feed outage here would otherwise
+        # replace the fixture signal with flat ratings and move the totals for a
+        # reason that has nothing to do with the code.
+        uses: actions/cache@v4
+        with:
+          path: data/odds
+          key: odds-${{ github.run_id }}
+          restore-keys: |
+            odds-
+
+      - name: Replay the seasons and hold them to the record
+        run: |
+          uv run python simulator.py \
+            --seasons ${{ github.event.inputs.seasons || '2023-24 2024-25 2025-26' }} \
+            ${{ matrix.flags }} \
+            --gate --tolerance ${{ github.event.inputs.tolerance || '0.01' }} \
+            --json-out replay_${{ matrix.variant }}.json
+
+      - name: Upload the replay
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: replay-${{ matrix.variant }}
+          path: replay_${{ matrix.variant }}.json

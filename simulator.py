@@ -31,8 +31,10 @@ import argparse
 import itertools
 import json
 import logging
+import os
+import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -144,7 +146,13 @@ def score_gameweek(starters: List[int], bench: List[int], captain_id: Optional[i
     # anybody. Deriving this from `final` alone would report all four bench
     # players as substitutes every week the chip is played.
     autosubs = [] if bench_boost else [p for p in final if p not in starters]
+    # `squad_points` and `armband_points` are kept apart so a difference between
+    # two forecasts can be attributed rather than guessed at. A season total
+    # hides which of the three things a forecast actually buys - who you own,
+    # who you captain, and how much you churn - and those do not have to move
+    # together.
     return {"points": total + extra, "eleven": final,
+            "squad_points": total, "armband_points": extra,
             "leader": leader, "autosubs": autosubs}
 
 
@@ -323,6 +331,8 @@ def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
         history.append({
             "gw": gw, "points": scored["points"], "hits": hits, "net": net,
             "chip": chip_now,
+            "squad_points": scored["squad_points"],
+            "armband_points": scored["armband_points"],
             "cumulative": total_points, "transfers": len(transfers_in),
             "bank": bank, "captain": captain_id, "leader": scored["leader"],
             "autosubs": len(scored["autosubs"]),
@@ -411,6 +421,8 @@ def _print_comparison(results: Dict[str, Any]):
             if played else "none played"
         print(f"   chips  {src:<10}{detail}")
 
+    _print_attribution(results)
+
     # Per-gameweek paired test: a season total is one sample, and one sample
     # cannot tell a better forecast from a luckier one.
     #
@@ -449,6 +461,167 @@ def _print_comparison(results: Dict[str, Any]):
             print(f"   {src:<12}{d.mean():>+8.2f}{f'[{lo:+.2f}, {hi:+.2f}]':>18}"
                   f"{trimmed:>+9.2f}{(d > 0).mean():>10.3f}  {mark}")
     print("=" * 74)
+
+
+def _print_attribution(per_source: Dict[str, Any], label: str = ""):
+    """
+    Where a forecast's margin actually comes from.
+
+    A season total answers "is it ahead" and nothing else. FPL pays a forecast
+    in three separable currencies and they need not move together:
+
+      * **squad** - the eleven you own and start, autosubs included;
+      * **armband** - the captain, which doubles one player a week and is
+        therefore worth far more per decision than any other pick;
+      * **hits** - what the churn costs, at a flat -4.
+
+    Net = squad + armband - 4 x hits, exactly, so the three differences below
+    sum to the margin with nothing left over. That is the point: a forecast can
+    be better at picking a squad and hand the gain straight back at the armband
+    or the transfer window, and a single number cannot show it.
+    """
+    if "engine" not in per_source:
+        return
+    e = per_source["engine"]["history"]
+
+    def total(hist, key):
+        return float(sum(h.get(key, 0.0) for h in hist))
+
+    print()
+    print(f" where the margin comes from{label}:")
+    print(f"   {'baseline':<10}{'squad':>9}{'armband':>9}{'hits':>9}{'= net':>9}"
+          f"{'  (armband share)':>18}")
+    for src, r in sorted(per_source.items()):
+        if src == "engine":
+            continue
+        b = r["history"]
+        d_squad = total(e, "squad_points") - total(b, "squad_points")
+        d_arm = total(e, "armband_points") - total(b, "armband_points")
+        d_hits = -4.0 * (total(e, "hits") - total(b, "hits"))
+        net = d_squad + d_arm + d_hits
+        share = f"{d_arm / net:>6.0%}" if abs(net) > 1e-9 else "     -"
+        print(f"   {src:<10}{d_squad:>+9.0f}{d_arm:>+9.0f}{d_hits:>+9.0f}"
+              f"{net:>+9.0f}{share:>18}")
+
+
+# --- protecting the table ---------------------------------------------------
+#
+# The end-to-end table in the README drifted and nobody noticed. It recorded
+# 2069/2218/2090 against the 2022/2247/2040 the same replay returns today, and
+# the pooled margin over points-per-game went from "+4.09, significant" to an
+# interval containing zero. Nothing caught it because nothing re-ran it: the
+# pooled figures were computed outside the repo, and a season replay is far too
+# slow to put on a pull request.
+#
+# So the same treatment the forecast metrics get from `gate_baseline.json`:
+# commit what a configuration produced, and fail when a run no longer produces
+# it. The mechanism is the boring half; the tolerance is the interesting half.
+#
+# **What is gated is the totals, not the margins.** A pooled mean of +2.65
+# cannot be given a sensible relative tolerance, and an absolute one would be a
+# number pulled from the air. The totals are what the README quotes, they are
+# what drifted, and every margin is derived from the same per-gameweek rows -
+# so a total that holds is a margin that holds. The margins are recorded
+# alongside, and reported on a failure, because they are what a reader will
+# want to see when a total moves.
+#
+# **The tolerance is 1%, and it is a compromise rather than a measurement.** For
+# a fixed upstream dataset this replay is exactly reproducible - three separate
+# runs returned 2022/2247/2040 to the point - so in principle the bar could be
+# zero. It is not, because upstream does move: the forecast ratchet has already
+# seen GitHub's copy of the archive give an RMSE 0.00003 from the recorded one.
+# A season replay amplifies that rather than averaging it out, since one changed
+# forecast can flip a transfer and cascade through the rest of a season, and
+# nobody has measured how large that amplification is. 1% was chosen because it
+# still catches what actually went wrong here (the drift was 1.1% pooled and up
+# to 2.4% in a season) while leaving room for a cascade. If it proves flaky in
+# practice the honest fix is to widen it *and say so*, not to quietly stop
+# gating.
+REPLAY_BASELINE_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "replay_baseline.json")
+REPLAY_TOLERANCE = 0.01
+
+
+def replay_key(seasons: Sequence[str], from_gw: int, to_gw: Optional[int],
+               play_chips: bool) -> str:
+    """
+    What was measured. Chips on and chips off are different questions and each
+    keeps its own record; so do different seasons and gameweek ranges.
+    """
+    return (f"{'+'.join(sorted(seasons))}@{from_gw}-{to_gw or 38}"
+            f"/{'chips' if play_chips else 'no-chips'}")
+
+
+def pooled_totals(per_season: Dict[str, Dict[str, Any]]) -> Dict[str, float]:
+    """Net points per forecast, summed over every gameweek of every season."""
+    sources = sorted({s for r in per_season.values() for s in r})
+    return {src: float(sum(h["net"] for season in per_season
+                           for h in per_season[season][src]["history"]))
+            for src in sources}
+
+
+def load_replay_baseline(path: str = REPLAY_BASELINE_PATH) -> Dict[str, Any]:
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        logger.warning("Could not read the replay baseline at %s: %s", path, e)
+        return {}
+
+
+def check_replay(per_season: Dict[str, Dict[str, Any]], recorded: Dict[str, Any],
+                 tolerance: float = REPLAY_TOLERANCE) -> Tuple[bool, str]:
+    """Does this run still produce the totals that were committed?"""
+    if not recorded:
+        return True, "no recorded result for this configuration; nothing to hold"
+    was = (recorded or {}).get("totals") or {}
+    now = pooled_totals(per_season)
+
+    moved, held = [], []
+    for src in sorted(was):
+        if src not in now:
+            moved.append(f"{src} missing from this run")
+            continue
+        a, b = float(was[src]), now[src]
+        if abs(b - a) > abs(a) * tolerance:
+            moved.append(f"{src} {b:.0f} vs {a:.0f} recorded ({b - a:+.0f})")
+        else:
+            held.append(f"{src} {b:.0f}")
+
+    if moved:
+        return False, ("the replay no longer reproduces: " + "; ".join(moved)
+                       + f" [tolerance {tolerance:.1%}; if the move is intended, "
+                         "re-record with --update-baseline and update the README]")
+    return True, "replay reproduces on " + ", ".join(held)
+
+
+def record_replay_baseline(per_season: Dict[str, Dict[str, Any]], key: str,
+                           path: str = REPLAY_BASELINE_PATH) -> Dict[str, Any]:
+    """Commit what this run produced, under `key`."""
+    data = load_replay_baseline(path)
+    totals = pooled_totals(per_season)
+
+    entry: Dict[str, Any] = {"totals": {k: round(v) for k, v in totals.items()}}
+    entry["_gameweeks"] = sum(len(per_season[s]["engine"]["history"])
+                              for s in per_season if "engine" in per_season[s])
+    entry["_per_season"] = {
+        season: {src: round(float(r["total_points"]))
+                 for src, r in sorted(per_season[season].items())}
+        for season in sorted(per_season)}
+    # Recorded for a human reading a failure, never compared against: see the
+    # note above on why the totals are what is gated.
+    if "engine" in totals:
+        entry["_margin_per_gw"] = {
+            src: round((totals["engine"] - v) / max(1, entry["_gameweeks"]), 3)
+            for src, v in totals.items() if src != "engine"}
+
+    data[key] = entry
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2, sort_keys=True)
+        f.write("\n")
+    return entry
 
 
 def compare_seasons(seasons: List[str], horizon: int = 5, sources=XP_SOURCES,
@@ -496,6 +669,14 @@ def _print_pooled(per_season: Dict[str, Dict[str, Any]]):
         print("=" * 74)
         return
 
+    # Pooled attribution: concatenate the per-gameweek rows across seasons so
+    # the same decomposition applies to the number actually quoted.
+    pooled_hist = {
+        src: {"history": [h for season in sorted(per_season)
+                          for h in per_season[season][src]["history"]]}
+        for src in sources}
+    _print_attribution(pooled_hist, " (pooled)")
+
     e = nets["engine"]
     rng = np.random.default_rng(0)
     print()
@@ -517,6 +698,17 @@ def _print_pooled(per_season: Dict[str, Dict[str, Any]]):
 
 
 def main():
+    # A replay runs for tens of minutes and prints a table per season. Piped to
+    # a file or a CI log, stdout is block-buffered, so none of those tables
+    # appear until the process exits - the progress lines do, because they go
+    # through logging to stderr, which makes the run look like it is producing
+    # nothing. Line buffering costs nothing here and makes a long run readable
+    # while it is still going.
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except (AttributeError, ValueError):  # pragma: no cover - not a real stream
+        pass
+
     ap = argparse.ArgumentParser(description="Full-season replay of the engine")
     ap.add_argument("--season", default="2024-25",
                     help="A single season; --seasons pools several")
@@ -533,20 +725,55 @@ def main():
     ap.add_argument("--json-out", default="")
     ap.add_argument("--no-chips", action="store_true",
                     help="Replay without ever playing a chip (the old behaviour)")
+    ap.add_argument("--gate", action="store_true",
+                    help="Exit non-zero if this run no longer reproduces the "
+                         "totals committed in replay_baseline.json")
+    ap.add_argument("--baseline", default=REPLAY_BASELINE_PATH,
+                    help="Committed record of what this configuration produced")
+    ap.add_argument("--tolerance", type=float, default=REPLAY_TOLERANCE,
+                    help=f"Relative slack before a move fails the gate "
+                         f"(default {REPLAY_TOLERANCE})")
+    ap.add_argument("--update-baseline", action="store_true",
+                    help="Record this run as the bar to hold, and exit. "
+                         "Commit the file, and update the README table with it.")
     args = ap.parse_args()
 
-    if args.seasons:
-        results = compare_seasons(args.seasons, horizon=args.horizon,
-                                  sources=args.sources, from_gw=args.from_gw,
-                                  to_gw=args.to_gw, play_chips=not args.no_chips)
-    else:
-        results = compare_sources(args.season, horizon=args.horizon,
-                                  sources=args.sources, from_gw=args.from_gw,
-                                  to_gw=args.to_gw, play_chips=not args.no_chips)
+    seasons = args.seasons or [args.season]
+    results = compare_seasons(seasons, horizon=args.horizon,
+                              sources=args.sources, from_gw=args.from_gw,
+                              to_gw=args.to_gw, play_chips=not args.no_chips)
+    # `compare_seasons` keys by season; a single-season run used to return the
+    # per-source mapping directly, so unwrap it for callers and for --json-out.
+    if not args.seasons:
+        results = results[args.season]
     if args.json_out:
         with open(args.json_out, "w") as f:
             json.dump(results, f, indent=2, default=float)
         print(f"\nWrote {args.json_out}")
+
+    per_season = results if args.seasons else {args.season: results}
+    key = replay_key(seasons, args.from_gw, args.to_gw, not args.no_chips)
+
+    if args.update_baseline:
+        entry = record_replay_baseline(per_season, key, args.baseline)
+        print(f"\nRecorded {key} as the bar to hold: "
+              + ", ".join(f"{k} {v}" for k, v in entry["totals"].items()))
+        print(f"Wrote {args.baseline} - commit it, and update the README table.")
+        raise SystemExit(0)
+
+    if args.gate:
+        recorded = load_replay_baseline(args.baseline).get(key)
+        if recorded is None:
+            print(f"\n[ -- ] replay gate: nothing recorded for {key}; "
+                  "run --update-baseline to set the bar")
+            raise SystemExit(0)
+        ok, msg = check_replay(per_season, recorded, args.tolerance)
+        print(f"\n[{'PASS' if ok else 'FAIL'}] replay gate {key}: {msg}")
+        if not ok:
+            print("   recorded margins per gameweek: "
+                  + ", ".join(f"{k} {v:+.2f}" for k, v in
+                              (recorded.get("_margin_per_gw") or {}).items()))
+        raise SystemExit(0 if ok else 1)
 
 
 if __name__ == "__main__":

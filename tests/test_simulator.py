@@ -436,3 +436,155 @@ def test_pooling_is_skipped_for_a_single_season(capsys):
 
     assert calls == ["2024-25"]
     assert "POOLED" not in capsys.readouterr().out
+
+
+# --- protecting the table ---------------------------------------------------
+#
+# The README's end-to-end table drifted and nothing caught it, because nothing
+# re-ran it. These cover the mechanism that now does.
+
+def _hist(nets, squad=None, armband=None, hits=None):
+    n = len(nets)
+    squad = squad if squad is not None else [v for v in nets]
+    armband = armband if armband is not None else [0.0] * n
+    hits = hits if hits is not None else [0] * n
+    return [{"net": nets[i], "squad_points": squad[i],
+             "armband_points": armband[i], "hits": hits[i]} for i in range(n)]
+
+
+def _pooled(**by_source):
+    return {"s1": {src: {"history": _hist(nets), "total_points": float(sum(nets)),
+                         "points_per_gw": 0.0, "total_hits": 0,
+                         "total_transfers": 0, "season": "s1",
+                         "gameweeks": len(nets), "chips_played": []}
+                   for src, nets in by_source.items()}}
+
+
+def test_the_replay_gate_passes_an_unchanged_run():
+    from simulator import check_replay
+
+    run = _pooled(engine=[50, 60], ppg=[40, 40])
+    ok, msg = check_replay(run, {"totals": {"engine": 110, "ppg": 80}})
+    assert ok, msg
+
+
+def test_the_replay_gate_catches_the_drift_that_actually_happened():
+    """
+    The recorded table said 2069/2218/2090 and the replay returned
+    2022/2247/2040 - between 1.1% and 2.4%. The gate has to catch that or it is
+    not worth having.
+    """
+    from simulator import check_replay
+
+    run = _pooled(engine=[2022 + 2247 + 2040])
+    ok, msg = check_replay(run, {"totals": {"engine": 2069 + 2218 + 2090}})
+    assert not ok
+    assert "engine" in msg and "re-record" in msg
+
+
+def test_the_replay_gate_tolerates_drift_below_its_bar():
+    from simulator import check_replay
+
+    # 0.5% low: upstream wobble, let it through.
+    run = _pooled(engine=[6277])
+    assert check_replay(run, {"totals": {"engine": 6309}})[0]
+    # 2% low: the table no longer says what it says.
+    run = _pooled(engine=[6183])
+    assert not check_replay(run, {"totals": {"engine": 6309}})[0]
+
+
+def test_the_replay_gate_watches_the_baselines_too():
+    """
+    A run where the engine holds but `ppg` moves is still a table that no longer
+    reproduces - and it is the *margin* that the README quotes.
+    """
+    from simulator import check_replay
+
+    run = _pooled(engine=[6309], ppg=[6300])
+    ok, msg = check_replay(run, {"totals": {"engine": 6309, "ppg": 6007}})
+    assert not ok
+    assert "ppg" in msg
+
+
+def test_a_configuration_with_nothing_recorded_does_not_fail():
+    from simulator import check_replay
+
+    ok, msg = check_replay(_pooled(engine=[1]), {})
+    assert ok
+    assert "nothing to hold" in msg
+
+
+def test_the_replay_key_separates_chips_from_no_chips():
+    """
+    Chips on and chips off are different questions with different totals;
+    scoring one against the other's record would fail for no reason.
+    """
+    from simulator import replay_key
+
+    on = replay_key(["2023-24"], 1, 38, True)
+    off = replay_key(["2023-24"], 1, 38, False)
+    assert on != off
+    assert replay_key(["b", "a"], 1, 38, True) == replay_key(["a", "b"], 1, 38, True)
+
+
+def test_recording_then_gating_the_same_run_passes(tmp_path):
+    from simulator import record_replay_baseline, load_replay_baseline, check_replay
+
+    path = str(tmp_path / "replay_baseline.json")
+    run = _pooled(engine=[50, 60], ppg=[40, 40])
+    entry = record_replay_baseline(run, "k", path)
+
+    assert entry["totals"] == {"engine": 110, "ppg": 80}
+    assert entry["_gameweeks"] == 2
+    # The margin is recorded for a reader, not gated on.
+    assert entry["_margin_per_gw"]["ppg"] == 15.0
+
+    ok, _ = check_replay(run, load_replay_baseline(path)["k"])
+    assert ok
+
+
+def test_a_missing_or_corrupt_replay_baseline_is_not_fatal(tmp_path):
+    from simulator import load_replay_baseline
+
+    assert load_replay_baseline(str(tmp_path / "nope.json")) == {}
+    p = tmp_path / "replay_baseline.json"
+    p.write_text("{not json")
+    assert load_replay_baseline(str(p)) == {}
+
+
+# --- attribution ------------------------------------------------------------
+
+def test_the_attribution_sums_to_the_margin(capsys):
+    """
+    squad + armband - 4 x hits must equal the net difference exactly, or the
+    decomposition is telling a story the points do not support.
+    """
+    from simulator import _print_attribution
+
+    per_source = {
+        "engine": {"history": _hist([46, 46], squad=[40, 40],
+                                    armband=[10, 10], hits=[1, 1])},
+        "ppg": {"history": _hist([30, 30], squad=[25, 25],
+                                 armband=[5, 5], hits=[0, 0])},
+    }
+    _print_attribution(per_source)
+    out = capsys.readouterr().out
+
+    # squad +30, armband +10, hits -8 -> net +32, which is 2 x (46 - 30).
+    assert "+30" in out and "+10" in out and "-8" in out and "+32" in out
+
+
+def test_the_attribution_shows_a_margin_handed_back_at_the_armband(capsys):
+    """
+    The case the decomposition exists for: better at picking a squad, worse at
+    picking a captain, and a season total that cannot tell you so.
+    """
+    from simulator import _print_attribution
+
+    per_source = {
+        "engine": {"history": _hist([50], squad=[45], armband=[5], hits=[0])},
+        "ppg": {"history": _hist([50], squad=[30], armband=[20], hits=[0])},
+    }
+    _print_attribution(per_source)
+    out = capsys.readouterr().out
+    assert "+15" in out and "-15" in out
