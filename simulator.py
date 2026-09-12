@@ -451,9 +451,79 @@ def _print_comparison(results: Dict[str, Any]):
     print("=" * 74)
 
 
+def compare_seasons(seasons: List[str], horizon: int = 5, sources=XP_SOURCES,
+                    from_gw: int = 1, to_gw: Optional[int] = None,
+                    play_chips: bool = True) -> Dict[str, Any]:
+    """
+    Replay several seasons and pool the paired per-gameweek differences.
+
+    The pooled figure is the one worth quoting - a single season is ~38 paired
+    samples of a very noisy difference - but it used to be computed outside the
+    repo, so the numbers in the README could not be re-derived from anything
+    here. They can now.
+    """
+    per_season = {s: compare_sources(s, horizon=horizon, sources=sources,
+                                     from_gw=from_gw, to_gw=to_gw,
+                                     play_chips=play_chips)
+                  for s in seasons}
+    if len(seasons) > 1:
+        _print_pooled(per_season)
+    return per_season
+
+
+def _print_pooled(per_season: Dict[str, Dict[str, Any]]):
+    sources = sorted({s for r in per_season.values() for s in r})
+    nets = {src: np.concatenate([
+        np.array([h["net"] for h in per_season[season][src]["history"]], dtype=float)
+        for season in per_season if src in per_season[season]])
+        for src in sources}
+    n_gw = len(next(iter(nets.values())))
+
+    print()
+    print("=" * 74)
+    print(f" POOLED  ({', '.join(sorted(per_season))} - {n_gw} gameweeks, "
+          f"paired by gameweek)")
+    print("=" * 74)
+    print(f" {'forecast':<12}{'points':>9}{'per GW':>9}{'hits':>7}{'transfers':>11}")
+    print(" " + "-" * 70)
+    for src in sorted(sources, key=lambda s: -float(nets[s].sum())):
+        hits = sum(per_season[se][src]["total_hits"] for se in per_season)
+        trans = sum(per_season[se][src]["total_transfers"] for se in per_season)
+        print(f" {src:<12}{nets[src].sum():>9.0f}{nets[src].mean():>9.2f}"
+              f"{hits:>7d}{trans:>11d}")
+
+    if "engine" not in nets:
+        print("=" * 74)
+        return
+
+    e = nets["engine"]
+    rng = np.random.default_rng(0)
+    print()
+    print(" engine minus baseline, paired by gameweek:")
+    print(f"   {'baseline':<12}{'mean':>8}{'95% CI':>18}{'total':>8}"
+          f"{'win rate':>10}{'':>4}")
+    for src in sorted(sources):
+        if src == "engine":
+            continue
+        b = nets[src]
+        n = min(len(e), len(b))
+        d = e[:n] - b[:n]
+        boot = rng.choice(d, size=(20000, n), replace=True).mean(axis=1)
+        lo, hi = np.percentile(boot, [2.5, 97.5])
+        mark = "significant" if (lo > 0) == (hi > 0) else "noise"
+        print(f"   {src:<12}{d.mean():>+8.2f}{f'[{lo:+.2f}, {hi:+.2f}]':>18}"
+              f"{d.sum():>+8.0f}{(d > 0).mean():>10.3f}  {mark}")
+    print("=" * 74)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Full-season replay of the engine")
-    ap.add_argument("--season", default="2024-25")
+    ap.add_argument("--season", default="2024-25",
+                    help="A single season; --seasons pools several")
+    ap.add_argument("--seasons", nargs="+", default=None,
+                    help="Replay these seasons and pool the paired differences. "
+                         "The pooled figure is the one worth quoting: one season "
+                         "is ~38 paired samples of a very noisy difference.")
     ap.add_argument("--horizon", type=int, default=5)
     ap.add_argument("--from-gw", type=int, default=1)
     ap.add_argument("--to-gw", type=int, default=None)
@@ -465,9 +535,14 @@ def main():
                     help="Replay without ever playing a chip (the old behaviour)")
     args = ap.parse_args()
 
-    results = compare_sources(args.season, horizon=args.horizon,
-                              sources=args.sources, from_gw=args.from_gw,
-                              to_gw=args.to_gw, play_chips=not args.no_chips)
+    if args.seasons:
+        results = compare_seasons(args.seasons, horizon=args.horizon,
+                                  sources=args.sources, from_gw=args.from_gw,
+                                  to_gw=args.to_gw, play_chips=not args.no_chips)
+    else:
+        results = compare_sources(args.season, horizon=args.horizon,
+                                  sources=args.sources, from_gw=args.from_gw,
+                                  to_gw=args.to_gw, play_chips=not args.no_chips)
     if args.json_out:
         with open(args.json_out, "w") as f:
             json.dump(results, f, indent=2, default=float)

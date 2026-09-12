@@ -367,3 +367,72 @@ def test_a_free_hit_does_not_spend_the_free_transfer_bank(tiny_season, monkeypat
     # none of them come out of the bank.
     assert by_gw[3]["hits"] == 0
     assert by_gw[4]["hits"] == 0
+
+
+# --- pooling across seasons -------------------------------------------------
+#
+# The README quotes a pooled figure over 114 gameweeks, which is the one worth
+# quoting - a single season is ~38 paired samples of a very noisy difference -
+# but nothing in the repo produced it, so the number could not be re-derived.
+
+def _season(net_by_source, hits=0, transfers=0):
+    return {src: {"history": [{"net": v} for v in nets],
+                  "total_hits": hits, "total_transfers": transfers,
+                  "total_points": float(sum(nets)),
+                  "points_per_gw": float(sum(nets)) / max(1, len(nets)),
+                  "season": "x", "gameweeks": len(nets), "chips_played": []}
+            for src, nets in net_by_source.items()}
+
+
+def test_pooling_sums_the_seasons_it_was_given(capsys):
+    from simulator import _print_pooled
+
+    _print_pooled({
+        "2023-24": _season({"engine": [10, 20], "ppg": [5, 5]}, hits=1, transfers=3),
+        "2024-25": _season({"engine": [30, 40], "ppg": [5, 5]}, hits=2, transfers=4),
+    })
+    out = capsys.readouterr().out
+
+    assert "4 gameweeks" in out
+    # 10+20+30+40 against 5*4, and the hits/transfers add up too.
+    assert " 100" in out and " 20" in out
+    assert "+80" in out, out           # engine minus ppg, pooled total
+
+
+def test_pooling_pairs_by_gameweek_not_by_season_total(capsys):
+    """
+    A season total is one sample. The paired test needs every gameweek, so the
+    pooled win rate must be computed over all of them, not over seasons.
+    """
+    from simulator import _print_pooled
+
+    # Engine wins three gameweeks out of four, narrowly, and loses one heavily.
+    _print_pooled({
+        "a": _season({"engine": [11, 11], "ppg": [10, 10]}),
+        "b": _season({"engine": [11, 0], "ppg": [10, 40]}),
+    })
+    out = capsys.readouterr().out
+    assert "0.750" in out, out          # 3 of 4 gameweeks won
+    # ...but the mean difference is negative, which is the point of reporting both.
+    assert "-9.25" in out, out
+
+
+def test_pooling_is_skipped_for_a_single_season(capsys):
+    from simulator import compare_seasons
+    import simulator
+
+    calls = []
+
+    def fake_compare(season, **kw):
+        calls.append(season)
+        return _season({"engine": [1, 2]})
+
+    original = simulator.compare_sources
+    simulator.compare_sources = fake_compare
+    try:
+        compare_seasons(["2024-25"])
+    finally:
+        simulator.compare_sources = original
+
+    assert calls == ["2024-25"]
+    assert "POOLED" not in capsys.readouterr().out

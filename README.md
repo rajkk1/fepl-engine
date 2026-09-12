@@ -137,13 +137,9 @@ written to be reasonable, not fitted — the bar for a wildcard at GW2 is
 `20 × 17/19 ≈ 17.9` xP, which a squad built blind in GW1 clears without trying.
 Now that a policy change shows up in points, that is a cheap question to ask.
 
-> **The older table below does not reproduce.** It records 2069 / 2218 / 2090
-> against the 2022 / 2247 / 2040 a no-chip replay produces on this commit. The
-> gap is not from anything in this section: a replay driven by the optimiser as
-> it stood *before* these fixes returns 2022 and 2247 as well. So the numbers
-> were recorded against an earlier state of the code or the upstream archive and
-> have not been re-run since. They are left as they were rather than quietly
-> restated, because a number nobody can reproduce should say so.
+The whole end-to-end table further down has been re-run against this commit for
+both variants, and it did not come back saying what it used to — see *Does any
+of it put points on the board?*
 
 **A timed-out solve is not a slow solve, it is a dropped option.** Searching
 chip × gameweek means 21 solves where there used to be one, and a solve that
@@ -369,45 +365,87 @@ biggest defect at −0.515; that was mostly 2022-23's understated xG.
 **Does any of it put points on the board?** Everything above measures the
 *forecast*. `simulator.py` measures what the forecast is for: it replays a season
 following the engine's own transfers, captaincy and bench order, driving the
-**same optimiser** with each forecast so any difference is attributable to the
-forecast alone.
+**same optimiser** — and the same chip policy — with each forecast, so any
+difference is attributable to the forecast alone.
 
+```bash
+uv run python simulator.py --seasons 2023-24 2024-25 2025-26            # as it runs
+uv run python simulator.py --seasons 2023-24 2024-25 2025-26 --no-chips # chips off
 ```
- season      engine     ppg   roll3   hits
- 2023-24       2069    1937    1833     32
- 2024-25       2218    2010    1776     16
- 2025-26       2090    1964    1629     16
-```
+
+Chips off, which is what this table used to measure:
+
+| season | engine | `ppg` | `roll3` |
+|---|---|---|---|
+| 2023-24 | 2022 | 1968 | 1808 |
+| 2024-25 | 2247 | 2066 | 1712 |
+| 2025-26 | 2040 | 1973 | 1616 |
+| **pooled** | **6309** | 6007 | 5136 |
+
+Chips played, which is what the engine actually does:
+
+| season | engine | `ppg` | `roll3` |
+|---|---|---|---|
+| 2023-24 | 2109 | 2027 | 1850 |
+| 2024-25 | 2329 | 2119 | 1755 |
+| 2025-26 | 2129 | 2056 | 1679 |
+| **pooled** | **6567** | 6202 | 5284 |
 
 Pooled over all three clean seasons — **114 gameweeks**, paired by gameweek:
 
-| baseline | mean | 95% CI | 3-season total | win rate | |
-|---|---|---|---|---|---|
-| `ppg` | **+4.09** | [+0.81, +7.35] | **+466** | 0.553 | significant |
-| `roll3` | **+9.07** | [+5.28, +12.71] | **+1034** | 0.711 | significant |
+| | baseline | mean | 95% CI | 3-season total | win rate | |
+|---|---|---|---|---|---|---|
+| chips off | `ppg` | +2.65 | [−0.63, +5.81] | +302 | 0.544 | **not significant** |
+| | `roll3` | **+10.29** | [+6.30, +14.18] | **+1173** | 0.719 | significant |
+| chips played | `ppg` | +3.20 | [−0.18, +6.48] | +365 | 0.553 | **not significant** |
+| | `roll3` | **+11.25** | [+7.52, +14.92] | **+1283** | 0.754 | significant |
 
-Read the interval rather than the verdict on the first row. The lower bound is
-**+0.81** — better than the +0.13 it sat at before the price-anchored priors, but
-still close enough that this is evidence for a real end-to-end edge over
-points-per-game rather than a settled result. Two seasons (76 gameweeks) gave
-[−0.13, +6.33] and did not clear zero at all.
+**The edge over points-per-game does not clear zero, and an earlier version of
+this file said it did.** It reported +4.09 [+0.81, +7.35] and called it
+significant. Re-run on the current code the same comparison gives +2.65
+[−0.63, +5.81] with chips off and +3.20 [−0.18, +6.48] with them played: the
+same direction, a smaller mean, and an interval that now contains zero in both
+variants. Nothing here was re-measured between those two states, so the honest
+reading is that the earlier number was recorded against a state of the code or
+the upstream archive that no longer exists and was never re-derived — which is
+exactly the failure the `gate_baseline.json` ratchet now exists to prevent for
+the forecast metrics, and which nothing yet prevents for this table.
+
+So: **beating trailing points-per-game end to end is not established.** It is not
+significant pooled, and it is not significant in any single season in either
+variant — the six season-by-variant intervals against `ppg` all contain zero.
+What *is* established is the margin over the rolling means: large, significant
+pooled in both variants, and significant in five of those same six cells (the
+exception is 2023-24 with chips off, +5.63 [−2.42, +13.03]).
+
+That is a narrower claim than the file used to make, and it is worth being
+precise about what it does *not* say. It does not say the forecast work was
+wasted — the forecast metrics clear `ppg` comfortably and significantly on RMSE,
+rank correlation and points-captured@15 (above), on the same three seasons. It
+says the *end-to-end* translation of that edge into points, through an optimiser
+and a chip policy, is within noise of a baseline that owns whoever scored most
+recently. Somewhere between a forecast that is measurably better and a season
+total that is not, the advantage is being spent.
+
+Note where the margin over `roll3` comes from, because it is not player
+selection: with chips off the engine takes 63 hits across three seasons against
+`roll3`'s 215, and 173 transfers against 326. A forecast that is stable week to
+week does not churn the squad, and that discipline is much of the gap.
 
 The mean is the right statistic, which is worth recording because the obvious
 alternative is wrong. Rank-based tests are the usual answer to a noisy paired
-difference, but this one is not heavy-tailed (excess kurtosis −0.41) and the
-engine wins *bigger* rather than *more often* — a 55% win rate against a +3.17
-mean. A rank test therefore discards the signal: on the two-season sample the
-t-test gave p = 0.066, Wilcoxon 0.158, and a sign test 0.909.
+difference, but this one is not heavy-tailed and the engine wins *bigger* rather
+than *more often* — a 54.4% win rate against a +2.65 mean. A rank or sign test
+therefore discards exactly the signal that is there.
 
-Note where much of the margin over `roll3` comes from: the engine takes 16 hits
-in a recent season where `roll3` takes 71, and ~53 transfers against ~108. A
-forecast that is stable week to week does not churn the squad, and that
-discipline is much of the gap rather than better player selection.
-
-The forecast corrections here do carry through. Replaying 2024-25 before and
-after the prior and expected-assists fixes, on an unchanged optimiser, moves the
-season from **2124 to 2186** (+62) — itself +1.63 pts/gw [−1.63, +4.95], so not
-individually significant, but consistent in direction.
+The forecast corrections here did carry through when they were made: replaying
+2024-25 before and after the prior and expected-assists fixes, on an unchanged
+optimiser, moved the season from **2124 to 2186** (+62) — itself +1.63 pts/gw
+[−1.63, +4.95], so not individually significant, but consistent in direction.
+Those two figures are a *difference* measured in one sitting, which is the only
+thing that makes them safe to keep: neither endpoint matches what 2024-25
+returns today (2247 with chips off), for the same reason the pooled numbers
+moved. A before-and-after is robust to the baseline drifting; a level is not.
 
 **The £7.5–10.0m band, diagnosed and closed.** That band carries the largest
 remaining bias, and it is not a model defect. Decomposed on the current model
