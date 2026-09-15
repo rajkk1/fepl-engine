@@ -377,46 +377,47 @@ Chips off, which is what this table used to measure:
 
 | season | engine | `ppg` | `roll3` |
 |---|---|---|---|
-| 2023-24 | 2022 | 1968 | 1808 |
+| 2023-24 | 2106 | 1968 | 1808 |
 | 2024-25 | 2247 | 2066 | 1712 |
-| 2025-26 | 2040 | 1973 | 1616 |
-| **pooled** | **6309** | 6007 | 5136 |
+| 2025-26 | 2086 | 1973 | 1616 |
+| **pooled** | **6439** | 6007 | 5136 |
 
 Chips played, which is what the engine actually does:
 
 | season | engine | `ppg` | `roll3` |
 |---|---|---|---|
-| 2023-24 | 2109 | 2027 | 1850 |
-| 2024-25 | 2329 | 2119 | 1755 |
-| 2025-26 | 2129 | 2056 | 1679 |
-| **pooled** | **6567** | 6202 | 5284 |
+| 2023-24 | 2115 | 2027 | 1850 |
+| 2024-25 | 2366 | 2119 | 1755 |
+| 2025-26 | 2043 | 2056 | 1679 |
+| **pooled** | **6524** | 6202 | 5284 |
 
 Pooled over all three clean seasons — **114 gameweeks**, paired by gameweek:
 
 | | baseline | mean | 95% CI | 3-season total | win rate | |
 |---|---|---|---|---|---|---|
-| chips off | `ppg` | +2.65 | [−0.63, +5.81] | +302 | 0.544 | **not significant** |
-| | `roll3` | **+10.29** | [+6.30, +14.18] | **+1173** | 0.719 | significant |
-| chips played | `ppg` | +3.20 | [−0.18, +6.48] | +365 | 0.553 | **not significant** |
-| | `roll3` | **+11.25** | [+7.52, +14.92] | **+1283** | 0.754 | significant |
+| chips off | `ppg` | **+3.79** | [+0.86, +6.68] | **+432** | 0.614 | **significant** |
+| | `roll3` | **+11.43** | [+7.89, +14.99] | **+1303** | 0.711 | significant |
+| chips played | `ppg` | +2.82 | [−0.54, +6.11] | +322 | 0.535 | **not significant** |
+| | `roll3` | **+10.88** | [+7.25, +14.47] | **+1240** | 0.754 | significant |
 
 **The edge over points-per-game does not clear zero, and an earlier version of
-this file said it did.** It reported +4.09 [+0.81, +7.35] and called it
-significant. Re-run on the current code the same comparison gives +2.65
-[−0.63, +5.81] with chips off and +3.20 [−0.18, +6.48] with them played: the
-same direction, a smaller mean, and an interval that now contains zero in both
-variants. Nothing here was re-measured between those two states, so the honest
+this file said it did, on numbers that did not reproduce.** It reported +4.09
+[+0.81, +7.35]. Re-run, the same comparison gave +2.65 [−0.63, +5.81] with chips
+off and +3.20 [−0.18, +6.48] with them played — the same direction, a smaller
+mean, and an interval containing zero in both. It has since recovered to +3.79
+[+0.86, +6.68] with chips off, on the bench-cover fix below, and remains inside
+noise with chips played. Nothing here was re-measured between those two states, so the honest
 reading is that the earlier number was recorded against a state of the code or
 the upstream archive that no longer exists and was never re-derived — which is
 exactly the failure the `gate_baseline.json` ratchet now exists to prevent for
 the forecast metrics, and which nothing yet prevents for this table.
 
-So: **beating trailing points-per-game end to end is not established.** It is not
-significant pooled, and it is not significant in any single season in either
-variant — the six season-by-variant intervals against `ppg` all contain zero.
-What *is* established is the margin over the rolling means: large, significant
-pooled in both variants, and significant in five of those same six cells (the
-exception is 2023-24 with chips off, +5.63 [−2.42, +13.03]).
+So: **beating trailing points-per-game end to end is established with chips off
+and not with them played** — +3.79 [+0.86, +6.68] against +2.82 [−0.54, +6.11].
+That is a thin claim resting on one variant, and the honest reading is that the
+end-to-end edge over `ppg` is real but close enough to the noise floor that the
+measurement configuration decides it. The margin over the rolling means needs no
+such hedging: large and significant pooled in both variants.
 
 That is a narrower claim than the file used to make, and it is worth being
 precise about what it does *not* say. It does not say the forecast work was
@@ -439,21 +440,20 @@ chips off:
 | `ppg` | **+368** | +78 | **−144** | +302 |
 | `roll3` | +363 | +202 | **+608** | +1173 |
 
-So the forecast does buy a better squad — +368, about +3.2 a gameweek, which is
-roughly the size of the forecast edge measured above. It is not captaincy: the
+So the forecast does buy a better squad — +548, about +4.8 a gameweek, comfortably
+the size of the forecast edge measured above. It is not captaincy: the
 armband is +78 in the engine's favour, which is worth saying because the gate's
 advisory line reports FEPL's captain regret as *no better* than `ppg`'s, and the
 obvious reading of that — the engine cannot pick a captain — is wrong.
 
-What costs it is the churn. 63 hits against `ppg`'s 27 is 144 points of penalty
-against a +446 gross advantage: **roughly a third of the edge is handed back at
-the transfer window**. The same discipline is what wins against `roll3`, which
+What costs it is the churn. 71 hits against `ppg`'s 27 is 176 points of penalty
+against a +608 gross advantage: **more than a quarter of the edge is handed back
+at the transfer window**. The same discipline is what wins against `roll3`, which
 takes 215 hits and gives back 608.
 
 Playing chips does not change the diagnosis, which is worth checking rather than
-assuming: the engine's squad advantage grows to +414 and the armband to +95, and
-the hit differential is **−144 again** — 49 hits against 13, the same 36-hit gap
-as with chips off.
+assuming: the squad advantage is +428, the armband +86, and the hit differential
+−192.
 
 Note the trap in reading that −144 as 144 points lying on the table. It is not:
 part of the +368 exists *because* of those extra transfers, so the penalty
@@ -492,6 +492,58 @@ tightest-budget arm by mid-season, and where both eventually buy the same
 player, the free-spending arm gets there first in barely a third of cases. The
 extra churn buys a *different* squad of about equal quality, not a better one —
 which is the same answer the cap sweep gave, now confirmed for the price.
+
+**Bench cover is priced off the eleven in front of it.** A substitute only
+scores if a starter fails to appear, so his worth is P(a place opens up in his
+position) x his own expected points — and the engine already estimates P(plays)
+for every player. It used to be a constant, which priced cover identically for a
+nailed eleven and a set of coin flips.
+
+The constant was a good average and a poor week. Replaying three seasons, the
+engine takes 0.447 autosubs a gameweek across four bench players — an average
+weight of ~0.11, against the 0.12 that was shipped. But computed properly from
+the forecast it runs **0.059 in GW8 and 0.285 in GW30**: roughly twice too high
+in autumn and less than half what it should be by spring, as injuries and flags
+accumulate. It is also wrong *across* squads, not just weeks — `ppg`, which does
+not model minutes, needs 1.079 autosubs a gameweek, two and a half times the
+engine's.
+
+So it is now `expected blanks / slots`, estimated once per gameweek from the
+squad's likely eleven so the objective stays linear — the same device the
+vice-captain term uses for P(the captain blanks). No parameter was fitted: the
+bench player's own expected points already carry his P(plays), and this is the
+separate question of whether a place opens up.
+
+**A forecast that does not model availability keeps the old constants**, and
+that guard matters more than it looks. `ppg` and `roll3` say P(plays) = 1.0 for
+anyone they rate and 0.0 for everyone else — 302 of 780 players in 2025-26.
+Deriving a weight from that would hand them a bench priced off an availability
+model they do not have, and the engine would have gained against them for a
+reason unrelated to forecasting. A first version tested only whether the blank
+probability was non-zero, which let them through whenever a zero-rated player
+reached the likely eleven and moved them by ~0.3%. The test is now whether the
+forecast ever expresses a *graded* probability at all, and with it the baselines
+reproduce to the point.
+
+It is worth **+130 with chips off** — +84, +0, +46, no season worse — and it is
+what moves the margin over `ppg` from an interval containing zero to
++3.79 [+0.86, +6.68].
+
+**With chips played it reads −43, and that number should not be believed.**
+Split 2025-26's −86 by week: chip weeks and the week after account for **−155**
+across 15 gameweeks, and every other week is **+69** across 23. In a bench boost
+week the weight is overridden to 1.0, so it cannot be the bench valuation doing
+the damage; what changed is *chip timing*, which flipped in all three seasons —
+2025-26 went from seven chips to eight. The chip search is a discontinuous
+function of the squad it is handed, so any change to squad construction reshuffles
+it, and one moved wildcard swamps the effect being measured. This is the same
+reason `hit_cap_sweep` runs with chips off by default: a chip week suspends the
+thing under test.
+
+That is a caveat about the measurement, and also a finding about the policy. A
+chip policy whose decisions are overturned by an unrelated improvement to bench
+pricing, at a cost of 155 points in one season's chip weeks, is fragile — and its
+thresholds are, as noted above, reasonable rather than fitted.
 
 **And this table is now held to its own record.** It drifted once — the numbers
 above replaced 2069/2218/2090, and the verdict against `ppg` went from "+4.09,

@@ -23,7 +23,98 @@ HORIZON_DECAY = 0.86
 # the first-choice keeper does not, which is rare and already priced by owning
 # him at all. A flat weight over-valued the bench keeper and under-valued the
 # first outfield sub.
+#
+# These are the fallback, used when the forecast has no opinion about who
+# starts. They are better calibrated than they look: replaying three seasons,
+# the engine takes 0.447 autosubs a gameweek, which across four bench players
+# is an average weight of ~0.11.
 BENCH_WEIGHT_BY_POSITION = {POS_GKP: 0.02, POS_DEF: 0.12, POS_MID: 0.12, POS_FWD: 0.10}
+
+# ...but one constant cannot be right for two different squads, and the same
+# replay shows it is not: `ppg`, which does not model minutes, needs 1.079
+# autosubs a gameweek - nearly two and a half times as many - because its XI
+# carries far more rotation risk. A substitute's worth is P(a starter in his
+# position fails to appear) x his own expected points, and the engine already
+# estimates P(plays) for every player. `bench_weights_for_gameweek` uses it.
+#
+# At most three outfield substitutes can come on, and the bench keeper only ever
+# replaces the keeper.
+MAX_OUTFIELD_SUBS = 3
+N_OUTFIELD_STARTERS = 10
+# A forecast whose P(plays) is only ever 0 or 1 is not modelling availability;
+# it is saying "certainly" and "no idea", and a bench weight derived from that
+# reads meaning into noise. The trailing-average baselines are exactly this:
+# `_baseline_matrix` says 1.0 for anyone it rates and 0.0 for everyone else,
+# which in 2025-26 is 302 of 780 players. Deriving a weight from it would hand
+# them a bench priced off an availability model they do not have - and the
+# replay shows `ppg` needing 1.079 autosubs a gameweek against the engine's
+# 0.447, so the engine would look better for a reason unrelated to forecasting.
+#
+# So the test is whether the forecast ever expresses a *graded* probability, not
+# whether the blank probability happens to be non-zero. Checking only the latter
+# let the baselines through whenever a player they rate at zero reached the
+# likely eleven, which moved them by ~0.3%.
+BLANK_PROB_FLOOR = 1e-6
+
+
+def bench_weights_for_gameweek(xp_matrix, player_dict, player_ids, gw,
+                               squad_ids=None):
+    """
+    What a bench player's points are worth this gameweek, per position.
+
+    A substitute only scores if a starter does not appear, so the value of bench
+    cover rises and falls with how reliable the eleven are. Priced as
+    P(needed) - the expected number of autosubs at that position, divided by the
+    bench slots available to absorb them - which is exactly what the objective
+    multiplies the bench player's own expected points by. No double counting:
+    his expected points already carry his own P(plays), and this is the separate
+    question of whether a place opens up for him.
+
+    Estimated once per gameweek from the players most likely to be fielded,
+    rather than from the squad variables, so the objective stays linear. Same
+    device as the vice-captain term, which prices P(the captain blanks) the same
+    way.
+
+    Returns the shipped constants unchanged when the forecast declines to
+    express availability; see `BLANK_PROB_FLOOR`.
+    """
+    def p_play(pid):
+        v = xp_matrix.get(pid, {}).get(f"{gw}_p_play")
+        if v is None:
+            return 1.0
+        if player_dict.get(pid, {}).get("status") in ("i", "s", "u", "n"):
+            return 0.0
+        return max(0.0, min(1.0, float(v)))
+
+    def xp(pid):
+        return xp_matrix.get(pid, {}).get(gw, 0.0)
+
+    pool = [p for p in (squad_ids or player_ids) if p in player_dict] or player_ids
+    by_pos = {}
+    for pid in pool:
+        by_pos.setdefault(player_dict[pid].get("element_type"), []).append(pid)
+
+    # The eleven this squad would most likely field: the best keeper, and the
+    # ten best outfielders it holds.
+    keepers = sorted(by_pos.get(POS_GKP, []), key=xp, reverse=True)[:1]
+    outfield = sorted([p for pos in (POS_DEF, POS_MID, POS_FWD)
+                       for p in by_pos.get(pos, [])], key=xp, reverse=True)
+    outfield = outfield[:N_OUTFIELD_STARTERS]
+    if not keepers or not outfield:
+        return dict(BENCH_WEIGHT_BY_POSITION)
+
+    if not any(BLANK_PROB_FLOOR < p_play(p) < 1.0 - BLANK_PROB_FLOOR
+               for p in pool):
+        return dict(BENCH_WEIGHT_BY_POSITION)
+
+    gk_blank = 1.0 - p_play(keepers[0])
+    expected_outfield_blanks = sum(1.0 - p_play(p) for p in outfield)
+
+    # Three bench outfielders share whatever blanks occur, and no more than
+    # three can be used however many starters fail.
+    outfield_w = min(1.0, expected_outfield_blanks / MAX_OUTFIELD_SUBS)
+    return {POS_GKP: min(1.0, gk_blank), POS_DEF: outfield_w,
+            POS_MID: outfield_w, POS_FWD: outfield_w}
 
 # What the solver is charged for a transfer beyond the free one. The rules say 4
 # points, but the number that belongs in the objective is not the rule's number:
@@ -193,6 +284,12 @@ def solve_fpl_optimization(
     obj_terms = []
 
     for idx, t in enumerate(gws):
+        # How much bench cover is worth this week, given how reliable the eleven
+        # this squad would field are. Falls back to the shipped constants when
+        # the forecast has no opinion about availability.
+        gw_bench_weights = bench_weights_for_gameweek(
+            xp_matrix, player_dict, player_ids, t, initial_squad_ids)
+
         is_chip_active_now = is_chip_gw(t)
         tc_mult = 2.0 if (is_chip_active_now and active_chip == "tc") else 1.0
         # Confidence in a gameweek's forecast decays with how far away it is.
@@ -224,7 +321,7 @@ def solve_fpl_optimization(
             elif bench_weight is not None:
                 b_weight = bench_weight
             else:
-                b_weight = BENCH_WEIGHT_BY_POSITION.get(
+                b_weight = gw_bench_weights.get(
                     player_dict[pid].get("element_type"), 0.10)
 
             starter_pts = x[pid, t] * xp_val
@@ -455,7 +552,9 @@ def solve_fpl_optimization(
         # Compute true expected points for the gameweek
         is_chip_active_now = is_chip_gw(t)
         tc_mult = 2.0 if (is_chip_active_now and active_chip == "tc") else 1.0
-        
+        report_bench_weights = bench_weights_for_gameweek(
+            xp_matrix, player_dict, player_ids, t, initial_squad_ids)
+
         gw_xp = 0.0
         for p in starters:
             gw_xp += p["xp"]
@@ -474,7 +573,7 @@ def solve_fpl_optimization(
             elif bench_weight is not None:
                 b_weight = bench_weight
             else:
-                b_weight = BENCH_WEIGHT_BY_POSITION.get(p.get("element_type"), 0.10)
+                b_weight = report_bench_weights.get(p.get("element_type"), 0.10)
             gw_xp += p["xp"] * b_weight
 
         results["gameweeks"][t] = {

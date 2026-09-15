@@ -495,3 +495,158 @@ def test_the_symmetry_cut_does_not_change_the_answer(base_bootstrap):
     for gw in (1, 2, 3):
         owned |= {p["id"] for p in res["gameweeks"][gw]["transfers_in"]}
     assert {20, 21, 22} <= owned
+
+
+# --- bench cover is worth more behind an unreliable eleven ------------------
+#
+# A substitute only scores if a starter fails to appear, so the value of the
+# bench depends on the eleven in front of it. The weight used to be a constant,
+# which priced cover identically for a nailed XI and a set of coin flips.
+
+def _bench_fixture(p_play_by_id=None, default_p_play=1.0):
+    els = []
+    pid = 1
+    for t in range(1, 21):
+        for et in (1, 2, 2, 3, 3, 4):
+            els.append({"id": pid, "web_name": f"P{pid}", "element_type": et,
+                        "team": t, "now_cost": 50})
+            pid += 1
+    player_dict = {p["id"]: p for p in els}
+    xp = {p["id"]: {1: 5.0,
+                    "1_p_play": (p_play_by_id or {}).get(p["id"], default_p_play)}
+          for p in els}
+    return xp, player_dict, list(player_dict)
+
+
+def test_bench_cover_is_worth_more_when_the_eleven_are_unreliable():
+    from optimizer import bench_weights_for_gameweek, POS_MID
+
+    weights = []
+    for pp in (0.99, 0.95, 0.90, 0.85):
+        xp, pd_, ids = _bench_fixture(default_p_play=pp)
+        weights.append(bench_weights_for_gameweek(xp, pd_, ids, 1)[POS_MID])
+
+    assert weights == sorted(weights), f"not monotone in rotation risk: {weights}"
+    assert weights[0] < weights[-1]
+
+
+def test_an_availability_blind_forecast_keeps_the_shipped_constants():
+    """
+    `ppg` and `roll3` assert p_play = 1.0 for everyone, because a trailing
+    average has no opinion about who starts. Deriving a bench weight from that
+    would hand them a worthless bench and then charge them for the autosubs they
+    actually need - the replay shows `ppg` taking 1.079 a gameweek against the
+    engine's 0.447 - which would flatter the engine for a reason that has
+    nothing to do with forecast quality.
+    """
+    from optimizer import bench_weights_for_gameweek, BENCH_WEIGHT_BY_POSITION
+
+    xp, pd_, ids = _bench_fixture(default_p_play=1.0)
+    assert bench_weights_for_gameweek(xp, pd_, ids, 1) == BENCH_WEIGHT_BY_POSITION
+
+
+def test_a_forecast_with_no_p_play_at_all_keeps_the_shipped_constants():
+    from optimizer import bench_weights_for_gameweek, BENCH_WEIGHT_BY_POSITION
+
+    _, pd_, ids = _bench_fixture()
+    bare = {pid: {1: 5.0} for pid in ids}
+    assert bench_weights_for_gameweek(bare, pd_, ids, 1) == BENCH_WEIGHT_BY_POSITION
+
+
+def test_the_bench_keeper_is_priced_off_the_first_choice_keeper_alone():
+    """
+    The backup keeper only ever replaces the keeper, so ten shaky outfielders
+    must not make him valuable.
+    """
+    from optimizer import bench_weights_for_gameweek, POS_GKP, POS_MID
+
+    xp, pd_, ids = _bench_fixture(default_p_play=0.8)
+    keepers = [p for p in ids if pd_[p]["element_type"] == POS_GKP]
+    for k in keepers:
+        xp[k]["1_p_play"] = 1.0          # every keeper is nailed
+
+    w = bench_weights_for_gameweek(xp, pd_, ids, 1)
+    assert w[POS_GKP] == 0.0
+    assert w[POS_MID] > 0.0
+
+
+def test_the_weight_never_exceeds_face_value():
+    """Only three outfield substitutes can come on, however many starters fail."""
+    from optimizer import bench_weights_for_gameweek
+
+    xp, pd_, ids = _bench_fixture(default_p_play=0.0)
+    for w in bench_weights_for_gameweek(xp, pd_, ids, 1).values():
+        assert 0.0 <= w <= 1.0
+
+
+def test_a_realistic_nailed_squad_lands_near_the_hand_picked_constant():
+    """
+    The shipped 0.12 was a guess, and replaying three seasons says it was a good
+    one: the engine takes 0.447 autosubs a gameweek across four bench players.
+    A formula that disagreed with it at the engine's own operating point would
+    be the formula to doubt.
+    """
+    from optimizer import bench_weights_for_gameweek, BENCH_WEIGHT_BY_POSITION, POS_MID
+
+    xp, pd_, ids = _bench_fixture(default_p_play=0.96)
+    w = bench_weights_for_gameweek(xp, pd_, ids, 1)[POS_MID]
+    assert abs(w - BENCH_WEIGHT_BY_POSITION[POS_MID]) < 0.05, w
+
+
+def test_a_risky_eleven_buys_a_better_bench(base_bootstrap):
+    """The whole point: the squad built should actually change."""
+    initial = list(range(1, 16))
+    nailed = {pid: {1: 5.0, "1_p_play": 1.0} for pid in range(1, 31)}
+    risky = {pid: {1: 5.0, "1_p_play": 0.7} for pid in range(1, 31)}
+
+    a = solve_fpl_optimization(bootstrap=base_bootstrap, xp_matrix=nailed,
+                               horizon_gws=[1], initial_squad_ids=initial,
+                               initial_bank=10.0, max_hits_per_gw=0)
+    b = solve_fpl_optimization(bootstrap=base_bootstrap, xp_matrix=risky,
+                               horizon_gws=[1], initial_squad_ids=initial,
+                               initial_bank=10.0, max_hits_per_gw=0)
+    # Everyone is priced the same here, so the only thing that can move the
+    # reported gameweek xP is how the bench is valued.
+    assert b["gameweeks"][1]["gw_xp"] > a["gameweeks"][1]["gw_xp"]
+
+
+def test_the_explicit_bench_weight_override_still_wins():
+    """`--bench-weight` is a deliberate instruction and must not be second-guessed."""
+    from optimizer import bench_weights_for_gameweek
+    import optimizer as o
+    import inspect
+
+    src = inspect.getsource(o.solve_fpl_optimization)
+    # The override is checked before the per-gameweek weights are consulted.
+    assert src.index("elif bench_weight is not None") < src.index("gw_bench_weights.get")
+
+
+def test_a_binary_p_play_is_not_an_availability_model():
+    """
+    `_baseline_matrix` says p_play 1.0 for any player it rates and 0.0 for
+    everyone else - 302 of 780 players in 2025-26. That is "certainly" and "no
+    idea", not a rotation model, so a bench weight must not be derived from it.
+
+    Checking only whether the blank probability was non-zero let exactly this
+    through whenever a zero-rated player reached the likely eleven, which moved
+    the baselines by ~0.3% in a replay they should have been insulated from.
+    """
+    from optimizer import bench_weights_for_gameweek, BENCH_WEIGHT_BY_POSITION
+
+    xp, pd_, ids = _bench_fixture(default_p_play=1.0)
+    # A third of the pool is rated zero, exactly as the baselines do it.
+    for pid in ids[::3]:
+        xp[pid]["1_p_play"] = 0.0
+        xp[pid][1] = 0.0
+
+    assert bench_weights_for_gameweek(xp, pd_, ids, 1) == BENCH_WEIGHT_BY_POSITION
+
+
+def test_one_graded_probability_is_enough_to_use_the_model():
+    """A forecast that grades anyone is modelling availability."""
+    from optimizer import bench_weights_for_gameweek, BENCH_WEIGHT_BY_POSITION
+
+    xp, pd_, ids = _bench_fixture(default_p_play=1.0)
+    xp[ids[0]]["1_p_play"] = 0.5
+
+    assert bench_weights_for_gameweek(xp, pd_, ids, 1) != BENCH_WEIGHT_BY_POSITION
