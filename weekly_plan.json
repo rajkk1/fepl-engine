@@ -90,7 +90,7 @@
             "element_type": 2,
             "team": 7,
             "cost": 4.0,
-            "xp": 4.53,
+            "xp": 4.54,
             "p_play": 0.9839047097857326,
             "is_captain": false,
             "is_vice_captain": false,
@@ -143,7 +143,7 @@
             "team": 15,
             "cost": 6.0,
             "xp": 3.6,
-            "p_play": 0.9950755292237377,
+            "p_play": 0.9969664105473897,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 6.0,
@@ -181,7 +181,7 @@
             "element_type": 2,
             "team": 17,
             "cost": 5.3,
-            "xp": 4.64,
+            "xp": 4.61,
             "p_play": 0.9864829383118086,
             "is_captain": false,
             "is_vice_captain": false,
@@ -243,9 +243,9 @@
             "status": "a"
         }
     ],
-    "expected_score": 86.72,
+    "expected_score": 86.7,
     "remaining_bank": 0.4,
     "degraded": false,
     "fixture_model": "market_odds",
-    "generated_at": "2026-09-23T16:10:28+00:00"
+    "generated_at": "2026-09-24T16:33:48+00:00"
 }
