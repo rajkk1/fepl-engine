@@ -72,6 +72,19 @@
             "status": "a"
         },
         {
+            "id": 115,
+            "web_name": "De Cuyper",
+            "element_type": 2,
+            "team": 5,
+            "cost": 5.0,
+            "xp": 4.1,
+            "p_play": 0.9855664356265155,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 5.0,
+            "status": "a"
+        },
+        {
             "id": 173,
             "web_name": "Thomas",
             "element_type": 2,
@@ -174,19 +187,6 @@
             "is_vice_captain": false,
             "now_cost": 7.9,
             "status": "a"
-        },
-        {
-            "id": 449,
-            "web_name": "Hall",
-            "element_type": 2,
-            "team": 17,
-            "cost": 5.3,
-            "xp": 4.55,
-            "p_play": 0.9864829383118086,
-            "is_captain": false,
-            "is_vice_captain": false,
-            "now_cost": 5.3,
-            "status": "a"
         }
     ],
     "bench": [
@@ -230,22 +230,22 @@
             "status": "a"
         },
         {
-            "id": 115,
-            "web_name": "De Cuyper",
+            "id": 449,
+            "web_name": "Hall",
             "element_type": 2,
-            "team": 5,
-            "cost": 5.0,
-            "xp": 4.12,
-            "p_play": 0.9855664356265155,
+            "team": 17,
+            "cost": 5.3,
+            "xp": 4.55,
+            "p_play": 0.9864829383118086,
             "is_captain": false,
             "is_vice_captain": false,
-            "now_cost": 5.0,
+            "now_cost": 5.3,
             "status": "a"
         }
     ],
-    "expected_score": 85.24,
+    "expected_score": 85.22,
     "remaining_bank": 0.4,
     "degraded": false,
     "fixture_model": "market_odds",
-    "generated_at": "2026-09-28T19:17:37+00:00"
+    "generated_at": "2026-09-29T17:42:03+00:00"
 }
