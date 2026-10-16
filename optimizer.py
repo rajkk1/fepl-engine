@@ -132,6 +132,88 @@ HIT_COST = 4.0
 # resolution of any forecast, so it cannot outvote a real difference.
 TRANSFER_TIEBREAK = 1e-4
 
+# --- making the optimum unique ---------------------------------------------
+#
+# A squad of fifteen drawn from a pruned pool of a few hundred has an enormous
+# number of exactly-tied optima: swap two players the forecast rates identically
+# and the objective does not move. Which of them a solver returns is its own
+# business - it depends on the branching order, the build, the platform - and
+# the season replay chains ~800 solves end to end, so one tie broken differently
+# cascades through the rest of a season. That is how the replay reported a 2.19%
+# spread between identical CI runs of the same commit.
+#
+# `threads=1` removes the timing-dependent half of that. This removes the rest:
+# a tiny, deterministic, per-player nudge means no two squads score exactly the
+# same, so the optimum is unique and every correct solver must find the same
+# one. The weight is a stable integer hash rather than the id itself, because
+# ids would tie right back up again - {1,4} and {2,3} sum alike, and squads are
+# chosen by the dozen.
+#
+# Sizing, smallest effect first: the whole nudge over a 15-man squad, an XI and
+# an armband comes to under 3e-5, which is below `TRANSFER_TIEBREAK` (1e-4) and
+# far below the 0.01 that is the finest difference a forecast can express. It
+# settles exact ties and is outvoted by everything else.
+SQUAD_TIEBREAK = 1e-6
+
+
+_M64 = 0xFFFFFFFFFFFFFFFF
+
+
+def _tiebreak_weight(pid: int) -> float:
+    """
+    A stable value in [0, 1) for a player id, identical on every platform.
+
+    splitmix64's finalizer: 64-bit integer arithmetic only, so no floats, no
+    `hash()` (salted per process) and nothing that varies by build.
+
+    It has to be **non-linear**, which a multiplicative hash is not. `p * K mod
+    M` keeps the additive structure the weights exist to destroy: ids 1 + 4 and
+    2 + 3 both come to 5K and tie straight back up, and squads are chosen
+    fifteen at a time, so collisions like that are the common case rather than
+    a curiosity. The xor-shifts are what break it.
+    """
+    z = (int(pid) + 0x9E3779B97F4A7C15) & _M64
+    z = ((z ^ (z >> 30)) * 0xBF58476D1CE4E5B9) & _M64
+    z = ((z ^ (z >> 27)) * 0x94D049BB133111EB) & _M64
+    z ^= z >> 31
+    return z / 18446744073709551616.0
+
+# --- the solver -------------------------------------------------------------
+#
+# HiGHS, not CBC, and single-threaded.
+#
+# CBC was the default because it is what PuLP bundles, and it had two problems.
+# It is deprecated: `PULP_CBC_CMD` is slated for removal in PuLP 4.0, and this
+# project allows `pulp>=2.8.0`, so a routine dependency bump would have broken
+# the daily job. And the binary PuLP ships is x86_64 only - on an arm64 Mac
+# without Rosetta the OS rejects it outright, so the solver simply could not run
+# and 21 tests failed with "Bad CPU type in executable". PuLP reports it as
+# *available* regardless, because the check is only that the file exists, so the
+# failure surfaces one solve at a time rather than once at startup.
+#
+# HiGHS is the active successor, ships real wheels for every platform this runs
+# on, and is a hard dependency here rather than a fallback: two solvers means
+# two sets of answers, and the replay compares totals across machines.
+#
+# `threads=1` is not a performance choice. A parallel MIP solve explores nodes
+# in whatever order the threads happen to finish, so the solution returned among
+# several optima depends on timing. The season replay is ~800 solves chained
+# end to end, and one tie broken differently cascades through the rest of a
+# season - which is how the replay check came to report a 2.19% spread between
+# identical CI runs. Determinism is worth more here than the wall-clock.
+SOLVER_TIME_LIMIT = 300
+# Prove optimality rather than stopping at a near-optimal incumbent: a gap
+# tolerance makes the answer depend on the search path, and therefore on the
+# machine.
+SOLVER_GAP_REL = 0.0
+
+
+def build_solver(msg: bool = False):
+    """The solver every path in this project uses. One solver, one answer."""
+    return pulp.HiGHS(msg=msg, timeLimit=SOLVER_TIME_LIMIT,
+                      gapRel=SOLVER_GAP_REL, threads=1)
+
+
 def solve_fpl_optimization(
     bootstrap: Dict[str, Any],
     xp_matrix: Dict[int, Dict[int, float]],
@@ -344,6 +426,12 @@ def solve_fpl_optimization(
         # constrained to zero there, not because the charge is skipped.
         obj_terms.append(-hit_cost * decay * hits[t])
 
+        # Make the optimum unique; see SQUAD_TIEBREAK. Applied to the squad, the
+        # eleven and the armband, because each is a separate choice that can tie.
+        obj_terms.append(-SQUAD_TIEBREAK * pulp.lpSum([
+            _tiebreak_weight(pid) * (s[pid, t] + x[pid, t] + c[pid, t] + vc[pid, t])
+            for pid in player_ids]))
+
         # Break ties toward doing nothing. A free transfer that gains no points
         # is exactly as good as not making it, so the solver was free to
         # recommend one -- and did, churning a player for an identically rated
@@ -478,10 +566,7 @@ def solve_fpl_optimization(
                 prob += ft_carried[t] <= 15 * ft_banks[t], f"FT_Bank_Flag_{t}"
                 prob += hits[t] <= 15 * (1 - ft_banks[t]), f"FT_Bank_Or_Hit_{t}"
 
-    # Solve the model using default PuLP solver (PULP_CBC_CMD)
-    # Removing threads to prevent Windows CBC deadlocks, but keeping timeLimit at 300s to ensure true optimality.
-    solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=300, gapRel=0.0)
-    status = prob.solve(solver)
+    status = prob.solve(build_solver())
     status_str = pulp.LpStatus[status]
 
     if status != pulp.LpStatusOptimal:

@@ -650,3 +650,77 @@ def test_one_graded_probability_is_enough_to_use_the_model():
     xp[ids[0]]["1_p_play"] = 0.5
 
     assert bench_weights_for_gameweek(xp, pd_, ids, 1) != BENCH_WEIGHT_BY_POSITION
+
+
+# --- the optimum has to be unique -------------------------------------------
+#
+# A fifteen-man squad drawn from a few hundred players has an enormous number of
+# exactly-tied optima, and which one a solver returns depends on its branching
+# order, build and platform. The season replay chains ~800 solves, so one tie
+# broken differently cascades through a season - which is how the replay check
+# came to report a 2.19% spread between identical CI runs of one commit.
+
+def test_the_tiebreak_weight_is_stable_and_spread():
+    from optimizer import _tiebreak_weight
+
+    # Stable across processes and platforms: integer ops only, no salted
+    # hash(), no float arithmetic until the final division. Pinned by value so
+    # a change to the mixer cannot silently move every recorded replay total.
+    assert _tiebreak_weight(1) == _tiebreak_weight(1)
+    assert _tiebreak_weight(12345) == 0.13307966866142731
+    vals = [_tiebreak_weight(p) for p in range(1, 801)]
+    assert all(0.0 <= v < 1.0 for v in vals)
+    assert len(set(vals)) == len(vals), "weights collide"
+
+
+def test_the_weights_do_not_tie_back_up_the_way_ids_would():
+    """
+    Using the id itself would be useless: {1,4} and {2,3} sum alike, and squads
+    are chosen fifteen at a time.
+    """
+    from optimizer import _tiebreak_weight
+
+    assert 1 + 4 == 2 + 3
+    assert _tiebreak_weight(1) + _tiebreak_weight(4) != \
+        _tiebreak_weight(2) + _tiebreak_weight(3)
+
+
+def test_identical_players_produce_a_repeatable_squad(base_bootstrap):
+    """
+    Every player rated the same, so every legal squad is an exact optimum. The
+    choice must still be the same one every time.
+    """
+    xp = {pid: {1: 4.0, "1_p_play": 1.0} for pid in range(1, 31)}
+    picks = []
+    for _ in range(3):
+        r = solve_fpl_optimization(
+            bootstrap=base_bootstrap, xp_matrix=xp, horizon_gws=[1],
+            initial_squad_ids=None, initial_bank=100.0)
+        g = r["gameweeks"][1]
+        picks.append((sorted(p["id"] for p in g["starters"]),
+                      sorted(p["id"] for p in g["bench"]),
+                      g["captain_id"]))
+    assert picks[0] == picks[1] == picks[2], picks
+
+
+def test_the_squad_tiebreak_cannot_outvote_a_real_difference(base_bootstrap):
+    """
+    It has to be smaller than the finest difference a forecast can express
+    (0.01), and smaller than the nudge against pointless transfers, or it would
+    start deciding things it has no business deciding.
+    """
+    from optimizer import SQUAD_TIEBREAK, TRANSFER_TIEBREAK
+
+    assert SQUAD_TIEBREAK < TRANSFER_TIEBREAK
+    # Whole-squad, XI and armband effect together, against one unit of xP.
+    assert (15 + 11 + 2) * SQUAD_TIEBREAK < 0.01
+
+    # The player the tiebreak likes least must still be picked when he is better.
+    from optimizer import _tiebreak_weight
+    worst = max(range(20, 31), key=_tiebreak_weight)
+    xp = {pid: {1: 3.0, "1_p_play": 1.0} for pid in range(1, 31)}
+    xp[worst] = {1: 9.0, "1_p_play": 1.0}
+    r = solve_fpl_optimization(
+        bootstrap=base_bootstrap, xp_matrix=xp, horizon_gws=[1],
+        initial_squad_ids=list(range(1, 16)), initial_bank=10.0)
+    assert worst in [p["id"] for p in r["gameweeks"][1]["starters"]]

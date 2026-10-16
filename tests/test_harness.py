@@ -634,3 +634,44 @@ def test_the_committed_baseline_is_usable():
         # recording it fails.
         ok, msg = check_ratchet({"models": {"fepl": dict(entry)}}, entry)
         assert ok, msg
+
+
+def test_a_fallback_mirror_says_so(monkeypatch, caplog):
+    """
+    Only an *all* mirrors failure used to log anything, so falling through to
+    the secondary was silent. The two are different CDNs fronting the same
+    archive and can serve different revisions while one catches up, so a replay
+    driven by the backup can return different numbers with nothing in the log
+    to explain it.
+    """
+    import logging
+    import pandas as pd
+    import backtest
+
+    calls = []
+
+    def flaky(url, **kw):
+        calls.append(url)
+        if len(calls) == 1:
+            raise OSError("primary down")
+        return pd.DataFrame({"a": [1]})
+
+    monkeypatch.setattr(backtest.pd, "read_csv", flaky)
+    with caplog.at_level(logging.WARNING):
+        backtest._read_csv_anywhere("2024-25", "gws/merged_gw.csv")
+
+    assert any("mirror 2 of" in r.getMessage() for r in caplog.records), \
+        [r.getMessage() for r in caplog.records]
+
+
+def test_the_primary_mirror_answering_is_not_announced(monkeypatch, caplog):
+    """Normal operation must stay quiet, or the warning means nothing."""
+    import logging
+    import pandas as pd
+    import backtest
+
+    monkeypatch.setattr(backtest.pd, "read_csv", lambda *a, **k: pd.DataFrame({"a": [1]}))
+    with caplog.at_level(logging.WARNING):
+        backtest._read_csv_anywhere("2024-25", "gws/merged_gw.csv")
+
+    assert not [r for r in caplog.records if "mirror" in r.getMessage()]
