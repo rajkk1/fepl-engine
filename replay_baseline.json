@@ -2,59 +2,59 @@
   "2023-24+2024-25+2025-26@1-38/chips": {
     "_gameweeks": 114,
     "_margin_per_gw": {
-      "ppg": 2.825,
-      "roll3": 10.877
+      "ppg": 3.026,
+      "roll3": 10.825
     },
     "_per_season": {
       "2023-24": {
-        "engine": 2115,
-        "ppg": 2027,
+        "engine": 2092,
+        "ppg": 2025,
         "roll3": 1850
       },
       "2024-25": {
-        "engine": 2366,
-        "ppg": 2119,
-        "roll3": 1755
+        "engine": 2410,
+        "ppg": 2132,
+        "roll3": 1769
       },
       "2025-26": {
-        "engine": 2043,
-        "ppg": 2056,
-        "roll3": 1679
+        "engine": 2027,
+        "ppg": 2027,
+        "roll3": 1676
       }
     },
     "totals": {
-      "engine": 6524,
-      "ppg": 6202,
-      "roll3": 5284
+      "engine": 6529,
+      "ppg": 6184,
+      "roll3": 5295
     }
   },
   "2023-24+2024-25+2025-26@1-38/no-chips": {
     "_gameweeks": 114,
     "_margin_per_gw": {
-      "ppg": 3.789,
-      "roll3": 11.43
+      "ppg": 3.228,
+      "roll3": 10.632
     },
     "_per_season": {
       "2023-24": {
-        "engine": 2106,
-        "ppg": 1968,
+        "engine": 2062,
+        "ppg": 1970,
         "roll3": 1808
       },
       "2024-25": {
-        "engine": 2247,
-        "ppg": 2066,
-        "roll3": 1712
+        "engine": 2290,
+        "ppg": 2093,
+        "roll3": 1768
       },
       "2025-26": {
-        "engine": 2086,
+        "engine": 2052,
         "ppg": 1973,
         "roll3": 1616
       }
     },
     "totals": {
-      "engine": 6439,
-      "ppg": 6007,
-      "roll3": 5136
+      "engine": 6404,
+      "ppg": 6036,
+      "roll3": 5192
     }
   }
 }

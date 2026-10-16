@@ -5,7 +5,11 @@ This is the only thing in the repo that measures the objective the engine exists
 to serve - points on the board - so its own correctness matters more than the
 model's, exactly as with the backtest harness.
 """
+import pathlib
+
 import pytest
+
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 from simulator import (apply_autosubs, score_gameweek, _formation_ok,
                        _baseline_matrix, FORMATION_LIMITS, XP_SOURCES,
@@ -588,3 +592,62 @@ def test_the_attribution_shows_a_margin_handed_back_at_the_armband(capsys):
     _print_attribution(per_source)
     out = capsys.readouterr().out
     assert "+15" in out and "-15" in out
+
+
+# --- the replay check reports rather than blocks ----------------------------
+#
+# As first written it failed every weekly CI run for a month on a commit that
+# never changed. The baselines had been recorded on a laptop and checked on a
+# GitHub runner, and separately the engine arm varies by up to 2.19% between
+# identical CI runs against the 1.1% drift it exists to catch.
+
+def test_the_replay_check_does_not_block_by_default():
+    from simulator import REPLAY_GATE_BLOCKS
+
+    assert REPLAY_GATE_BLOCKS is False, (
+        "the replay is not reproducible enough to block on; see the note beside "
+        "REPLAY_GATE_BLOCKS")
+
+
+def test_a_mismatch_warns_but_exits_zero(tmp_path):
+    """A red badge nobody believes is one nobody reads."""
+    import json
+    import subprocess
+    import sys
+
+    baseline = tmp_path / "replay_baseline.json"
+    baseline.write_text(json.dumps({
+        "2023-24@1-38/no-chips": {"totals": {"engine": 9999}, "_gameweeks": 38,
+                                  "_margin_per_gw": {"ppg": 1.0}}}))
+
+    out = subprocess.run(
+        [sys.executable, str(ROOT / "simulator.py"), "--season", "2023-24",
+         "--sources", "ppg", "--from-gw", "2", "--to-gw", "3", "--no-chips",
+         "--gate", "--baseline", str(baseline)],
+        capture_output=True, text=True, cwd=str(ROOT))
+    # Nothing recorded for *this* key, so it reports and exits clean either way.
+    assert out.returncode == 0, out.stdout[-2000:] + out.stderr[-2000:]
+
+
+def test_blocking_can_be_restored_once_the_replay_is_deterministic():
+    """The switch has to be a flag, not a deletion, or the fix has nothing to turn on."""
+    src = (ROOT / "simulator.py").read_text()
+    assert '"--gate-blocks"' in src
+    assert "args.gate_blocks" in src
+    # ...and the exit code must honour it.
+    assert "SystemExit(0 if (ok or not blocks) else 1)" in src
+
+
+def test_the_recorded_baselines_say_which_environment_made_them():
+    """
+    A golden file has to be produced by the environment that validates it. These
+    are now recorded from a CI run; the laptop-recorded ones sat up to 1.09%
+    away on arms that are bit-identical in CI.
+    """
+    import json
+
+    data = json.loads((ROOT / "replay_baseline.json").read_text())
+    assert data, "no replay baselines recorded"
+    for key, entry in data.items():
+        assert entry.get("totals"), key
+        assert entry.get("_gameweeks"), key

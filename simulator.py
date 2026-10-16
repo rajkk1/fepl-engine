@@ -541,6 +541,40 @@ REPLAY_BASELINE_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "replay_baseline.json")
 REPLAY_TOLERANCE = 0.01
 
+# --- why this reports instead of failing -----------------------------------
+#
+# It blocked nothing and failed every weekly run for a month, on a commit that
+# never changed. Two things were wrong, and only one of them was fixable by
+# re-recording.
+#
+# The baselines were recorded on a laptop and checked on a GitHub runner. The
+# `ppg` and `roll3` arms are bit-identical across five CI runs and still sat up
+# to 1.09% away from the recorded numbers, which is what tripped the gate: a
+# golden file has to be produced by the environment that validates it. Those are
+# now recorded from a CI run.
+#
+# The engine arm is the one that cannot be fixed that way. Across those same
+# five runs - same commit, same data, same runner image - it returned 6529 four
+# times and 6672 once, a spread of **2.19%**. The drift this gate exists to
+# catch, the one that silently invalidated the README table, was **1.1%**. The
+# noise floor is twice the signal, so at a tolerance tight enough to catch a
+# real regression it fails at random, and at a tolerance loose enough to be
+# quiet it cannot see the thing it was built for. Widening it to 3% would make
+# it a check that cannot fail, which is worse than no check because it reads
+# like assurance.
+#
+# The nondeterminism is not the obvious suspects: the forecast is bit-identical
+# across thread counts, every RNG is seeded, no solve hit its time limit, and no
+# run logged a mirror fallback. The likeliest remaining cause is that the ILP has
+# many tied optima - a replay makes ~800 solves over three seasons - and a tie
+# broken differently cascades through a season's decisions. `TRANSFER_TIEBREAK`
+# already does this for transfers; making the whole squad choice uniquely
+# optimal would make the chain environment-independent, and is the real fix.
+#
+# Until then the comparison still runs and still prints, because the numbers are
+# worth seeing every week. It just does not claim to be a gate.
+REPLAY_GATE_BLOCKS = False
+
 
 def replay_key(seasons: Sequence[str], from_gw: int, to_gw: Optional[int],
                play_chips: bool) -> str:
@@ -733,6 +767,10 @@ def main():
     ap.add_argument("--tolerance", type=float, default=REPLAY_TOLERANCE,
                     help=f"Relative slack before a move fails the gate "
                          f"(default {REPLAY_TOLERANCE})")
+    ap.add_argument("--gate-blocks", action="store_true", default=REPLAY_GATE_BLOCKS,
+                    help="Exit non-zero on a mismatch. Off by default: the "
+                         "replay is not reproducible enough to block on - see "
+                         "REPLAY_GATE_BLOCKS in simulator.py.")
     ap.add_argument("--update-baseline", action="store_true",
                     help="Record this run as the bar to hold, and exit. "
                          "Commit the file, and update the README table with it.")
@@ -768,12 +806,18 @@ def main():
                   "run --update-baseline to set the bar")
             raise SystemExit(0)
         ok, msg = check_replay(per_season, recorded, args.tolerance)
-        print(f"\n[{'PASS' if ok else 'FAIL'}] replay gate {key}: {msg}")
+        blocks = args.gate_blocks
+        verdict = "PASS" if ok else ("FAIL" if blocks else "WARN")
+        print(f"\n[{verdict}] replay gate {key}: {msg}")
         if not ok:
             print("   recorded margins per gameweek: "
                   + ", ".join(f"{k} {v:+.2f}" for k, v in
                               (recorded.get("_margin_per_gw") or {}).items()))
-        raise SystemExit(0 if ok else 1)
+            if not blocks:
+                print("   Reporting only: this replay varies by up to 2.19% between "
+                      "identical CI runs, against the 1.1% drift the check exists "
+                      "to catch. See REPLAY_GATE_BLOCKS in simulator.py.")
+        raise SystemExit(0 if (ok or not blocks) else 1)
 
 
 if __name__ == "__main__":
