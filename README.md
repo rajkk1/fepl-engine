@@ -377,35 +377,35 @@ Chips off, which is what this table used to measure:
 
 | season | engine | `ppg` | `roll3` |
 |---|---|---|---|
-| 2023-24 | 2106 | 1968 | 1808 |
-| 2024-25 | 2247 | 2066 | 1712 |
-| 2025-26 | 2086 | 1973 | 1616 |
-| **pooled** | **6439** | 6007 | 5136 |
+| 2023-24 | 2062 | 1970 | 1808 |
+| 2024-25 | 2290 | 2093 | 1768 |
+| 2025-26 | 2052 | 1973 | 1616 |
+| **pooled** | **6404** | 6036 | 5192 |
 
 Chips played, which is what the engine actually does:
 
 | season | engine | `ppg` | `roll3` |
 |---|---|---|---|
-| 2023-24 | 2115 | 2027 | 1850 |
-| 2024-25 | 2366 | 2119 | 1755 |
-| 2025-26 | 2043 | 2056 | 1679 |
-| **pooled** | **6524** | 6202 | 5284 |
+| 2023-24 | 2092 | 2025 | 1850 |
+| 2024-25 | 2410 | 2132 | 1769 |
+| 2025-26 | 2027 | 2027 | 1676 |
+| **pooled** | **6529** | 6184 | 5295 |
 
 Pooled over all three clean seasons — **114 gameweeks**, paired by gameweek:
 
 | | baseline | mean | 95% CI | 3-season total | win rate | |
 |---|---|---|---|---|---|---|
-| chips off | `ppg` | **+3.79** | [+0.86, +6.68] | **+432** | 0.614 | **significant** |
-| | `roll3` | **+11.43** | [+7.89, +14.99] | **+1303** | 0.711 | significant |
-| chips played | `ppg` | +2.82 | [−0.54, +6.11] | +322 | 0.535 | **not significant** |
-| | `roll3` | **+10.88** | [+7.25, +14.47] | **+1240** | 0.754 | significant |
+| chips off | `ppg` | **+3.23** | [+0.22, +6.18] | **+368** | 0.570 | **significant** |
+| | `roll3` | **+10.63** | [+6.90, +14.30] | **+1212** | 0.754 | significant |
+| chips played | `ppg` | +3.03 | [−0.25, +6.25] | +345 | 0.526 | **not significant** |
+| | `roll3` | **+10.82** | [+7.04, +14.46] | **+1234** | 0.737 | significant |
 
 **The edge over points-per-game does not clear zero, and an earlier version of
 this file said it did, on numbers that did not reproduce.** It reported +4.09
 [+0.81, +7.35]. Re-run, the same comparison gave +2.65 [−0.63, +5.81] with chips
 off and +3.20 [−0.18, +6.48] with them played — the same direction, a smaller
-mean, and an interval containing zero in both. It has since recovered to +3.79
-[+0.86, +6.68] with chips off, on the bench-cover fix below, and remains inside
+mean, and an interval containing zero in both. It has since recovered to +3.23
+[+0.22, +6.18] with chips off, on the bench-cover fix below, and remains inside
 noise with chips played. Nothing here was re-measured between those two states, so the honest
 reading is that the earlier number was recorded against a state of the code or
 the upstream archive that no longer exists and was never re-derived — which is
@@ -413,7 +413,7 @@ exactly the failure the `gate_baseline.json` ratchet now exists to prevent for
 the forecast metrics, and which nothing yet prevents for this table.
 
 So: **beating trailing points-per-game end to end is established with chips off
-and not with them played** — +3.79 [+0.86, +6.68] against +2.82 [−0.54, +6.11].
+and not with them played** — +3.23 [+0.22, +6.18] against +3.03 [−0.25, +6.25].
 That is a thin claim resting on one variant, and the honest reading is that the
 end-to-end edge over `ppg` is real but close enough to the noise floor that the
 measurement configuration decides it. The margin over the rolling means needs no
@@ -437,23 +437,23 @@ chips off:
 
 | vs | squad | armband | hits | = net |
 |---|---|---|---|---|
-| `ppg` | **+368** | +78 | **−144** | +302 |
-| `roll3` | +363 | +202 | **+608** | +1173 |
+| `ppg` | **+457** | +75 | **−164** | +368 |
+| `roll3` | +422 | +198 | **+592** | +1212 |
 
-So the forecast does buy a better squad — +548, about +4.8 a gameweek, comfortably
+So the forecast does buy a better squad — +457, about +4.0 a gameweek, comfortably
 the size of the forecast edge measured above. It is not captaincy: the
 armband is +78 in the engine's favour, which is worth saying because the gate's
 advisory line reports FEPL's captain regret as *no better* than `ppg`'s, and the
 obvious reading of that — the engine cannot pick a captain — is wrong.
 
-What costs it is the churn. 71 hits against `ppg`'s 27 is 176 points of penalty
-against a +608 gross advantage: **more than a quarter of the edge is handed back
-at the transfer window**. The same discipline is what wins against `roll3`, which
+What costs it is the churn. 68 hits against `ppg`'s 27 is 164 points of penalty
+against a +532 gross advantage: **roughly a third of the edge is handed back at
+the transfer window**. The same discipline is what wins against `roll3`, which
 takes 215 hits and gives back 608.
 
 Playing chips does not change the diagnosis, which is worth checking rather than
-assuming: the squad advantage is +428, the armband +86, and the hit differential
-−192.
+assuming: the squad advantage is +391, the armband +142, and the hit differential
+−188.
 
 Note the trap in reading that −144 as 144 points lying on the table. It is not:
 part of the +368 exists *because* of those extra transfers, so the penalty
@@ -525,9 +525,9 @@ reached the likely eleven and moved them by ~0.3%. The test is now whether the
 forecast ever expresses a *graded* probability at all, and with it the baselines
 reproduce to the point.
 
-It is worth **+130 with chips off** — +84, +0, +46, no season worse — and it is
-what moves the margin over `ppg` from an interval containing zero to
-+3.79 [+0.86, +6.68].
+It is worth **+130 with chips off** when measured on one machine — +84, +0, +46,
+no season worse — and it is what moves the margin over `ppg` from an interval
+containing zero to one that clears it.
 
 **With chips played it reads −43, and that number should not be believed.**
 Split 2025-26's −86 by week: chip weeks and the week after account for **−155**
@@ -556,19 +556,44 @@ uv run python simulator.py --seasons 2023-24 2024-25 2025-26 --gate
 uv run python simulator.py --seasons 2023-24 2024-25 2025-26 --update-baseline
 ```
 
-It gates the **totals**, not the margins, because a pooled mean of +2.65 has no
+It gates the **totals**, not the margins, because a pooled mean of +3 has no
 sensible relative tolerance and every margin is derived from the same
-per-gameweek rows anyway — a total that holds is a margin that holds. The
-tolerance is 1%, and it is a compromise rather than a measurement: for fixed
-upstream data this replay is exactly reproducible (three separate runs returned
-2022/2247/2040 to the point), but upstream does move, a season replay amplifies
-a small forecast change rather than averaging it out, and nobody has measured
-how large that amplification is. 1% still catches what actually went wrong here,
-which was 1.1% pooled and up to 2.4% in a season.
+per-gameweek rows anyway. It runs weekly rather than on pull requests
+(`.github/workflows/replay_gate.yml`) because a replay takes tens of minutes
+against the accuracy gate's ~45 seconds, and a check that slow on every push is
+one people learn to skip.
 
-It runs weekly rather than on pull requests (`.github/workflows/replay_gate.yml`)
-because a replay takes tens of minutes against the accuracy gate's ~45 seconds,
-and a check that slow on every push is one people learn to skip.
+> **It reports; it does not block, and that is a retreat.** As first written it
+> failed every weekly run for a month on a commit that never changed, which is
+> 100% false positives — worse than no check, because a red badge nobody
+> believes is one nobody reads. Two things were wrong.
+>
+> The baselines were **recorded on a laptop and checked on a GitHub runner**.
+> `ppg` and `roll3` are bit-identical across five CI runs and still sat up to
+> 1.09% from the recorded values, which is what tripped it. A golden file has to
+> be produced by the environment that validates it; these now are, which is also
+> why the numbers above moved when nothing about the engine did.
+>
+> The engine arm is the part re-recording cannot fix. Across those same five
+> runs — same commit, same data, same runner image — it returned 6529 four times
+> and 6672 once: a spread of **2.19%**, against the **1.1%** drift this check
+> exists to catch. The noise floor is twice the signal. Tight enough to catch a
+> regression means failing at random; loose enough to be quiet means blind to
+> the thing it was built for, and a check that cannot fail is theatre.
+>
+> It is not the obvious suspects: the forecast is bit-identical across thread
+> counts, every RNG is seeded, no solve hit its time limit, and no run logged a
+> mirror fallback. The likeliest cause is that the ILP has many tied optima —
+> a replay is ~800 solves — and a tie broken differently cascades through a
+> season. `TRANSFER_TIEBREAK` already makes transfers unique; extending that to
+> the squad choice would make the chain environment-independent, and is the real
+> fix. Until then the comparison runs weekly and prints, and claims nothing more.
+>
+> The same caveat applies to every total on this page: they are reproducible to
+> about **±2%**, not to the point, and the four-digit precision overstates them.
+> What *is* stable across environments is the verdict — chips off, the margin
+> over `ppg` clears zero on both the laptop (+3.79 [+0.86, +6.68]) and CI
+> (+3.23 [+0.22, +6.18]); chips played, it does not, on either.
 
 The mean is the right statistic, which is worth recording because the obvious
 alternative is wrong. Rank-based tests are the usual answer to a noisy paired

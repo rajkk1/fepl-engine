@@ -15,9 +15,18 @@ name: Season Replay Gate
 # check that slow on every push is a check people learn to skip. Weekly is
 # enough for a number that is only allowed to change deliberately.
 #
-# Both variants are gated because the README quotes both, and they answer
+# Both variants are run because the README quotes both, and they answer
 # different questions: `no-chips` is the like-for-like history of this table,
 # `chips` is what the engine actually does.
+#
+# IT REPORTS, IT DOES NOT BLOCK. As first written it failed every weekly run for
+# a month on a commit that never changed - 100% false positives. The baselines
+# had been recorded on a laptop and checked here, and separately the engine arm
+# varies by up to 2.19% between identical runs of this very workflow, against
+# the 1.1% drift the check exists to catch. The noise floor is twice the signal,
+# so there is no tolerance that both catches a regression and stays quiet.
+# See REPLAY_GATE_BLOCKS in simulator.py for the diagnosis and the real fix.
+# Pass --gate-blocks to restore blocking once the replay is deterministic.
 #
 # When a change is *meant* to move these numbers, re-record and commit, and
 # update the README table in the same change:
@@ -73,17 +82,24 @@ jobs:
           restore-keys: |
             odds-
 
-      - name: Replay the seasons and hold them to the record
+      - name: Replay the seasons and compare against the record
         run: |
           uv run python simulator.py \
             --seasons ${{ github.event.inputs.seasons || '2023-24 2024-25 2025-26' }} \
             ${{ matrix.flags }} \
             --gate --tolerance ${{ github.event.inputs.tolerance || '0.01' }} \
-            --json-out replay_${{ matrix.variant }}.json
+            --json-out replay_${{ matrix.variant }}.json \
+            | tee replay_${{ matrix.variant }}.txt
+          # Surface a mismatch in the run summary without failing the build.
+          if grep -q '^\[WARN\] replay gate' replay_${{ matrix.variant }}.txt; then
+            echo "::warning::${{ matrix.variant }}: $(grep '^\[WARN\] replay gate' replay_${{ matrix.variant }}.txt | head -1)"
+          fi
 
       - name: Upload the replay
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: replay-${{ matrix.variant }}
-          path: replay_${{ matrix.variant }}.json
+          path: |
+            replay_${{ matrix.variant }}.json
+            replay_${{ matrix.variant }}.txt

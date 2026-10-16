@@ -84,6 +84,26 @@ on:
         default: 'auto'
 
 jobs:
+  # The unit suite ran only in the daily job, so nothing checked a pull request
+  # but the backtest - which exercises the forecast and never touches the
+  # optimiser, the chip policy or the replay. A change to any of those could be
+  # merged on a green tick having been run by nobody. It is also the only check
+  # available to a contributor whose machine cannot run the solver: the CBC
+  # binary PuLP ships is x86_64, and on an arm64 Mac without Rosetta it is
+  # rejected outright, which is how this gap was noticed.
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Unit tests
+        # Offline, as the suite is designed to be - see tests/conftest.py.
+        run: uv run pytest tests/ -q
+
   backtest:
     runs-on: ubuntu-latest
     # The deep run is ~136 gameweeks; the PR run is ~9.
