@@ -5,7 +5,17 @@ description = "Fantasy Premier League (FPL) Multi-Gameweek Team Optimizer & Tran
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "pulp>=2.8.0",
+    # PuLP is the modelling layer. The solver is HiGHS, not the CBC binary PuLP
+    # bundles: `PULP_CBC_CMD` is slated for removal in PuLP 4.0, and the binary
+    # is x86_64 only, so an arm64 Mac without Rosetta rejects it and cannot run
+    # the optimiser at all. Pinned below 4 until the modelling API there is
+    # known-good, since this allowed `pulp>=2.8.0` and a routine bump would
+    # otherwise have taken the daily job out.
+    "pulp>=3.0,<4",
+    # The solver itself. A hard dependency rather than a fallback: two solvers
+    # means two sets of answers, and the season replay compares totals across
+    # machines.
+    "highspy>=1.11",
     "numpy>=1.26.0",
     "pandas>=2.0.0",
     "requests>=2.31.0",

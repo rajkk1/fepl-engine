@@ -86,6 +86,35 @@ A multi-gameweek ILP over the £100.0m budget, 3-per-club cap, valid formations,
 free-transfer banking, selling-price mechanics and all four chips (wildcard,
 free hit, bench boost, triple captain), including chip timing across the horizon.
 
+**The solver is HiGHS, single-threaded, and the optimum is made unique.** CBC
+was the default only because PuLP bundles it, and it brought two problems: it is
+deprecated — `PULP_CBC_CMD` is slated for removal in PuLP 4.0, and this project
+allowed `pulp>=2.8.0`, so a routine dependency bump would have taken the daily
+job out — and the binary PuLP ships is x86_64 only, so an arm64 Mac without
+Rosetta rejects it outright and cannot run the optimiser at all. PuLP reports it
+as *available* either way, because the check is only that the file exists, so
+that failed one solve at a time instead of once at startup.
+
+Two settings beyond the swap, both about reproducibility rather than speed.
+`threads=1`, because a parallel MIP explores nodes in whatever order threads
+finish, so which of several optima comes back depends on timing. And a tiny
+deterministic per-player nudge (`SQUAD_TIEBREAK`), because a fifteen-man squad
+drawn from a pruned pool of hundreds has an enormous number of *exactly* tied
+optima — swap two players the forecast rates identically and the objective does
+not move — and which one a solver returns is its own business. The season replay
+chains ~800 solves, so a tie broken differently cascades through the rest of a
+season, which is how the replay check came to report a 2.19% spread between
+identical CI runs of one commit.
+
+The nudge has to be non-linear, which is worth recording because the obvious
+choice is not. A multiplicative hash keeps the additive structure the weights
+exist to destroy: ids 1 + 4 and 2 + 3 both come to 5K and tie straight back up,
+and squads are chosen fifteen at a time, so that is the common case rather than
+a curiosity. It uses splitmix64's finalizer, whose xor-shifts break it. Sized
+under 3e-5 across a squad, an XI and an armband — below the nudge against
+pointless transfers (1e-4) and far below the 0.01 that is the finest difference
+a forecast can express, so it settles exact ties and nothing else.
+
 **Optimal within a pruned pool, not over all ~700 players.** The solver is
 handed the top 30 per position by horizon xP, the 10 cheapest per position as
 fodder, and anything already owned or locked. Everything below is exact over
@@ -972,7 +1001,7 @@ outbound socket blocked.
 | `team_mapping.py` | One-to-one FPL ↔ Football-Data club resolution |
 | `match_sim.py` | Correlated match simulation: bonus and risk |
 | `calibration.py` | Per-position recalibration of expected points (off by default) |
-| `optimizer.py` | Multi-gameweek ILP for squad, transfers, chips |
+| `optimizer.py` | Multi-gameweek ILP for squad, transfers, chips (HiGHS) |
 | `chip_policy.py` | When to play a chip; shared by the weekly job and the replay |
 | `monte_carlo.py`, `ownership_model.py` | Rank-aware valuation |
 | `backtest.py` | Walk-forward evaluation and the CI accuracy gate |

@@ -73,11 +73,29 @@ def _read_csv_anywhere(season_str: str, rel_path: str,
 
     last: Optional[Exception] = None
     for attempt in range(attempts):
-        for base in DATA_MIRRORS:
+        for idx, base in enumerate(DATA_MIRRORS):
             try:
-                return pd.read_csv(f"{base}/{season_str}/{rel_path}", low_memory=False)
+                frame = pd.read_csv(f"{base}/{season_str}/{rel_path}",
+                                    low_memory=False)
             except Exception as e:
                 last = e
+                continue
+            # Say which mirror answered when it was not the first one. Only an
+            # *all* mirrors failure used to log anything, so falling through to
+            # the secondary was silent - and the two are different CDNs fronting
+            # the same archive, so they can serve different revisions of it
+            # while one is still catching up. A replay driven by a backup mirror
+            # can therefore produce different numbers from one driven by the
+            # primary, with nothing in the log to say so. That is exactly the
+            # kind of unattributable difference the replay check is supposed to
+            # be able to explain.
+            if idx or attempt:
+                logger.warning(
+                    "%s/%s came from mirror %d of %d (%s)%s - numbers from this "
+                    "run may not match one served by the primary.",
+                    season_str, rel_path, idx + 1, len(DATA_MIRRORS), base,
+                    f", attempt {attempt + 1}" if attempt else "")
+            return frame
         if attempt < attempts - 1:
             delay = base_delay * (2 ** attempt)
             logger.warning(
