@@ -724,3 +724,32 @@ def test_the_squad_tiebreak_cannot_outvote_a_real_difference(base_bootstrap):
         bootstrap=base_bootstrap, xp_matrix=xp, horizon_gws=[1],
         initial_squad_ids=list(range(1, 16)), initial_bank=10.0)
     assert worst in [p["id"] for p in r["gameweeks"][1]["starters"]]
+
+
+def test_the_solver_is_not_allowed_to_ignore_the_tiebreak():
+    """
+    HiGHS defaults to mip_abs_gap 1e-6 and mip_rel_gap 1e-4, and PuLP overrides
+    each only if passed. Setting the relative gap alone left the absolute one at
+    exactly the size of SQUAD_TIEBREAK, so the solver could stop anywhere inside
+    the nudge that exists to make the optimum unique - which is why adding the
+    nudge changed nothing.
+    """
+    from optimizer import (build_solver, SOLVER_GAP_ABS, SOLVER_GAP_REL,
+                           SQUAD_TIEBREAK)
+
+    assert SOLVER_GAP_ABS == 0.0 and SOLVER_GAP_REL == 0.0
+    s = build_solver()
+    assert s.gapAbs == 0.0, "the absolute gap is what was left at its default"
+    assert s.gapRel == 0.0
+    assert s.threads == 1, "a parallel MIP returns whichever optimum finishes first"
+    from optimizer import TRANSFER_TIEBREAK
+
+    # Ordering that has to hold, smallest first. One transfer swaps a player in
+    # and out of the squad, the XI and possibly the armband, so it can move the
+    # squad nudge by about four of its units - and that must not be enough to
+    # buy a transfer the forecast does not justify, or the nudge starts
+    # recommending churn.
+    assert 4 * SQUAD_TIEBREAK < TRANSFER_TIEBREAK
+    # ...and the whole nudge stays under the finest difference a forecast can
+    # express, so it decides exact ties and nothing else.
+    assert 29 * SQUAD_TIEBREAK < 0.01
