@@ -205,13 +205,22 @@ SOLVER_TIME_LIMIT = 300
 # Prove optimality rather than stopping at a near-optimal incumbent: a gap
 # tolerance makes the answer depend on the search path, and therefore on the
 # machine.
+#
+# BOTH gaps, which is the part that is easy to get wrong and was. HiGHS defaults
+# to `mip_rel_gap` 1e-4 and `mip_abs_gap` **1e-6**, and PuLP only overrides each
+# one if you pass it. Setting the relative gap alone left the absolute gap at
+# 1e-6 - exactly the size of `SQUAD_TIEBREAK` - so the solver was explicitly
+# permitted to stop at any solution within the whole width of the nudge that
+# exists to make the optimum unique. The tiebreak was invisible to it, which is
+# why adding one changed nothing about the laptop-versus-CI disagreement.
 SOLVER_GAP_REL = 0.0
+SOLVER_GAP_ABS = 0.0
 
 
 def build_solver(msg: bool = False):
     """The solver every path in this project uses. One solver, one answer."""
     return pulp.HiGHS(msg=msg, timeLimit=SOLVER_TIME_LIMIT,
-                      gapRel=SOLVER_GAP_REL, threads=1)
+                      gapRel=SOLVER_GAP_REL, gapAbs=SOLVER_GAP_ABS, threads=1)
 
 
 def solve_fpl_optimization(
