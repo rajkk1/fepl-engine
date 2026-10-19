@@ -406,28 +406,28 @@ Chips off, which is what this table used to measure:
 
 | season | engine | `ppg` | `roll3` |
 |---|---|---|---|
-| 2023-24 | 2062 | 1970 | 1808 |
-| 2024-25 | 2290 | 2093 | 1768 |
-| 2025-26 | 2052 | 1973 | 1616 |
-| **pooled** | **6404** | 6036 | 5192 |
+| 2023-24 | 2062 | 1964 | 1795 |
+| 2024-25 | 2297 | 2068 | 1709 |
+| 2025-26 | 2056 | 1954 | 1610 |
+| **pooled** | **6415** | 5986 | 5114 |
 
 Chips played, which is what the engine actually does:
 
 | season | engine | `ppg` | `roll3` |
 |---|---|---|---|
-| 2023-24 | 2092 | 2025 | 1850 |
-| 2024-25 | 2410 | 2132 | 1769 |
-| 2025-26 | 2027 | 2027 | 1676 |
-| **pooled** | **6529** | 6184 | 5295 |
+| 2023-24 | 2161 | 1995 | 1894 |
+| 2024-25 | 2368 | 2117 | 1819 |
+| 2025-26 | 2164 | 2130 | 1690 |
+| **pooled** | **6693** | 6242 | 5403 |
 
 Pooled over all three clean seasons — **114 gameweeks**, paired by gameweek:
 
 | | baseline | mean | 95% CI | 3-season total | win rate | |
 |---|---|---|---|---|---|---|
-| chips off | `ppg` | **+3.23** | [+0.22, +6.18] | **+368** | 0.570 | **significant** |
-| | `roll3` | **+10.63** | [+6.90, +14.30] | **+1212** | 0.754 | significant |
-| chips played | `ppg` | +3.03 | [−0.25, +6.25] | +345 | 0.526 | **not significant** |
-| | `roll3` | **+10.82** | [+7.04, +14.46] | **+1234** | 0.737 | significant |
+| chips off | `ppg` | **+3.76** | [+0.71, +6.76] | **+429** | 0.588 | **significant** |
+| | `roll3` | **+11.41** | [+7.90, +14.87] | **+1301** | 0.781 | significant |
+| chips played | `ppg` | +3.96 | [+0.53, +7.30] | +451 | 0.561 | *unstable — see below* |
+| | `roll3` | **+11.32** | [+7.55, +14.96] | **+1290** | 0.737 | significant |
 
 **The edge over points-per-game does not clear zero, and an earlier version of
 this file said it did, on numbers that did not reproduce.** It reported +4.09
@@ -441,12 +441,20 @@ the upstream archive that no longer exists and was never re-derived — which is
 exactly the failure the `gate_baseline.json` ratchet now exists to prevent for
 the forecast metrics, and which nothing yet prevents for this table.
 
-So: **beating trailing points-per-game end to end is established with chips off
-and not with them played** — +3.23 [+0.22, +6.18] against +3.03 [−0.25, +6.25].
-That is a thin claim resting on one variant, and the honest reading is that the
-end-to-end edge over `ppg` is real but close enough to the noise floor that the
-measurement configuration decides it. The margin over the rolling means needs no
-such hedging: large and significant pooled in both variants.
+So: **beating trailing points-per-game end to end is established with chips off,
+and with them played it is not yet measurable.** Chips off, the margin is +3.76
+[+0.71, +6.76] and that arm is bit-identical between repeated CI runs, so the
+interval means what it says.
+
+Chips played it reads +3.96 [+0.53, +7.30], and that should not be reported as a
+result. The engine's total on that arm moves between **identical** CI runs —
+6593 in one, 6693 in the next — which shifts the margin by ~100 points, about
++0.9 a gameweek, and flips the verdict: the first run would have put the
+interval across zero. Until the chip search is as reproducible as the plain
+path, that cell is measuring the harness as much as the engine.
+
+The margin over the rolling means needs no such hedging: large and significant
+pooled in both variants, and stable in both.
 
 That is a narrower claim than the file used to make, and it is worth being
 precise about what it does *not* say. It does not say the forecast work was
@@ -466,23 +474,23 @@ chips off:
 
 | vs | squad | armband | hits | = net |
 |---|---|---|---|---|
-| `ppg` | **+457** | +75 | **−164** | +368 |
-| `roll3` | +422 | +198 | **+592** | +1212 |
+| `ppg` | **+479** | +102 | **−152** | +429 |
+| `roll3` | +505 | +188 | **+608** | +1301 |
 
-So the forecast does buy a better squad — +457, about +4.0 a gameweek, comfortably
+So the forecast does buy a better squad — +479, about +4.2 a gameweek, comfortably
 the size of the forecast edge measured above. It is not captaincy: the
 armband is +78 in the engine's favour, which is worth saying because the gate's
 advisory line reports FEPL's captain regret as *no better* than `ppg`'s, and the
 obvious reading of that — the engine cannot pick a captain — is wrong.
 
-What costs it is the churn. 68 hits against `ppg`'s 27 is 164 points of penalty
-against a +532 gross advantage: **roughly a third of the edge is handed back at
-the transfer window**. The same discipline is what wins against `roll3`, which
+What costs it is the churn. 64 hits against `ppg`'s 26 is 152 points of penalty
+against a +581 gross advantage: **roughly a quarter of the edge is handed back
+at the transfer window**. The same discipline is what wins against `roll3`, which
 takes 215 hits and gives back 608.
 
 Playing chips does not change the diagnosis, which is worth checking rather than
-assuming: the squad advantage is +391, the armband +142, and the hit differential
-−188.
+assuming: the squad advantage is +487, the armband +140, and the hit differential
+−176.
 
 Note the trap in reading that −144 as 144 points lying on the table. It is not:
 part of the +368 exists *because* of those extra transfers, so the penalty
@@ -599,7 +607,9 @@ one people learn to skip.
 >
 > The baselines were **recorded on a laptop and checked on a GitHub runner**.
 > `ppg` and `roll3` are bit-identical across five CI runs and still sat up to
-> 1.09% from the recorded values, which is what tripped it. A golden file has to
+> 1.09% from the recorded values, which is what tripped it. That gap is since
+> largely closed — see the reproducibility table below — because its cause was
+> the solver, not the machine. A golden file has to
 > be produced by the environment that validates it; these now are, which is also
 > why the numbers above moved when nothing about the engine did.
 >
@@ -618,11 +628,30 @@ one people learn to skip.
 > the squad choice would make the chain environment-independent, and is the real
 > fix. Until then the comparison runs weekly and prints, and claims nothing more.
 >
-> The same caveat applies to every total on this page: they are reproducible to
-> about **±2%**, not to the point, and the four-digit precision overstates them.
-> What *is* stable across environments is the verdict — chips off, the margin
-> over `ppg` clears zero on both the laptop (+3.79 [+0.86, +6.68]) and CI
-> (+3.23 [+0.22, +6.18]); chips played, it does not, on either.
+> **How reproducible these totals are, now that it has been measured per arm
+> rather than guessed at in one number.** An earlier version of this note said
+> ±2% across the board; that was pessimistic by an order of magnitude for some
+> arms and about right for others, which is not a useful thing for a caveat to
+> be.
+>
+> | arm | same machine, repeated | laptop vs CI |
+> |---|---|---|
+> | `ppg`, `roll3` | identical | **0.05–0.16%** |
+> | engine, chips off | identical | **0.85%** |
+> | engine, chips played | **1.5%** | — |
+>
+> The split is the diagnosis. `ppg` and `roll3` go data → ILP and nothing else,
+> so once the solver was pinned down they agree across machines to a sixth of a
+> percent. The engine additionally runs a gradient-boosted forecast through
+> numpy and scipy, and those are not bit-identical between arm64 and x86_64 —
+> no solver setting reaches that, which is the whole of the remaining 0.85%.
+>
+> The engine *with chips* is the one still unexplained: it moves by 1.5% between
+> identical CI runs while every other arm is bit-stable, and both arms share the
+> same forecast, so it is not the forecast. The chip search does 21 solves a
+> gameweek against the plain path's one, and proving exact optimality is now
+> much more expensive, so the next thing to examine is whether `timeLimit`
+> itself makes the search time-dependent even when no solve comes near it.
 
 The mean is the right statistic, which is worth recording because the obvious
 alternative is wrong. Rank-based tests are the usual answer to a noisy paired
