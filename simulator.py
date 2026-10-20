@@ -571,9 +571,14 @@ REPLAY_TOLERANCE = 0.01
 # already does this for transfers; making the whole squad choice uniquely
 # optimal would make the chain environment-independent, and is the real fix.
 #
-# Until then the comparison still runs and still prints, because the numbers are
-# worth seeing every week. It just does not claim to be a gate.
-REPLAY_GATE_BLOCKS = False
+# It blocks again, but only on the arms that earned it - see GATEABLE_SOURCES.
+# `ppg` and `roll3` have come back identical across three consecutive CI runs
+# since the absolute gap was closed (5986/6242 and 5114/5403 every time), and
+# they are the arms that moved when the table silently drifted, so they are both
+# trustworthy and load-bearing. The engine is reported beside them and fails
+# nothing, because 1.5% between identical runs is not a signal anyone can act
+# on.
+REPLAY_GATE_BLOCKS = True
 
 
 def replay_key(seasons: Sequence[str], from_gw: int, to_gw: Optional[int],
@@ -605,30 +610,60 @@ def load_replay_baseline(path: str = REPLAY_BASELINE_PATH) -> Dict[str, Any]:
         return {}
 
 
+# Which forecasts are reproducible enough to fail a build over.
+#
+# `ppg` and `roll3` go data -> ILP and nothing else, so with the solver pinned
+# down they come back identical on a repeat and agree across machines to 0.16%.
+# They are gateable, and they are also the arms that caught the drift this check
+# was built for.
+#
+# The engine additionally runs a gradient-boosted forecast through numpy and
+# scipy, which are not bit-identical between arm64 and x86_64 - 0.85% across
+# machines, and up to 1.5% between identical CI runs on the chips arm, which is
+# still unexplained. Gating that means failing at random; dropping the whole
+# check because one arm of it is noisy means catching nothing. So each arm is
+# judged on whether it is reproducible, and the report says which is which.
+GATEABLE_SOURCES = ("ppg", "roll3")
+
+
 def check_replay(per_season: Dict[str, Dict[str, Any]], recorded: Dict[str, Any],
-                 tolerance: float = REPLAY_TOLERANCE) -> Tuple[bool, str]:
-    """Does this run still produce the totals that were committed?"""
+                 tolerance: float = REPLAY_TOLERANCE,
+                 gateable=GATEABLE_SOURCES) -> Tuple[bool, str]:
+    """
+    Does this run still produce the totals that were committed?
+
+    False only when a *gateable* arm moved. A drifting engine total is reported
+    in the same breath and does not fail the build; see `GATEABLE_SOURCES`.
+    """
     if not recorded:
         return True, "no recorded result for this configuration; nothing to hold"
     was = (recorded or {}).get("totals") or {}
     now = pooled_totals(per_season)
 
-    moved, held = [], []
+    moved, drifted, held = [], [], []
     for src in sorted(was):
         if src not in now:
-            moved.append(f"{src} missing from this run")
+            (moved if src in gateable else drifted).append(
+                f"{src} missing from this run")
             continue
         a, b = float(was[src]), now[src]
         if abs(b - a) > abs(a) * tolerance:
-            moved.append(f"{src} {b:.0f} vs {a:.0f} recorded ({b - a:+.0f})")
+            where = moved if src in gateable else drifted
+            where.append(f"{src} {b:.0f} vs {a:.0f} recorded ({b - a:+.0f})")
         else:
             held.append(f"{src} {b:.0f}")
 
+    note = ""
+    if drifted:
+        note = ("; not gated, known to vary between identical runs: "
+                + "; ".join(drifted))
     if moved:
         return False, ("the replay no longer reproduces: " + "; ".join(moved)
                        + f" [tolerance {tolerance:.1%}; if the move is intended, "
-                         "re-record with --update-baseline and update the README]")
-    return True, "replay reproduces on " + ", ".join(held)
+                         "re-record with --update-baseline and update the README]"
+                       + note)
+    return True, ("replay reproduces on " + (", ".join(held) or "nothing comparable")
+                  + note)
 
 
 def record_replay_baseline(per_season: Dict[str, Dict[str, Any]], key: str,
@@ -814,9 +849,7 @@ def main():
                   + ", ".join(f"{k} {v:+.2f}" for k, v in
                               (recorded.get("_margin_per_gw") or {}).items()))
             if not blocks:
-                print("   Reporting only: this replay varies by up to 2.19% between "
-                      "identical CI runs, against the 1.1% drift the check exists "
-                      "to catch. See REPLAY_GATE_BLOCKS in simulator.py.")
+                print("   Reporting only: see REPLAY_GATE_BLOCKS in simulator.py.")
         raise SystemExit(0 if (ok or not blocks) else 1)
 
 

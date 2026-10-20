@@ -474,27 +474,52 @@ def test_the_replay_gate_passes_an_unchanged_run():
 
 def test_the_replay_gate_catches_the_drift_that_actually_happened():
     """
-    The recorded table said 2069/2218/2090 and the replay returned
-    2022/2247/2040 - between 1.1% and 2.4%. The gate has to catch that or it is
-    not worth having.
+    The drift that started all this moved the baselines too - `roll3` went
+    1833/1776/1629 to 1808/1712/1616 - and those are the arms reproducible
+    enough to fail a build over. The check has to catch that or it is not worth
+    having.
     """
     from simulator import check_replay
 
-    run = _pooled(engine=[2022 + 2247 + 2040])
-    ok, msg = check_replay(run, {"totals": {"engine": 2069 + 2218 + 2090}})
+    run = _pooled(roll3=[1808 + 1712 + 1616])
+    ok, msg = check_replay(run, {"totals": {"roll3": 1833 + 1776 + 1629}})
     assert not ok
-    assert "engine" in msg and "re-record" in msg
+    assert "roll3" in msg and "re-record" in msg
+
+
+def test_a_drifting_engine_is_reported_but_does_not_fail_the_build():
+    """
+    The engine runs a gradient-boosted forecast through numpy and scipy, which
+    are not bit-identical across architectures - 0.85% between machines, and up
+    to 1.5% between identical CI runs on the chips arm. Gating it means failing
+    at random; staying silent about it means losing the signal.
+    """
+    from simulator import check_replay
+
+    run = _pooled(engine=[6693], roll3=[5403])
+    ok, msg = check_replay(run, {"totals": {"engine": 6593, "roll3": 5403}})
+    assert ok, msg
+    assert "engine" in msg and "vary between identical runs" in msg
+
+
+def test_a_gateable_arm_still_fails_even_when_the_engine_also_moved():
+    from simulator import check_replay
+
+    run = _pooled(engine=[6693], ppg=[6000])
+    ok, msg = check_replay(run, {"totals": {"engine": 6593, "ppg": 6242}})
+    assert not ok
+    assert "ppg" in msg
 
 
 def test_the_replay_gate_tolerates_drift_below_its_bar():
     from simulator import check_replay
 
     # 0.5% low: upstream wobble, let it through.
-    run = _pooled(engine=[6277])
-    assert check_replay(run, {"totals": {"engine": 6309}})[0]
+    run = _pooled(roll3=[5089])
+    assert check_replay(run, {"totals": {"roll3": 5114}})[0]
     # 2% low: the table no longer says what it says.
-    run = _pooled(engine=[6183])
-    assert not check_replay(run, {"totals": {"engine": 6309}})[0]
+    run = _pooled(roll3=[5011])
+    assert not check_replay(run, {"totals": {"roll3": 5114}})[0]
 
 
 def test_the_replay_gate_watches_the_baselines_too():
@@ -601,12 +626,18 @@ def test_the_attribution_shows_a_margin_handed_back_at_the_armband(capsys):
 # GitHub runner, and separately the engine arm varies by up to 2.19% between
 # identical CI runs against the 1.1% drift it exists to catch.
 
-def test_the_replay_check_does_not_block_by_default():
-    from simulator import REPLAY_GATE_BLOCKS
+def test_the_replay_check_blocks_again_but_only_where_it_can():
+    """
+    It blocks on the arms that are reproducible and reports the one that is not,
+    rather than being all-or-nothing in either direction.
+    """
+    from simulator import REPLAY_GATE_BLOCKS, GATEABLE_SOURCES
 
-    assert REPLAY_GATE_BLOCKS is False, (
-        "the replay is not reproducible enough to block on; see the note beside "
-        "REPLAY_GATE_BLOCKS")
+    assert REPLAY_GATE_BLOCKS is True
+    assert set(GATEABLE_SOURCES) == {"ppg", "roll3"}
+    assert "engine" not in GATEABLE_SOURCES, (
+        "the engine moves up to 1.5% between identical CI runs; gating it fails "
+        "builds at random")
 
 
 def test_a_mismatch_warns_but_exits_zero(tmp_path):
