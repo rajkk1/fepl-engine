@@ -1,0 +1,39 @@
+name: Tests
+
+# Every pull request, with no path filter, which is the point of splitting this
+# out of the accuracy gate.
+#
+# It used to live there, and that workflow only triggers on `**.py`. So a change
+# touching nothing but `replay_baseline.json` ran no checks at all - including
+# `test_the_recorded_baselines_say_which_environment_made_them`, which exists to
+# read exactly that file. The same held for a README change that restated a
+# number a test pins. A suite that skips itself whenever the change is "only
+# data" or "only docs" is skipping the cases most likely to go unreviewed.
+#
+# It costs ~45 seconds, so there is no budget argument for filtering it. The
+# backtest stays in `accuracy_gate.yml` behind its path filter: that one
+# measures the forecast and a Markdown edit genuinely cannot move it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Unit tests
+        # Offline by design - see tests/conftest.py. The suite passes with every
+        # outbound socket blocked, so a feed outage cannot fail a pull request.
+        run: uv run pytest tests/ -q
