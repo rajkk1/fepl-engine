@@ -446,12 +446,28 @@ and with them played it is not yet measurable.** Chips off, the margin is +3.76
 [+0.71, +6.76] and that arm is bit-identical between repeated CI runs, so the
 interval means what it says.
 
-Chips played it reads +3.96 [+0.53, +7.30], and that should not be reported as a
-result. The engine's total on that arm moves between **identical** CI runs —
-6593 in one, 6693 in the next — which shifts the margin by ~100 points, about
-+0.9 a gameweek, and flips the verdict: the first run would have put the
-interval across zero. Until the chip search is as reproducible as the plain
-path, that cell is measuring the harness as much as the engine.
+Chips played it reads +3.96 [+0.53, +7.30], and that interval is narrower than
+the truth because it only counts one of the two sources of uncertainty. The
+bootstrap resamples gameweeks; it cannot see that **re-running the identical
+job gives a different total**. Across four CI runs the chips engine came back
+6593, 6693, 6693, 6693 — a spread of 100 points, about **±0.9 a gameweek** of
+pure harness noise sitting underneath a measured margin of +3.96. The lower
+value alone puts the interval across zero, so the verdict is decided by which
+run you happen to read.
+
+So that cell is not reported as a result. The honest version is that the chips
+margin is somewhere around +3 to +4 a gameweek with an interval wide enough to
+contain zero once the harness is accounted for, and nothing more precise is
+available until the engine arm reproduces.
+
+Why it does not: hosted runners are not the same hardware from one run to the
+next — a single dispatch put the two arms on an AMD EPYC 7763 and an EPYC 9V74 —
+and a different CPU changes floating-point behaviour in the gradient-boosted
+forecast, which only the engine arm uses. The same chip search repeated four
+times on one machine is identical to six decimals, so this is the environment
+rather than the code. `ppg` and `roll3` never touch the forecast and are
+bit-identical across every CI run, which is why they are the arms the gate
+blocks on.
 
 The margin over the rolling means needs no such hedging: large and significant
 pooled in both variants, and stable in both.

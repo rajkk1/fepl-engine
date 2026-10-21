@@ -682,3 +682,76 @@ def test_the_recorded_baselines_say_which_environment_made_them():
     for key, entry in data.items():
         assert entry.get("totals"), key
         assert entry.get("_gameweeks"), key
+
+
+# --- gating from saved replays ----------------------------------------------
+#
+# The seasons are independent, so they can be replayed as separate CI jobs and
+# pooled afterwards. That is what keeps the chips arm inside a job timeout: as
+# one job it took 2h15m of a 180-minute budget.
+
+def _season_file(tmp_path, name, season, chips_played=(), **nets):
+    import json
+
+    payload = {season: {
+        src: {"history": [{"net": v, "squad_points": v, "armband_points": 0,
+                           "hits": 0, "gw": i + 1} for i, v in enumerate(vals)],
+              "total_points": float(sum(vals)), "points_per_gw": 0.0,
+              "total_hits": 0, "total_transfers": 0, "season": season,
+              "gameweeks": len(vals),
+              "chips_played": list(chips_played)}
+        for src, vals in nets.items()}}
+    p = tmp_path / name
+    p.write_text(json.dumps(payload))
+    return str(p)
+
+
+def _run_sim(args, cwd=None):
+    import subprocess
+    import sys
+
+    return subprocess.run([sys.executable, str(ROOT / "simulator.py")] + args,
+                          capture_output=True, text=True, cwd=str(cwd or ROOT))
+
+
+def test_pooling_saved_seasons_matches_replaying_them_together(tmp_path):
+    """Splitting the work across jobs must not change the verdict."""
+    import json
+
+    a = _season_file(tmp_path, "a.json", "2023-24", engine=[10, 20], ppg=[5, 5])
+    b = _season_file(tmp_path, "b.json", "2024-25", engine=[30, 40], ppg=[5, 5])
+    both = tmp_path / "both.json"
+    both.write_text(json.dumps({**json.load(open(a)), **json.load(open(b))}))
+
+    split = _run_sim(["--no-chips", "--gate", "--from-json", a, b])
+    whole = _run_sim(["--no-chips", "--gate", "--from-json", str(both)])
+    pick = lambda o: [l for l in o.splitlines() if "replay gate" in l]
+    assert pick(split.stdout) == pick(whole.stdout), (split.stdout, whole.stdout)
+
+
+def test_the_variant_comes_from_the_replay_not_the_flag(tmp_path):
+    """
+    The baseline key is built from `--no-chips`, and a saved replay carries no
+    memory of it. Forgetting the flag would silently hold a no-chips run up
+    against the chips record and report a 4% "regression" that is really two
+    different questions being compared.
+    """
+    quiet = _season_file(tmp_path, "q.json", "2023-24", engine=[1, 2])
+    loud = _season_file(tmp_path, "l.json", "2023-24", engine=[1, 2],
+                        chips_played=[{"chip": "wc", "gw": 2}])
+
+    missing = _run_sim(["--gate", "--from-json", quiet])
+    assert missing.returncode != 0
+    assert "played no chips" in missing.stderr + missing.stdout
+
+    spurious = _run_sim(["--no-chips", "--gate", "--from-json", loud])
+    assert spurious.returncode != 0
+    assert "played chips" in spurious.stderr + spurious.stdout
+
+
+def test_the_same_season_cannot_be_pooled_twice(tmp_path):
+    """Double-counting a season would quietly inflate every pooled total."""
+    a = _season_file(tmp_path, "a.json", "2023-24", engine=[10, 20])
+    out = _run_sim(["--no-chips", "--gate", "--from-json", a, a])
+    assert out.returncode != 0
+    assert "already loaded" in out.stderr + out.stdout

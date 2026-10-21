@@ -802,6 +802,12 @@ def main():
     ap.add_argument("--tolerance", type=float, default=REPLAY_TOLERANCE,
                     help=f"Relative slack before a move fails the gate "
                          f"(default {REPLAY_TOLERANCE})")
+    ap.add_argument("--from-json", nargs="+", default=None, metavar="FILE",
+                    help="Gate or record from replays already written by "
+                         "--json-out, instead of replaying. The seasons are "
+                         "independent, so they can be run as separate jobs and "
+                         "pooled here - which is what keeps the chips arm, at "
+                         "~45 minutes a season, inside a job timeout.")
     ap.add_argument("--gate-blocks", action="store_true", default=REPLAY_GATE_BLOCKS,
                     help="Exit non-zero on a mismatch. Off by default: the "
                          "replay is not reproducible enough to block on - see "
@@ -811,20 +817,58 @@ def main():
                          "Commit the file, and update the README table with it.")
     args = ap.parse_args()
 
-    seasons = args.seasons or [args.season]
-    results = compare_seasons(seasons, horizon=args.horizon,
-                              sources=args.sources, from_gw=args.from_gw,
-                              to_gw=args.to_gw, play_chips=not args.no_chips)
-    # `compare_seasons` keys by season; a single-season run used to return the
-    # per-source mapping directly, so unwrap it for callers and for --json-out.
-    if not args.seasons:
-        results = results[args.season]
+    if args.from_json:
+        # Already replayed; just pool and judge. Each file is either a
+        # {season: {source: result}} mapping or a single season's
+        # {source: result}, so both shapes of --json-out can be fed back in.
+        merged: Dict[str, Any] = {}
+        for path in args.from_json:
+            with open(path) as f:
+                loaded = json.load(f)
+            if loaded and all(isinstance(v, dict) and "history" in v
+                              for v in loaded.values()):
+                loaded = {loaded[next(iter(loaded))].get("season", path): loaded}
+            overlap = set(merged) & set(loaded)
+            if overlap:
+                raise SystemExit(
+                    f"{path}: season(s) {sorted(overlap)} already loaded - "
+                    "pooling the same season twice would double-count it")
+            merged.update(loaded)
+        if not merged:
+            raise SystemExit("--from-json loaded nothing")
+
+        # Which variant this is has to come from the replay, not from the flag.
+        # The key is built from `--no-chips`, and a saved replay carries no
+        # memory of it, so forgetting the flag silently compares a no-chips run
+        # against the chips baseline and reports a 4% "regression" that is
+        # really two different questions being held up against each other.
+        played = any(r.get("chips_played")
+                     for season in merged.values() for r in season.values())
+        if played == bool(args.no_chips):
+            raise SystemExit(
+                f"these replays {'played' if played else 'played no'} chips, but "
+                f"--no-chips was {'' if args.no_chips else 'not '}passed. The baseline "
+                "key is built from that flag, so continuing would compare this "
+                "run against the other variant's record.")
+        results = merged
+        seasons = sorted(merged)
+        _print_pooled(merged)
+    else:
+        seasons = args.seasons or [args.season]
+        results = compare_seasons(seasons, horizon=args.horizon,
+                                  sources=args.sources, from_gw=args.from_gw,
+                                  to_gw=args.to_gw, play_chips=not args.no_chips)
+        # `compare_seasons` keys by season; a single-season run used to return
+        # the per-source mapping directly, so unwrap it for --json-out.
+        if not args.seasons:
+            results = results[args.season]
     if args.json_out:
         with open(args.json_out, "w") as f:
             json.dump(results, f, indent=2, default=float)
         print(f"\nWrote {args.json_out}")
 
-    per_season = results if args.seasons else {args.season: results}
+    per_season = (results if (args.seasons or args.from_json)
+                  else {args.season: results})
     key = replay_key(seasons, args.from_gw, args.to_gw, not args.no_chips)
 
     if args.update_baseline:
