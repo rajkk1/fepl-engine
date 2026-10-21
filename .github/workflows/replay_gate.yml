@@ -15,6 +15,14 @@ name: Season Replay Gate
 # check that slow on every push is a check people learn to skip. Weekly is
 # enough for a number that is only allowed to change deliberately.
 #
+# A season at a time, in parallel, then pooled. Run as one job per variant the
+# chips arm took 2h15m against a 180-minute timeout - 75% of the budget, and
+# climbing, since proving exact optimality got slower when the solver stopped
+# being allowed to ignore the tiebreak. The seasons are independent, so the only
+# reason they were sequential was that one process did all three. Splitting them
+# puts the longest job at ~45 minutes and leaves the pooling, which is the part
+# that has to see every season at once, to a cheap job at the end.
+#
 # Both variants are run because the README quotes both, and they answer
 # different questions: `no-chips` is the like-for-like history of this table,
 # `chips` is what the engine actually does.
@@ -53,18 +61,16 @@ on:
 
 jobs:
   replay:
+    name: replay ${{ matrix.variant }} ${{ matrix.season }}
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 90
     strategy:
-      # Both variants always run: a failure in one is worth seeing even when
-      # the other has already failed.
+      # Every combination always runs: a failure in one is worth seeing even
+      # when another has already failed.
       fail-fast: false
       matrix:
-        include:
-          - variant: chips
-            flags: ''
-          - variant: no-chips
-            flags: '--no-chips'
+        season: ['2023-24', '2024-25', '2025-26']
+        variant: [chips, no-chips]
 
     steps:
       - uses: actions/checkout@v4
@@ -83,7 +89,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: data/odds
-          key: odds-${{ github.run_id }}
+          key: odds-${{ github.run_id }}-${{ matrix.season }}-${{ matrix.variant }}
           restore-keys: |
             odds-
 
@@ -91,11 +97,12 @@ jobs:
         # The engine arm moves between identical runs of this workflow while
         # `ppg` and `roll3` come back bit-identical, and the same chip search
         # repeated four times on one machine is identical to six decimals - so
-        # whatever varies is here, not in the code. The live suspicion is that
-        # hosted runners are not the same hardware run to run: a different CPU
-        # changes floating-point behaviour in the gradient-boosted forecast,
-        # which only the engine arm uses. This prints what we landed on so the
-        # next few runs can confirm or kill that, instead of it staying a guess.
+        # whatever varies is here, not in the code. Hosted runners are not the
+        # same hardware run to run: one dispatch put the two arms on an EPYC
+        # 7763 and an EPYC 9V74. A different CPU changes floating-point
+        # behaviour in the gradient-boosted forecast, which only the engine arm
+        # uses. Printed per job so the correlation can be checked rather than
+        # assumed.
         run: |
           echo "runner: $RUNNER_NAME  arch: $(uname -m)  image: $ImageOS"
           grep -m1 'model name' /proc/cpuinfo || true
@@ -104,26 +111,66 @@ jobs:
           echo
           nproc
 
-      - name: Replay the seasons and compare against the record
+      - name: Replay one season
         run: |
           uv run python simulator.py \
-            --seasons ${{ github.event.inputs.seasons || '2023-24 2024-25 2025-26' }} \
-            ${{ matrix.flags }} \
-            --gate --gate-blocks \
-            --tolerance ${{ github.event.inputs.tolerance || '0.01' }} \
-            --json-out replay_${{ matrix.variant }}.json \
-            | tee replay_${{ matrix.variant }}.txt
-          # Surface a mismatch in the run summary without failing the build.
-          # A drifting engine total passes the gate but is still worth seeing.
-          if grep -q 'vary between identical runs' replay_${{ matrix.variant }}.txt; then
-            echo "::warning::${{ matrix.variant }}: $(grep '^\[PASS\] replay gate' replay_${{ matrix.variant }}.txt | head -1)"
-          fi
+            --season ${{ matrix.season }} \
+            ${{ matrix.variant == 'no-chips' && '--no-chips' || '' }} \
+            --json-out replay_${{ matrix.variant }}_${{ matrix.season }}.json
 
-      - name: Upload the replay
+      - name: Upload the season
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: replay-${{ matrix.variant }}
-          path: |
-            replay_${{ matrix.variant }}.json
-            replay_${{ matrix.variant }}.txt
+          name: replay-${{ matrix.variant }}-${{ matrix.season }}
+          path: replay_${{ matrix.variant }}_${{ matrix.season }}.json
+
+  gate:
+    # Pooling is the part that has to see every season at once, and it is cheap:
+    # no replaying, just the paired statistics and the comparison against the
+    # record. `--from-json` refuses to run if the saved replays disagree with
+    # the variant flag, so a mix-up compares nothing.
+    name: gate ${{ matrix.variant }}
+    needs: replay
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [chips, no-chips]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Collect the seasons
+        uses: actions/download-artifact@v4
+        with:
+          pattern: replay-${{ matrix.variant }}-*
+          merge-multiple: true
+
+      - name: Pool them and compare against the record
+        run: |
+          uv run python simulator.py \
+            ${{ matrix.variant == 'no-chips' && '--no-chips' || '' }} \
+            --gate --gate-blocks \
+            --tolerance ${{ github.event.inputs.tolerance || '0.01' }} \
+            --from-json replay_${{ matrix.variant }}_*.json \
+            | tee gate_${{ matrix.variant }}.txt
+          # A drifting engine total passes the gate but is still worth seeing.
+          if grep -q 'vary between identical runs' gate_${{ matrix.variant }}.txt; then
+            echo "::warning::${{ matrix.variant }}: $(grep '^\[PASS\] replay gate' gate_${{ matrix.variant }}.txt | head -1)"
+          fi
+
+      - name: Upload the verdict
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gate-${{ matrix.variant }}
+          path: gate_${{ matrix.variant }}.txt
