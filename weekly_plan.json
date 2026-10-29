@@ -3,68 +3,71 @@
     "team_id": 4309239,
     "transfers_in": [
         {
-            "id": 183,
-            "web_name": "Rudoni",
-            "cost": 4.9
-        },
-        {
-            "id": 411,
-            "web_name": "Haaland",
-            "cost": 15.8
+            "id": 4,
+            "web_name": "Gabriel",
+            "cost": 7.9
         }
     ],
     "transfers_out": [
         {
-            "id": 12,
-            "web_name": "Saka",
-            "cost": 9.5
-        },
-        {
-            "id": 569,
-            "web_name": "Gonzalo",
-            "cost": 6.0
+            "id": 173,
+            "web_name": "Thomas",
+            "cost": 4.0
         }
     ],
-    "hits": 1,
+    "hits": 0,
     "active_chip": "",
     "active_chip_gw": null,
     "captain": {
-        "id": 411,
-        "web_name": "Haaland",
-        "element_type": 4,
-        "team": 15,
-        "cost": 15.8,
-        "xp": 6.36,
-        "p_play": 0.9231292652339397,
-        "is_captain": true,
-        "is_vice_captain": false,
-        "now_cost": 15.8,
-        "status": "a"
-    },
-    "vice_captain": {
         "id": 68,
         "web_name": "Tavernier",
         "element_type": 3,
         "team": 3,
         "cost": 6.4,
-        "xp": 5.92,
+        "xp": 5.86,
         "p_play": 0.9313245599934277,
-        "is_captain": false,
-        "is_vice_captain": true,
+        "is_captain": true,
+        "is_vice_captain": false,
         "now_cost": 6.4,
         "status": "a"
     },
+    "vice_captain": {
+        "id": 426,
+        "web_name": "B.Fernandes",
+        "element_type": 3,
+        "team": 16,
+        "cost": 11.7,
+        "xp": 5.71,
+        "p_play": 0.9602841633036481,
+        "is_captain": false,
+        "is_vice_captain": true,
+        "now_cost": 11.7,
+        "status": "a"
+    },
     "starters": [
+        {
+            "id": 4,
+            "web_name": "Gabriel",
+            "element_type": 2,
+            "team": 1,
+            "cost": 7.9,
+            "xp": 4.62,
+            "p_play": 0.9840157631867663,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 7.9,
+            "status": "a"
+        },
         {
             "id": 68,
             "web_name": "Tavernier",
             "element_type": 3,
             "team": 3,
             "cost": 6.4,
-            "xp": 5.92,
+            "xp": 5.86,
             "p_play": 0.9313245599934277,
-            "is_captain": false,
-            "is_vice_captain": true,
+            "is_captain": true,
+            "is_vice_captain": false,
             "now_cost": 6.4,
             "status": "a"
         },
@@ -74,37 +77,11 @@
             "element_type": 4,
             "team": 4,
             "cost": 7.8,
-            "xp": 5.4,
-            "p_play": 0.987259935212649,
+            "xp": 5.25,
+            "p_play": 0.9871446955083307,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 7.8,
-            "status": "a"
-        },
-        {
-            "id": 173,
-            "web_name": "Thomas",
-            "element_type": 2,
-            "team": 7,
-            "cost": 4.0,
-            "xp": 3.25,
-            "p_play": 0.7346441212318269,
-            "is_captain": false,
-            "is_vice_captain": false,
-            "now_cost": 4.0,
-            "status": "d"
-        },
-        {
-            "id": 183,
-            "web_name": "Rudoni",
-            "element_type": 3,
-            "team": 7,
-            "cost": 4.9,
-            "xp": 4.93,
-            "p_play": 0.9386341990743752,
-            "is_captain": false,
-            "is_vice_captain": false,
-            "now_cost": 4.9,
             "status": "a"
         },
         {
@@ -113,7 +90,7 @@
             "element_type": 1,
             "team": 9,
             "cost": 5.5,
-            "xp": 3.26,
+            "xp": 3.3,
             "p_play": 0.9999750633819974,
             "is_captain": false,
             "is_vice_captain": false,
@@ -134,29 +111,29 @@
             "status": "a"
         },
         {
+            "id": 569,
+            "web_name": "Gonzalo",
+            "element_type": 4,
+            "team": 10,
+            "cost": 6.0,
+            "xp": 4.2,
+            "p_play": 0.9250350061285939,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 6.0,
+            "status": "a"
+        },
+        {
             "id": 305,
             "web_name": "Davis",
             "element_type": 2,
             "team": 12,
             "cost": 4.0,
-            "xp": 3.8,
+            "xp": 3.74,
             "p_play": 0.9960699975896288,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 4.0,
-            "status": "a"
-        },
-        {
-            "id": 411,
-            "web_name": "Haaland",
-            "element_type": 4,
-            "team": 15,
-            "cost": 15.8,
-            "xp": 6.36,
-            "p_play": 0.9231292652339397,
-            "is_captain": true,
-            "is_vice_captain": false,
-            "now_cost": 15.8,
             "status": "a"
         },
         {
@@ -165,11 +142,24 @@
             "element_type": 3,
             "team": 16,
             "cost": 11.7,
-            "xp": 5.82,
-            "p_play": 0.9625047781128515,
+            "xp": 5.71,
+            "p_play": 0.9602841633036481,
+            "is_captain": false,
+            "is_vice_captain": true,
+            "now_cost": 11.7,
+            "status": "a"
+        },
+        {
+            "id": 427,
+            "web_name": "Mbeumo",
+            "element_type": 3,
+            "team": 16,
+            "cost": 7.9,
+            "xp": 4.27,
+            "p_play": 0.8817526667758415,
             "is_captain": false,
             "is_vice_captain": false,
-            "now_cost": 11.7,
+            "now_cost": 7.9,
             "status": "a"
         },
         {
@@ -178,7 +168,7 @@
             "element_type": 2,
             "team": 17,
             "cost": 5.3,
-            "xp": 4.58,
+            "xp": 4.55,
             "p_play": 0.9724029311883406,
             "is_captain": false,
             "is_vice_captain": false,
@@ -191,8 +181,8 @@
             "element_type": 3,
             "team": 20,
             "cost": 5.7,
-            "xp": 4.53,
-            "p_play": 0.9040183395838022,
+            "xp": 4.47,
+            "p_play": 0.9022570989084269,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 5.7,
@@ -206,24 +196,11 @@
             "element_type": 1,
             "team": 8,
             "cost": 4.5,
-            "xp": 2.96,
-            "p_play": 0.9674543162203652,
+            "xp": 2.94,
+            "p_play": 0.9682097405189015,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 4.5,
-            "status": "a"
-        },
-        {
-            "id": 427,
-            "web_name": "Mbeumo",
-            "element_type": 3,
-            "team": 16,
-            "cost": 7.9,
-            "xp": 4.23,
-            "p_play": 0.8876816056574932,
-            "is_captain": false,
-            "is_vice_captain": false,
-            "now_cost": 7.9,
             "status": "a"
         },
         {
@@ -232,8 +209,8 @@
             "element_type": 2,
             "team": 5,
             "cost": 5.3,
-            "xp": 3.22,
-            "p_play": 0.9765168875196201,
+            "xp": 3.21,
+            "p_play": 0.9783516505147891,
             "is_captain": false,
             "is_vice_captain": false,
             "now_cost": 5.3,
@@ -251,11 +228,24 @@
             "is_vice_captain": false,
             "now_cost": 6.0,
             "status": "a"
+        },
+        {
+            "id": 12,
+            "web_name": "Saka",
+            "element_type": 3,
+            "team": 1,
+            "cost": 9.5,
+            "xp": 0.0,
+            "p_play": 0.0,
+            "is_captain": false,
+            "is_vice_captain": false,
+            "now_cost": 9.5,
+            "status": "i"
         }
     ],
-    "expected_score": 62.05,
-    "remaining_bank": 0.3,
+    "expected_score": 58.01,
+    "remaining_bank": 1.6,
     "degraded": false,
     "fixture_model": "market_odds",
-    "generated_at": "2026-10-28T17:56:21+00:00"
+    "generated_at": "2026-10-29T18:04:47+00:00"
 }
