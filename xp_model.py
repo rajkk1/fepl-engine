@@ -2023,7 +2023,8 @@ def generate_merv_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None,
                          half_life: float = 5.0, prior_weight: float = 1.0,
                          calibrate: bool = False, prior_ratings=None,
                          calibration_method: str = "linear",
-                         lineup_overrides=None, draws_out=None, status_out=None
+                         lineup_overrides=None, draws_out=None, status_out=None,
+                         minutes_out=None, history_out=None
                          ) -> Dict[int, Dict[Any, float]]:
     """
     Marginal Expected Rank Value: expected points adjusted for how a pick moves
@@ -2043,6 +2044,14 @@ def generate_merv_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None,
     squad-level score distribution - which is the only way to state a range for
     a plan rather than a single number, because team-mates' scores are not
     independent.
+
+    Pass a dict as `minutes_out` to receive the minutes forecast behind each
+    value, keyed by (player_id, gameweek): `p_play`, `p_60`, expected minutes
+    `xmin` (summed over a double gameweek's fixtures) and `n_fixtures`. The
+    model's four minutes buckets are fixed by those three numbers. And pass a
+    dict as `history_out` to receive the per-player history the forecast was
+    built from. Both exist for `forecast_archive`, which records what was
+    forecast before each deadline; neither changes the forecast.
     """
     from ownership_model import build_eo_matrix
     from monte_carlo import calculate_merv
@@ -2053,6 +2062,8 @@ def generate_merv_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None,
                             calibration_method, lineup_overrides)
     if status_out is not None:
         status_out.update(getattr(ensemble, "fit_status", {}) or {})
+    if history_out is not None:
+        history_out.update(all_history)
 
     eo_matrix = build_eo_matrix(players)
     players_by_team: Dict[int, List] = {}
@@ -2078,6 +2089,14 @@ def generate_merv_matrix(horizon_gws: List[int], bootstrap=None, fixtures=None,
                 r["raw"], r["element_type"], n_fixtures=r.get("n_fixtures", 1))
             if draws_out is not None and r.get("draws") is not None:
                 draws_out[(pid, gw)] = r["draws"]
+            if minutes_out is not None:
+                comps = r.get("components") or []
+                minutes_out[(pid, gw)] = {
+                    "p_play": float(r["p_play"]),
+                    "p_60": max((float(c["p_60"]) for c in comps), default=0.0),
+                    "xmin": float(sum(float(c["xmin"]) for c in comps)),
+                    "n_fixtures": int(r.get("n_fixtures", len(comps))),
+                }
             if risk_aversion:
                 draws = r["draws"]
                 var = float(np.var(draws)) if draws is not None and len(draws) else 0.0

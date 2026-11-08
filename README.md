@@ -822,6 +822,59 @@ parameters back per gameweek, not just the history fed to them.
 > 0.00, giving it ~0.95 AUC at predicting participation. It is not a forecast you
 > could have had at the deadline, so treating it as a target is misleading.
 
+## The live record
+
+Everything above is a replay of past seasons, and several of the engine's
+constants were measured on those same seasons, so the edge it shows may be
+flattered. The honest test is a season none of it was tuned on, scored as it
+happens — 2026-27 is the first. And the only real outside benchmark is FPL's own
+pre-deadline projection, `ep_next`, which the historical archive does not keep
+(its `xP` column is the leaky after-the-fact one above).
+
+Both have to be caught before the deadline: `ep_next` changes once it passes,
+and the published plan is overwritten every day and never held a forecast for
+every player anyway. So the weekly job also keeps a record, committed to `main`:
+
+```
+data/forecast_archive/2026-27/gw11_forecast.json   written before the deadline
+data/forecast_archive/2026-27/gw11_actual.json     written once FPL checks the data
+```
+
+A forecast file holds, for every player: the engine's xP for the gameweek and
+across the horizon, its minutes forecast (`p_play`, `p_60`, expected minutes),
+FPL's `ep_next`, `status` and `chance_of_playing_next_round`, ownership, and
+trailing points-per-game — plus when the forecast was made and which commit and
+Actions run made it. `forecast_archive.py` enforces the rules:
+
+- only a forecast completed **before** the deadline is written;
+- until the deadline, each day's run replaces the previous one, so what is kept
+  is the **last** pre-deadline forecast; from the deadline on, the file is
+  **never overwritten**, even if FPL later moves the deadline;
+- a degraded, fixture-blind forecast never replaces a sound one;
+- `ep_next` is left empty unless FPL's "next" gameweek is the one archived;
+- outcomes are saved once, after FPL marks the gameweek `data_checked`, because
+  the live API forgets a season every summer.
+
+The archive step runs last and still runs when publishing was skipped. If it
+writes nothing it warns, and if the push fails it fails the run, because a week
+not archived is lost for good. Its commits are prefixed `archive:`, so
+`git log --invert-grep --grep='^archive:'` hides them.
+
+To score it:
+
+```bash
+uv run python score_archive.py              # every archived season
+uv run python score_archive.py --fetch      # first fetch any outcomes not yet saved
+```
+
+It scores the engine (`fepl`), `ep_next` and trailing points-per-game (`ppg`)
+on each finished gameweek with the backtest's own code — `evaluate_gameweek`
+for the metrics, the same population rule, the same points-per-game definition
+and `paired_ci` for the intervals — so its numbers read directly against the
+tables above. Paired intervals need at least three scored gameweeks. Expect them
+to be wide for a while: one season's worth was not enough to settle
+precision@15 above.
+
 ## Should it take a hit?
 
 The optimiser charges a transfer beyond the free one at `HIT_COST` (4.0, the
@@ -1062,6 +1115,7 @@ Useful flags:
 | `--horizon-decay 0.86` | Per-gameweek discount on future xP; `1.0` weights the horizon equally |
 | `--calibrate` | Enable per-position recalibration (off by default) |
 | `--export-json path` | Write the plan as JSON |
+| `--archive-dir dir` | Keep this gameweek's pre-deadline forecast (see *The live record*) |
 
 ## Predicted lineups
 
@@ -1120,6 +1174,9 @@ outbound socket blocked.
 | `gate_baseline.json` | What the gate's configurations previously achieved |
 | `replay_baseline.json` | What the season replay's configurations previously produced |
 | `refresh_odds_cache.py` | Reseed the committed `data/odds` floor |
+| `forecast_archive.py` | Pre-deadline record of every player's forecast and FPL's `ep_next` |
+| `score_archive.py` | Score that record against outcomes: engine vs `ep_next` vs points-per-game |
+| `data/forecast_archive/` | The record itself, committed by the weekly job |
 | `simulator.py` | Full-season replay of the engine's own decisions |
 | `weekly_manager.py` | CLI entry point |
 | `notify.py` | Discord deadline alerts |

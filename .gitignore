@@ -33,3 +33,6 @@ data/*
 # a floor when football-data.co.uk is down - which is the one case neither the
 # retries nor the Actions cache can cover. See "When the odds feed is down".
 !data/odds/
+# So is the forecast archive: what the engine and FPL forecast before each
+# deadline, which cannot be recovered afterwards. The weekly job commits it.
+!data/forecast_archive/
