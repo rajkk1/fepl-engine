@@ -460,13 +460,34 @@ margin is somewhere around +3 to +4 a gameweek with an interval wide enough to
 contain zero once the harness is accounted for, and nothing more precise is
 available until the engine arm reproduces.
 
-Why it does not: hosted runners are not the same hardware from one run to the
-next — a single dispatch put the two arms on an AMD EPYC 7763 and an EPYC 9V74 —
-and a different CPU changes floating-point behaviour in the gradient-boosted
-forecast, which only the engine arm uses. The same chip search repeated four
-times on one machine is identical to six decimals, so this is the environment
-rather than the code. `ppg` and `roll3` never touch the forecast and are
-bit-identical across every CI run, which is why they are the arms the gate
+**Why it does not, now established rather than suspected.** Splitting the replay
+into one job per season turned the weekly run into a natural experiment: six
+jobs, each recording the CPU it landed on, twice a week apart on an unchanged
+commit.
+
+| arm / season | 2026-10-26 | 2026-11-02 | |
+|---|---|---|---|
+| chips 2024-25 | 7763 → **2368** | 7763 → **2368** | same CPU, same total |
+| no-chips 2024-25 | 9V45 → **2297** | 9V45 → **2297** | same CPU, same total |
+| chips 2023-24 | 7763 → 2161 | 9V45 → 2116 | CPU changed, total changed |
+| no-chips 2023-24 | 9V45 → 2062 | 7763 → 2098 | CPU changed, total changed |
+| no-chips 2025-26 | 9V45 → 2056 | 7763 → 2078 | CPU changed, total changed |
+| chips 2025-26 | 9V74 → 2027 | 9V45 → **2027** | CPU changed, total held |
+
+Every case where the runner drew the same CPU returned an identical total, and
+three of the four CPU changes moved it. The falsifiable direction — same
+hardware, same answer — has no counterexample here; the one exception runs the
+harmless way, a different CPU that happened to flip no tie.
+
+So the engine arm is not irreproducible, it is **CPU-dependent**: a different
+vector unit changes floating-point results in the gradient-boosted forecast, and
+a replay chains those into different transfer decisions. The same chip search
+repeated four times on one machine is identical to six decimals, so there is
+nothing wrong with the code. Note this is not confined to the chips arm, which
+is where it was first noticed — `no-chips` moved on two of three seasons too.
+
+`ppg` and `roll3` never touch the forecast and have been bit-identical in every
+CI run regardless of hardware, which is exactly why they are the arms the gate
 blocks on.
 
 The margin over the rolling means needs no such hedging: large and significant

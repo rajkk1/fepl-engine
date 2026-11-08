@@ -35,11 +35,15 @@ name: Season Replay Gate
 #
 # The first half was the solver - it had been left free to ignore differences
 # the size of the tiebreak that makes the optimum unique. With that closed,
-# `ppg` and `roll3` come back identical run after run, so they are gated. The
-# engine also runs a gradient-boosted forecast through numpy and scipy, which
-# are not bit-identical across architectures, and on the chips arm it still
-# moves up to 1.5% between identical runs here; it is reported and fails
-# nothing. See GATEABLE_SOURCES in simulator.py.
+# `ppg` and `roll3` come back identical run after run, so they are gated.
+#
+# The engine also runs a gradient-boosted forecast through numpy and scipy, and
+# is CPU-dependent. Replaying one season per job made that measurable: across
+# two weekly runs of an unchanged commit, every repeat that drew the same CPU
+# model returned an identical total, and three of the four CPU changes moved it.
+# Hosted runners hand out different hardware per job, so gating the engine would
+# fail whenever the fleet reshuffles. It is reported and fails nothing. See
+# GATEABLE_SOURCES in simulator.py.
 #
 # When a change is *meant* to move these numbers, re-record and commit, and
 # update the README table in the same change:
