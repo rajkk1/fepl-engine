@@ -13,9 +13,30 @@ no hosting cost.
 **Forecast** (`xp_model.py`)
 
 1. **Team strength** from bookmaker odds (`market_odds.py`). 1X2 and over/under
-   2.5 prices are de-vigged and inverted into per-team attack/defence rates,
-   time-decayed and shrunk toward the league mean early in a season. Team names
-   resolve one-to-one against Football-Data (`team_mapping.py`).
+   2.5 prices are de-vigged and inverted into each match's expected goals, and a
+   time-decayed ridge regression on their logs fits one attack and one defence
+   per club plus a league-wide home advantage, shrunk toward the league mean
+   early in a season. Team names resolve one-to-one against Football-Data
+   (`team_mapping.py`).
+
+   The fit is opponent-adjusted, and that is a correction. Ratings used to be
+   each club's average implied goals over its own fixtures, combined as if they
+   were opponent-neutral: a side that opened against the strong clubs came out
+   a worse attack than an identical side that opened against the weak ones. On
+   top of that, a home attack and an away defence each already carried the home
+   edge, and dividing their product by a single all-venue mean applied it
+   twice. Fitting on every matchweek's history and pricing the next one, across
+   all five cached seasons (1,850 matches), the ratings now miss the market's
+   own implied goals by **0.145** log-RMSE instead of 0.220 — 0.191 instead of
+   0.267 over a season's first ~100 matches — and no longer overstate home
+   goals by 12% and understate away goals by 7%. Separate home and away ratings
+   per club were measured and are worse (0.192), because they halve the
+   evidence behind every parameter. In the points backtest the gain is small
+   but real: pooled over 2022-23 to 2025-26, GW2–38 (147 gameweeks), RMSE
+   **−0.0068** [−0.0105, −0.0032] and rank correlation **+0.0039** [+0.0018,
+   +0.0061], and larger over GW2–10, where schedules are most lopsided:
+   **−0.0128** [−0.0208, −0.0051] and **+0.0059** [+0.0012, +0.0112]. Points
+   captured@15 and NDCG@15 move within noise.
 2. **Minutes** from a gradient-boosted classifier over four buckets
    (0 / 1–59 / 60–89 / 90), combined with FPL's availability flags and injury
    news. Features include fixture congestion — days since the team's last match
