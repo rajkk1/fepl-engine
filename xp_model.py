@@ -19,6 +19,8 @@ Notable corrections against the previous version:
 """
 import logging
 import math
+import re
+from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
 
 import numpy as np
@@ -746,6 +748,39 @@ def _parse_kickoff(value: str):
     return ts.tz_convert(None) if getattr(ts, "tzinfo", None) else ts
 
 
+# FPL's news text carries the date an absence ends, e.g. "Hamstring injury -
+# Expected back 22 Nov" or "Suspended until 16 Nov". The year is never given.
+_RETURN_DATE = re.compile(
+    r"\b(Expected back|Suspended until)\s+(\d{1,2})\s+([A-Za-z]{3})[A-Za-z]*\.?"
+    r"(?:\s+(\d{4}))?", re.IGNORECASE)
+
+
+def _return_date(news: Optional[str], kickoff) -> Optional[Tuple[str, Any]]:
+    """
+    ("injury" | "suspension", date) parsed from FPL news, or None.
+
+    The year is inferred as the one that puts the date nearest the fixture,
+    rather than from the clock, so a "05 Jan" return read against a December
+    fixture lands in January of the next year and the parse means the same
+    thing in a test, a backtest and a live run.
+    """
+    if not news or kickoff is None:
+        return None
+    m = _RETURN_DATE.search(news)
+    if not m:
+        return None
+    kind = "suspension" if m.group(1).lower().startswith("suspended") else "injury"
+    day, mon, year = int(m.group(2)), m.group(3).title(), m.group(4)
+    try:
+        if year:
+            return kind, pd.Timestamp(datetime.strptime(f"{day} {mon} {year}", "%d %b %Y"))
+        candidates = [pd.Timestamp(datetime.strptime(f"{day} {mon} {y}", "%d %b %Y"))
+                      for y in (kickoff.year - 1, kickoff.year, kickoff.year + 1)]
+    except ValueError:
+        return None
+    return kind, min(candidates, key=lambda d: abs(d - kickoff))
+
+
 class FixtureCalendar:
     """
     Kickoff times per (team, gameweek), and the rest/congestion they imply.
@@ -981,38 +1016,90 @@ class MinutesClassifier:
     def _predictor(self):
         return self.calibrated_model if self.calibrated_model is not None else self.model
 
-    def _availability(self, player, fixture) -> float:
+    # How much of a fitness doubt is still there one gameweek further out.
+    # FPL's `chance_of_playing_next_round` describes the next round and nothing
+    # beyond it, so the flag has to fade with distance. How fast is NOT fitted:
+    # historical flags are not recoverable from FPL's gameweek data, so there is
+    # nothing to fit it on. Halving per gameweek takes a 25% knock to ~63%, 81%,
+    # 91% over the following three weeks. The value it replaces was implicitly
+    # 1.0 - a doubt that never lifts - which is the one choice known to be wrong.
+    DOUBT_PERSISTENCE_PER_GW = 0.5
+
+    def _availability(self, player, fixture, next_gw: Optional[int] = None) -> float:
+        """
+        P(the player is available) for one fixture, which depends on how far
+        ahead the fixture is.
+
+        The flags describe the next round. Applying them unchanged to every week
+        of the horizon zeroed a player for five weeks of a one-match ban, held a
+        25% knock at 25% a month later, and never read the return date of an
+        injured player at all - the date was only parsed for doubtful ones. A
+        five-week plan then sells a player for missing one game, or refuses to
+        buy one who is back next week.
+
+        In order:
+          * left the club / not eligible: unavailable throughout;
+          * a return date in the news: unavailable before it. After it, a
+            suspension is simply over; an injury return date is an estimate, so
+            availability ramps from 50% on the day to 100% five days later;
+          * injured or suspended with no date: unavailable throughout, since
+            nothing says when that ends;
+          * a doubt: in full for the next round (`next_gw`), fading by
+            `DOUBT_PERSISTENCE_PER_GW` each gameweek after it.
+
+        With `next_gw` unknown every fixture is treated as the next round,
+        which is the old flat behaviour.
+        """
         status = player.get("status", "a")
-        chance_raw = player.get("chance_of_playing_next_round")
-
-        if status in ("i", "s", "u", "n") or chance_raw == 0:
+        if status in ("u", "n"):
             return 0.0
-        chance = _f(chance_raw, 100.0) if chance_raw is not None else 100.0
+        chance_raw = player.get("chance_of_playing_next_round")
+        if status in ("i", "s"):
+            chance = 0.0
+        elif chance_raw is None:
+            chance = 1.0
+        else:
+            chance = min(1.0, max(0.0, _f(chance_raw, 100.0) / 100.0))
+        if chance >= 1.0:
+            return 1.0
 
-        news = player.get("news", "") or ""
-        if news and fixture and fixture.get("kickoff_time"):
-            import re
-            import datetime
+        kickoff = None
+        if fixture and fixture.get("kickoff_time"):
+            try:
+                kickoff = _parse_kickoff(fixture["kickoff_time"])
+            except Exception:
+                kickoff = None
+        back = _return_date(player.get("news"), kickoff)
+        if back is not None:
+            kind, date = back
+            if kind == "suspension":
+                # "Suspended until 16 Nov" is read as still serving the ban on
+                # the 16th. If FPL means the reverse this costs one fixture's
+                # forecast; the other reading risks starting a banned player.
+                return 1.0 if kickoff.normalize() > date else chance
+            if kickoff >= date:
+                days_past = (kickoff - date).days
+                return max(chance, min(1.0, 0.5 + 0.1 * days_past))
+            return chance
 
-            m = re.search(r"Expected back (\d{1,2} [a-zA-Z]{3})", news)
-            if m:
-                try:
-                    curr_year = datetime.datetime.now().year
-                    ret = datetime.datetime.strptime(f"{m.group(1)} {curr_year}", "%d %b %Y")
-                    kickoff = pd.to_datetime(fixture["kickoff_time"]).tz_localize(None)
-                    if ret.month < 6 and kickoff.month > 7:
-                        ret = ret.replace(year=curr_year + 1)
-                    if kickoff >= ret:
-                        days_past = (kickoff - ret).days
-                        chance = max(chance, min(100.0, 50.0 + days_past * 10.0))
-                except Exception:
-                    pass
-        return chance / 100.0
+        if status in ("i", "s"):
+            return 0.0
+
+        ahead = 0
+        if next_gw is not None and fixture and fixture.get("event") is not None:
+            ahead = max(0, int(fixture["event"]) - int(next_gw))
+        return 1.0 - (1.0 - chance) * self.DOUBT_PERSISTENCE_PER_GW ** ahead
 
     def build_row(self, player, history, fixture=None,
-                  prior_season: Optional[Dict[str, float]] = None):
-        """Feature vector plus availability for one (player, fixture) pair."""
-        p_available = self._availability(player, fixture)
+                  prior_season: Optional[Dict[str, float]] = None,
+                  next_gw: Optional[int] = None):
+        """
+        Feature vector plus availability for one (player, fixture) pair.
+
+        `next_gw` is the first gameweek being forecast - the one FPL's flags
+        describe - so availability can be judged by how far ahead `fixture` is.
+        """
+        p_available = self._availability(player, fixture, next_gw)
         window = {"starts": [], "mins": []}
         for h in sorted(history, key=lambda x: x.get("round", 0)):
             window["starts"].append(_f(h.get("starts"), 0.0))
@@ -1137,8 +1224,9 @@ class MinutesClassifier:
         return out
 
     def predict_proba(self, player, history, fixture=None, current_gw=1,
-                      prior_season: Optional[Dict[str, float]] = None):
-        row = self.build_row(player, history, fixture, prior_season)
+                      prior_season: Optional[Dict[str, float]] = None,
+                      next_gw: Optional[int] = None):
+        row = self.build_row(player, history, fixture, prior_season, next_gw=next_gw)
         return self.predict_proba_batch([row])[0]
 
 
@@ -1182,10 +1270,12 @@ class EnsembleForecaster:
         return (player.get("id"), fixture.get("event"),
                 fixture.get("team_h"), fixture.get("team_a"), dgw_idx)
 
-    def prime_minutes(self, jobs):
+    def prime_minutes(self, jobs, next_gw: Optional[int] = None):
         """
         Pre-compute minutes distributions for many (player, fixture, history,
         dgw_idx) jobs in a single batched model call, then serve them from cache.
+
+        `next_gw` is the first gameweek of the forecast; see `build_row`.
         """
         rows, keys = [], []
         for player, fixture, history, dgw_idx in jobs:
@@ -1193,7 +1283,8 @@ class EnsembleForecaster:
             if key in self._minutes_cache:
                 continue
             rows.append(self.mc.build_row(
-                player, history, fixture, self.prior_seasons.get(player.get("id"))))
+                player, history, fixture, self.prior_seasons.get(player.get("id")),
+                next_gw=next_gw))
             keys.append(key)
         if rows:
             for key, probs in zip(keys, self.mc.predict_proba_batch(rows)):
@@ -1432,6 +1523,7 @@ class EnsembleForecaster:
             p_states = self.mc.predict_proba(
                 player, history, fixture, current_gw,
                 prior_season=self.prior_seasons.get(player.get("id")),
+                next_gw=current_gw,
             )
             self._minutes_cache[key] = p_states
         p_0, p_1_59, p_60_89, p_90 = p_states
@@ -1783,7 +1875,7 @@ def _forecast_gameweek(ensemble, players_by_team, fixtures_for_gw, all_history,
                 idx = counts.get(p["id"], 0)
                 counts[p["id"]] = idx + 1
                 jobs.append((p, fixture, all_history.get(p["id"], []), idx))
-    ensemble.prime_minutes(jobs)
+    ensemble.prime_minutes(jobs, next_gw=current_gw)
 
     for fixture in fixtures_for_gw:
         squad = []

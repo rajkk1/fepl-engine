@@ -373,8 +373,8 @@ def test_free_transfers_bank_to_five_and_no_further(base_bootstrap):
 def test_a_chip_keeps_the_free_transfers_it_did_not_use(base_bootstrap):
     """
     Saved free transfers survive a wildcard rather than being spent by it, so
-    the week after one starts from the bank plus the week's own transfer. The
-    bank used to be zeroed on the chip week.
+    the week after one starts with as many as the chip week had. The bank used
+    to be zeroed on the chip week.
     """
     initial = list(range(1, 16))
     # Three defenders are worth owning in GW2 and ruinous in GW1, so the
@@ -392,9 +392,57 @@ def test_a_chip_keeps_the_free_transfers_it_did_not_use(base_bootstrap):
         max_hits_per_gw=0, active_chip="wc", active_chip_gw=1, horizon_decay=1.0)
 
     assert res["status"] == "Optimal"
-    # 3 banked, unspent by the chip, + 1 earned = 4 available in GW2 with no hits.
+    # 3 available in the chip week: its own, used by the chip, and 2 banked,
+    # kept. Plus 1 earned = 3 available in GW2 with no hits.
     assert len(res["gameweeks"][2]["transfers_in"]) == 3
     assert res["gameweeks"][2]["hits"] == 0
+
+
+def _four_defenders_worth_buying_after_a_wildcard(base_bootstrap, initial_ft):
+    initial = list(range(1, 16))
+    xp = {pid: {1: 3.0, 2: 3.0} for pid in range(1, 16)}
+    for pid in range(16, 31):
+        xp[pid] = {1: 0.0, 2: 0.0}
+    for pid in (20, 21, 22, 23):
+        xp[pid] = {1: -100.0, 2: 30.0}
+    return solve_fpl_optimization(
+        bootstrap=base_bootstrap, xp_matrix=xp, horizon_gws=[1, 2],
+        initial_squad_ids=initial, initial_bank=10.0, initial_ft=initial_ft,
+        max_hits_per_gw=0, active_chip="wc", active_chip_gw=1, horizon_decay=1.0)
+
+
+def test_a_chip_uses_up_the_weeks_own_free_transfer(base_bootstrap):
+    """
+    The week after a Wildcard has as many free transfers as the Wildcard week
+    did, not one more. A live history settles it: a Wildcard in GW2 on one free
+    transfer, then three transfers for -8 in GW3. The old rule handed the plan
+    a fourth transfer here that FPL never grants.
+    """
+    res = _four_defenders_worth_buying_after_a_wildcard(base_bootstrap, initial_ft=3)
+    assert len(res["gameweeks"][2]["transfers_in"]) == 3
+
+
+def test_a_chip_played_with_no_free_transfers_leaves_one_for_next_week(base_bootstrap):
+    """With none in hand the chip has none to use; next week earns its one."""
+    res = _four_defenders_worth_buying_after_a_wildcard(base_bootstrap, initial_ft=0)
+    assert res["status"] == "Optimal"
+    assert len(res["gameweeks"][2]["transfers_in"]) == 1
+
+
+def test_a_chip_later_in_the_horizon_follows_the_same_rule(base_bootstrap):
+    """GW1 banks (1 -> 2 into GW2), the GW2 Wildcard keeps 2, so GW3 has 2."""
+    initial = list(range(1, 16))
+    xp = {pid: {1: 3.0, 2: 3.0, 3: 3.0} for pid in range(1, 16)}
+    for pid in range(16, 31):
+        xp[pid] = {1: 0.0, 2: 0.0, 3: 0.0}
+    for pid in (20, 21, 22, 23):
+        xp[pid] = {1: -100.0, 2: -100.0, 3: 30.0}
+    res = solve_fpl_optimization(
+        bootstrap=base_bootstrap, xp_matrix=xp, horizon_gws=[1, 2, 3],
+        initial_squad_ids=initial, initial_bank=10.0, initial_ft=1,
+        max_hits_per_gw=0, active_chip="wc", active_chip_gw=2, horizon_decay=1.0)
+    assert res["gameweeks"][1]["transfers_in"] == []
+    assert len(res["gameweeks"][3]["transfers_in"]) == 2
 
 
 def test_a_transfer_that_gains_nothing_is_not_recommended(base_bootstrap):
@@ -753,3 +801,77 @@ def test_the_solver_is_not_allowed_to_ignore_the_tiebreak():
     # ...and the whole nudge stays under the finest difference a forecast can
     # express, so it decides exact ties and nothing else.
     assert 29 * SQUAD_TIEBREAK < 0.01
+
+
+# ------------------------------------------- a proven optimum, or the clock
+
+
+def test_a_proven_optimum_says_so(base_bootstrap):
+    xp = {pid: {1: float(pid % 7)} for pid in range(1, 31)}
+    res = solve_fpl_optimization(base_bootstrap, xp, [1])
+    assert res["status"] == "Optimal"
+    assert res["proven_optimal"] is True
+    assert res["solve_seconds"] >= 0.0
+
+
+def test_a_solve_stopped_by_the_clock_is_not_reported_as_optimal(
+        base_bootstrap, monkeypatch, caplog):
+    """
+    PuLP's HiGHS interface reports a solve that hit `timeLimit` holding a
+    feasible incumbent as LpStatusOptimal - only `sol_status` tells them apart.
+    The optimiser read the status alone, so a time-limited answer, which
+    depends on machine speed, was passed off as the optimum. Simulated here by
+    a solver that finishes and then reports what a time limit would.
+    """
+    import logging
+    import pulp
+    import optimizer
+
+    class StoppedByTheClock(pulp.HiGHS):
+        def actualSolve(self, lp, **kwargs):
+            super().actualSolve(lp, **kwargs)
+            lp.assignStatus(pulp.LpStatusOptimal, pulp.LpSolutionIntegerFeasible)
+            return pulp.LpStatusOptimal
+
+    monkeypatch.setattr(optimizer, "build_solver",
+                        lambda msg=False: StoppedByTheClock(msg=False, threads=1))
+    xp = {pid: {1: float(pid % 7)} for pid in range(1, 31)}
+    with caplog.at_level(logging.WARNING, logger="optimizer"):
+        res = solve_fpl_optimization(base_bootstrap, xp, [1])
+
+    assert res["proven_optimal"] is False
+    assert res["status"] != "Optimal"
+    # Still a usable plan: a time-limited incumbent is feasible.
+    assert len(res["gameweeks"][1]["starters"]) == 11
+    assert any("without proving optimality" in r.getMessage() for r in caplog.records)
+
+
+def test_a_later_gameweek_follows_the_forecast_not_todays_status():
+    """
+    A player suspended today but due back in two weeks has a positive P(plays)
+    for that week in the forecast. The status flag used to override it to zero
+    for every week of the horizon, pricing his week-three bench cover as if he
+    were still banned.
+    """
+    from optimizer import bench_weights_for_gameweek, POS_MID
+
+    xp, pd_, ids = _bench_fixture(default_p_play=0.9)
+    back_by_then = dict(xp)
+    for pid in ids:
+        pd_[pid] = {**pd_[pid], "status": "s"}
+    weights_from_forecast = bench_weights_for_gameweek(back_by_then, pd_, ids, 1)
+
+    xp_plain, pd_plain, _ = _bench_fixture(default_p_play=0.9)
+    assert weights_from_forecast == bench_weights_for_gameweek(xp_plain, pd_plain, ids, 1)
+
+    # Where the forecast says nothing about a player for the week, the flag is
+    # still the fallback: a suspended keeper with no figure is a sure blank,
+    # so the bench keeper is certain to be needed.
+    from optimizer import POS_GKP
+
+    xp_gaps, pd_gaps, _ = _bench_fixture(default_p_play=0.9)
+    for pid in ids:
+        if pd_gaps[pid]["element_type"] == POS_GKP:
+            xp_gaps[pid] = {1: 5.0}
+            pd_gaps[pid] = {**pd_gaps[pid], "status": "s"}
+    assert bench_weights_for_gameweek(xp_gaps, pd_gaps, ids, 1)[POS_GKP] == 1.0
