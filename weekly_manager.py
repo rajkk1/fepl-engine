@@ -109,6 +109,81 @@ def chips_from_history(history, current_gw: int):
     return [c for c in ALL_CHIPS if c not in used], used
 
 
+# --- free transfers -------------------------------------------------------
+#
+# The count is not only on the authenticated endpoint. The public history lists,
+# for every gameweek, the transfers made and the points they cost, and the chip
+# history says which weeks were a Wildcard or Free Hit - so the count can be
+# followed from the week the squad was picked to now. It used to be assumed to
+# be 1, which since banking went to five is wrong more often than it is right.
+MAX_BANKED_FT = 5
+HIT_POINTS = 4
+_FT_PRESERVING_CHIPS = ("wildcard", "freehit")
+
+
+def free_transfers_from_history(history, current_gw: int):
+    """
+    Free transfers available for `current_gw`, rebuilt from public history.
+
+    Rules followed, from the gameweek the squad was first picked (whose
+    transfers were unlimited) onward:
+      * one free transfer is earned per gameweek, banked to `MAX_BANKED_FT`;
+      * a Wildcard or Free Hit week uses up that week's transfer but keeps
+        the ones banked before it, so the next week has as many as this one.
+        Not "+1": a real history has a Wildcard in GW2 on one free transfer
+        followed by three transfers for -8 in GW3, which is one free transfer;
+      * a week that cost points took hits, so every free transfer went with
+        it and the next week starts from one.
+
+    The history also checks the rules: a week with hits says exactly how many
+    free transfers it had (transfers made minus hits), and a week without says
+    at least as many as were made. A disagreement is logged, so a wrong rule
+    surfaces instead of hiding in the count.
+
+    It reflects transfers up to the last deadline, not any already made for
+    `current_gw`, and cannot see a one-off allowance FPL grants outside these
+    rules unless it was spent. Returns None when the history does not cover
+    every gameweek it needs, rather than guessing across the gap.
+    """
+    rows = {}
+    for r in (history or {}).get("current") or []:
+        if r.get("event") is not None:
+            rows[int(r["event"])] = r
+    if not rows:
+        return None
+    first = min(rows)
+    if first >= current_gw:
+        return None
+    chips = {int(c["event"]): c.get("name")
+             for c in (history or {}).get("chips") or [] if c.get("event")}
+
+    ft = 1
+    disagreements = []
+    for gw in range(first + 1, current_gw):
+        row = rows.get(gw)
+        if row is None:
+            return None
+        made = int(row.get("event_transfers") or 0)
+        cost = int(row.get("event_transfers_cost") or 0)
+        if chips.get(gw) in _FT_PRESERVING_CHIPS:
+            continue
+        if cost > 0:
+            had = made - cost // HIT_POINTS
+            if had != ft:
+                disagreements.append(f"GW{gw}: rules say {ft}, hits say {had}")
+            ft = 1
+        else:
+            if made > ft:
+                disagreements.append(f"GW{gw}: rules say {ft}, {made} made free")
+            ft = min(MAX_BANKED_FT, max(0, ft - made) + 1)
+    if disagreements:
+        logging.warning(
+            "Your transfer history disagrees with the free-transfer rules this "
+            "engine follows (%s). The count below may be off; pass --ft to "
+            "correct it.", "; ".join(disagreements))
+    return ft
+
+
 def _parse_used_chips(raw: str):
     """`--used-chips wc,bb` -> {"wc", "bb"}, rejecting anything unrecognised."""
     out = set()
@@ -126,12 +201,12 @@ def get_manager_team_state(team_id: int, current_gw: int):
     The manager's squad, bank, free transfers, selling prices and chips.
 
     Returns a sixth value saying whether the free-transfer count is *known* or
-    merely assumed. Only the authenticated endpoint knows it, and a wrong
-    assumption is expensive: the engine plans a transfer as free that actually
-    costs -4. It cannot be reconstructed from public data - `event_transfers`
-    does not distinguish "made none, banked one" from a pre-season or wildcard
-    week where nothing is banked at all, and the banking cap has changed between
-    seasons. So it is labelled rather than guessed at.
+    merely assumed. A wrong assumption is expensive: the engine plans a
+    transfer as free that actually costs -4. The authenticated endpoint states
+    it; without a cookie it is rebuilt from the public history (see
+    `free_transfers_from_history`), whose chip list is what tells a Wildcard
+    week apart from a week that banked. Only when neither is available is it
+    assumed, and labelled as such.
     """
     try:
         cookie = os.getenv("FPL_COOKIE")
@@ -190,10 +265,35 @@ def get_manager_team_state(team_id: int, current_gw: int):
         # Public fallback. Chip state comes from the public history endpoint
         # rather than being assumed: this path used to return the optimistic
         # default and recommend a wildcard that had already been played.
-        picks_data = fpl_api.get_manager_picks(team_id, current_gw - 1 if current_gw > 1 else 1)
+        picks_gw = current_gw - 1 if current_gw > 1 else 1
+        picks_data = fpl_api.get_manager_picks(team_id, picks_gw)
+        # A Free Hit squad lasts one gameweek and is then handed back, bank
+        # and all. Planning from the last gameweek's picks after a Free Hit
+        # meant planning from players the manager no longer owns. Walk back to
+        # the squad the chip returns to - more than one step only when Free
+        # Hits from both halves were played back to back.
+        while picks_data.get("active_chip") == "freehit" and picks_gw > 1:
+            picks_gw -= 1
+            logging.info("A Free Hit was played in GW%d; planning from the "
+                         "squad it hands back (GW%d's).", picks_gw + 1, picks_gw)
+            picks_data = fpl_api.get_manager_picks(team_id, picks_gw)
         squad_ids = [p["element"] for p in picks_data.get("picks", [])]
         bank = picks_data.get("entry_history", {}).get("bank", 0) / 10.0
         ft = 100 if current_gw == 1 else 1
+        if current_gw > 1:
+            try:
+                rebuilt = free_transfers_from_history(
+                    fpl_api.get_manager_history(team_id), current_gw)
+            except Exception as e:
+                logging.warning("Could not read transfer history (%s).", e)
+                rebuilt = None
+            if rebuilt is not None:
+                ft, ft_known = rebuilt, True
+                logging.info(
+                    "Free transfers: %d, rebuilt from your public transfer "
+                    "history as of the last deadline. Transfers already made "
+                    "this week are not counted; pass --ft if that is wrong.",
+                    ft)
         available_chips = chip_state(team_id, current_gw)
         # Selling prices reconstructed from public data rather than defaulted to
         # the current price, which over-stated the budget by half of every rise.
@@ -282,11 +382,12 @@ def main():
                              "season, e.g. 'wc,bb'. Normally read from your "
                              "public chip history; use this to correct it.")
     parser.add_argument("--ft", type=int, default=None,
-                        help="Free transfers you actually have. Only the "
-                             "authenticated endpoint knows this; without "
-                             "FPL_COOKIE the engine assumes 1, and assuming "
-                             "wrongly turns a planned free transfer into a -4 "
-                             "hit. Pass 0 if you have already used yours.")
+                        help="Free transfers you actually have. Read from your "
+                             "account with FPL_COOKIE, otherwise rebuilt from "
+                             "your public transfer history as of the last "
+                             "deadline, and assumed to be 1 only if that "
+                             "history cannot be read. Pass this if you have "
+                             "already made transfers this week.")
     parser.add_argument("--export-json", type=str, default="", help="Path to export the weekly plan as JSON (e.g., plan.json)")
     parser.add_argument("--risk-aversion", type=float, default=0.0,
                         help="Rank-aware risk weight. 0 = pure expected points; "

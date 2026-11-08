@@ -23,6 +23,17 @@ no hosting cost.
    mean cannot see that those five games came in eighteen days. An optional
    predicted-lineups feed overrides start probability directly; see below.
 
+   Availability is judged per gameweek, because FPL's flags describe the next
+   round only. A return date in the news ("Expected back 22 Nov", "Suspended
+   until 16 Nov") ends the absence on that date; an injury or ban with no date
+   stands across the horizon; and a doubt applies in full to the next round,
+   then halves each gameweek after it. That last rate is not fitted — FPL's
+   historical flags are not recoverable — but the rule it replaces, a doubt
+   that never lifts, is the one choice known to be wrong. Previously the flags
+   were applied unchanged to all five weeks, so a one-match ban zeroed a player
+   for the whole plan. The backtest and replay mark every player as fit, so
+   none of this moves their numbers, and none of it is measured by them.
+
    The classifier scores players one at a time and has no idea a team fields
    eleven of them, so its output is reconciled against a real team-match. Two
    things were wrong. The 1–59 bucket was valued at its arithmetic midpoint of
@@ -170,13 +181,21 @@ The whole end-to-end table further down has been re-run against this commit for
 both variants, and it did not come back saying what it used to — see *Does any
 of it put points on the board?*
 
-**A timed-out solve is not a slow solve, it is a dropped option.** Searching
-chip × gameweek means 21 solves where there used to be one, and a solve that
-exceeds the 300s CBC limit comes back not-optimal, raises, and is *skipped* by
-the search — so the chip quietly stops being considered for that gameweek
-rather than being considered and rejected. Correcting the free hit made this
+**A timed-out solve is not a slow solve.** Searching chip × gameweek means 21
+solves where there used to be one, and correcting the free hit made long solves
 reachable: handing the squad back couples three gameweeks of transfer decisions
-where the old formulation coupled none.
+where the old formulation coupled none. Under CBC a solve that exceeded the
+300s limit came back not-optimal, raised, and was *skipped* by the search, so
+the chip quietly stopped being considered for that gameweek.
+
+Under HiGHS it is worse, because it does not raise. PuLP's HiGHS interface
+reports a solve stopped by the time limit while holding a feasible incumbent as
+`Optimal`; only the solution status says optimality was never proven. Such an
+answer is whichever incumbent the search had reached when the clock ran out, so
+it depends on machine speed. The optimiser now checks the solution status,
+logs a warning, and returns `status: "Feasible"` and `proven_optimal: false`
+with the plan; the replay counts these per season (`unproven_solves`) and
+names the gameweeks.
 
 The fix is a cut, not a time limit. `s == s_prev + tin - tout` is satisfied
 equally by `tin = tout = 1` for a player who is simply held, so every held
@@ -195,6 +214,13 @@ the carried-out variable alone, so five banked made six available in a week, and
 a consequence — so the solver could decline a free transfer it held, pay an extra
 −4, and bank the declined one to fund a bigger move later. That surfaced in the
 plan as recommended hits against gameweeks with no transfer in them at all.
+
+A Wildcard or Free Hit uses up the week's own free transfer and keeps the banked
+ones, so the week after has as many as the chip week had. Both the optimiser and
+the replay used to add one. A real public history rules that out: a Wildcard in
+GW2 on one free transfer, then three transfers for −8 in GW3, which is exactly
+one free transfer. So every chip week handed the plan a transfer FPL does not
+grant, and the replay's chips arm took it.
 
 Future gameweeks are discounted at 0.86 per week (`--horizon-decay`). A forecast
 four weeks out carries injuries, rotation, form and fixture reschedules that have
@@ -412,6 +438,15 @@ Chips off, which is what this table used to measure:
 | **pooled** | **6415** | 5986 | 5114 |
 
 Chips played, which is what the engine actually does:
+
+> **These predate the chip-week free-transfer correction** (see *Free transfers
+> accrue to a cap of 5*, above) **and have not been re-measured.** Replaying
+> 2024-25 on one machine before and after the correction, with nothing else
+> different, `ppg` went from 2118 to 2096 (−22) and `roll3` from 1819 to 1738
+> (−81), partly from the missing transfer and partly from chip timing moving
+> with it; the engine arm was not replayed. The no-chips table above is
+> unaffected. `replay_baseline.json`'s chips entry needs re-recording from a CI
+> run before the weekly gate will pass again.
 
 | season | engine | `ppg` | `roll3` |
 |---|---|---|---|
@@ -683,12 +718,14 @@ one people learn to skip.
 > numpy and scipy, and those are not bit-identical between arm64 and x86_64 —
 > no solver setting reaches that, which is the whole of the remaining 0.85%.
 >
-> The engine *with chips* is the one still unexplained: it moves by 1.5% between
-> identical CI runs while every other arm is bit-stable, and both arms share the
-> same forecast, so it is not the forecast. The chip search does 21 solves a
-> gameweek against the plain path's one, and proving exact optimality is now
-> much more expensive, so the next thing to examine is whether `timeLimit`
-> itself makes the search time-dependent even when no solve comes near it.
+> The engine *with chips* looked like the one still unexplained: it moved by
+> 1.5% between identical CI runs while every other arm was bit-stable. That has
+> since been explained (see *Why it does not, now established rather than
+> suspected*, above): those runs landed on different CPUs, and every repeat on
+> the same CPU reproduces. A solve stopped by `timeLimit` would also make a
+> total machine-dependent, and under HiGHS that used to be invisible; the
+> replay now reports any such solve per season, so it can be ruled out run by
+> run rather than assumed.
 
 The mean is the right statistic, which is worth recording because the obvious
 alternative is wrong. Rank-based tests are the usual answer to a noisy paired
@@ -853,8 +890,17 @@ Fork the repo and set two repository secrets
 - `DISCORD_WEBHOOK_URL` — for deadline alerts.
 
 Optionally set `FPL_COOKIE` to let the engine read your exact bank and
-free-transfer count from the authenticated endpoint. Without it those fall back
-to public data and sensible defaults.
+free-transfer count from the authenticated endpoint. Without it they come from
+public data: the bank from your last gameweek's picks, and the free-transfer
+count rebuilt from your public history, following each week's transfers, the
+points they cost, and the Wildcard and Free Hit weeks, which use up that week's
+transfer but keep the banked ones. A week with hits states exactly how many free
+transfers it had, so the history also checks those rules, and a disagreement is
+logged. That
+count is as of the last deadline, so it misses transfers already made this
+week, and it cannot see a one-off allowance FPL grants outside the normal rules;
+pass `--ft` in either case. After a Free Hit, the squad and bank are taken from
+the week before it, which is what the chip hands back.
 
 ### Setting `FPL_COOKIE`
 
@@ -1009,7 +1055,7 @@ Useful flags:
 |---|---|
 | `--horizon N` | Planning horizon in gameweeks (default 5) |
 | `--chip wc\|fh\|bb\|tc` | Force a chip instead of searching for one |
-| `--ft N` | Free transfers you actually have. **Only the authenticated endpoint knows this**; without `FPL_COOKIE` the engine assumes 1, and assuming wrongly turns a planned free transfer into a −4 hit. Pass `--ft 0` if you have used yours. |
+| `--ft N` | Free transfers you actually have. Read from your account with `FPL_COOKIE`, otherwise rebuilt from your public history as of the last deadline, and assumed to be 1 only if that history cannot be read. A wrong count turns a planned free transfer into a −4 hit, so pass this if you have already made transfers this week. |
 | `--used-chips wc,bb` | Chips already played this half of the season, if the public history is wrong |
 | `--risk-aversion 0.05` | Enable rank-aware (MERV) valuation |
 | `--lineups path.json` | Predicted-lineups feed (see below) |

@@ -213,6 +213,7 @@ def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
     buy_prices: Dict[int, float] = {}
     total_points = total_hits = total_transfers = 0
     history: List[Dict[str, Any]] = []
+    unproven_solves: List[Dict[str, Any]] = []
     start = time.time()
 
     for gw in range(from_gw, last_gw + 1):
@@ -251,11 +252,17 @@ def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
                 else cur / 10.0
 
         def _solve(chip=None, chip_gw=None):
-            return solve_fpl_optimization(
+            res = solve_fpl_optimization(
                 bootstrap, xp_matrix, horizon_gws, initial_squad_ids=squad_ids,
                 initial_bank=bank, initial_sell_prices=sell_prices,
                 initial_ft=free_transfers, max_hits_per_gw=max_hits_per_gw,
                 hit_cost=hit_cost, active_chip=chip, active_chip_gw=chip_gw)
+            # A solve that hit its time limit returns a speed-dependent answer;
+            # count them so a replay says whether any of its totals rest on one.
+            if res.get("proven_optimal") is False:
+                unproven_solves.append({"gw": gw, "chip": chip, "chip_gw": chip_gw,
+                                        "seconds": res.get("solve_seconds")})
+            return res
 
         chip_now = None
         try:
@@ -364,19 +371,29 @@ def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
         if gw == 1:
             free_transfers = 1
         elif chip_now in ("wc", "fh"):
-            # The chip paid for the week's transfers, and saved free transfers
-            # survive it rather than being spent by it.
-            free_transfers = min(5, free_transfers + 1)
+            # The chip uses up the week's own free transfer and keeps the
+            # banked ones, so next week starts with as many as this one had.
+            # It used to add one, which a real history rules out: a Wildcard in
+            # GW2 on one free transfer, then three transfers for -8 in GW3.
+            pass
         else:
             free_transfers = max(1, min(5, free_transfers + 1 - len(transfers_in)))
 
     gws = max(1, len(history))
+    if unproven_solves:
+        logger.warning(
+            "%s %s: %d solve(s) stopped at the time limit without proving "
+            "optimality; this total depends on machine speed at those points: %s",
+            season_str, xp_source, len(unproven_solves),
+            ", ".join(f"GW{u['gw']}" + (f" {u['chip']}@{u['chip_gw']}" if u["chip"] else "")
+                      for u in unproven_solves))
     return {
         "season": season_str, "xp_source": xp_source, "gameweeks": len(history),
         "total_points": float(total_points),
         "points_per_gw": float(total_points) / gws,
         "total_hits": total_hits, "total_transfers": total_transfers,
         "chips_played": chips_played,
+        "unproven_solves": unproven_solves,
         "elapsed_s": round(time.time() - start, 1), "history": history,
     }
 

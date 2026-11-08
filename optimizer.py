@@ -1,5 +1,6 @@
 import pulp
 import logging
+import time
 from typing import Dict, Any, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
@@ -79,11 +80,14 @@ def bench_weights_for_gameweek(xp_matrix, player_dict, player_ids, gw,
     express availability; see `BLANK_PROB_FLOOR`.
     """
     def p_play(pid):
+        # The forecast's own per-gameweek figure wins: it already knows when an
+        # injured or suspended player is due back. Today's status flag is only
+        # a fallback for a matrix that says nothing about this gameweek.
         v = xp_matrix.get(pid, {}).get(f"{gw}_p_play")
         if v is None:
+            if player_dict.get(pid, {}).get("status") in ("i", "s", "u", "n"):
+                return 0.0
             return 1.0
-        if player_dict.get(pid, {}).get("status") in ("i", "s", "u", "n"):
-            return 0.0
         return max(0.0, min(1.0, float(v)))
 
     def xp(pid):
@@ -401,12 +405,7 @@ def solve_fpl_optimization(
 
         for pid in player_ids:
             xp_val = xp_matrix.get(pid, {}).get(t, 0.0)
-            
-            # P(plays) from the engine, used to price the vice-captain fallback.
-            p_play = xp_matrix.get(pid, {}).get(f"{t}_p_play", 1.0)
-            if player_dict[pid].get("status") in ["i", "s", "u", "n"]:
-                p_play = 0.0
-            
+
             if is_chip_active_now and active_chip == "bb":
                 b_weight = 1.0
             elif bench_weight is not None:
@@ -559,9 +558,19 @@ def solve_fpl_optimization(
             num_transfers = pulp.lpSum([tin[pid, t] for pid in player_ids])
             if is_chip_gw(t) and active_chip in ("wc", "fh"):
                 # Unlimited and free, in whichever gameweek the chip is played.
-                # Saved free transfers survive a chip rather than being spent by
-                # it, so the bank carries through untouched.
+                # The chip uses up the week's own free transfer and keeps the
+                # banked ones, so the week after starts with as many as this
+                # one had - not one more. A real history settles it: a Wildcard
+                # in GW2 on one free transfer, then three transfers for -8 in
+                # GW3, which is one free transfer. Carrying the whole of
+                # `ft_avail` let the plan spend a transfer FPL never grants.
                 prob += hits[t] == 0, f"No_Hits_{t}"
+                if idx == 0:
+                    prob += ft_carried[t] <= max(0, initial_ft - 1), f"Chip_Uses_Week_FT_{t}"
+                else:
+                    # `ft_avail` can always reach 1 here, being bounded by one
+                    # plus the previous carry, so this never binds infeasibly.
+                    prob += ft_carried[t] + 1 <= ft_avail[t], f"Chip_Uses_Week_FT_{t}"
             else:
                 prob += num_transfers + ft_carried[t] <= ft_avail[t] + hits[t], f"FT_Math_{t}"
                 prob += hits[t] <= max_hits_per_gw, f"Max_Hits_{t}"
@@ -575,16 +584,36 @@ def solve_fpl_optimization(
                 prob += ft_carried[t] <= 15 * ft_banks[t], f"FT_Bank_Flag_{t}"
                 prob += hits[t] <= 15 * (1 - ft_banks[t]), f"FT_Bank_Or_Hit_{t}"
 
+    started = time.perf_counter()
     status = prob.solve(build_solver())
+    solve_seconds = time.perf_counter() - started
     status_str = pulp.LpStatus[status]
 
     if status != pulp.LpStatusOptimal:
         logger.error(f"Solver failed to find optimal solution: {status_str}")
         raise ValueError(f"Solver failed: {status_str}")
 
+    # `status` alone cannot tell a proven optimum from a solve that ran out of
+    # time. PuLP's HiGHS interface reports a solve stopped by `timeLimit` while
+    # holding a feasible incumbent as LpStatusOptimal; only `sol_status` says
+    # whether optimality was proven. Such an answer is still a valid plan, but
+    # it is whichever incumbent the search had reached when the clock ran out,
+    # so it depends on how fast the machine is. Say so rather than pass it off
+    # as the optimum.
+    proven_optimal = prob.sol_status == pulp.LpSolutionOptimal
+    if not proven_optimal:
+        status_str = "Feasible"
+        logger.warning(
+            "Solver stopped after %.0fs without proving optimality (%s); using "
+            "the best plan found so far, which may differ on a faster or "
+            "slower machine.", solve_seconds,
+            pulp.LpSolution.get(prob.sol_status, prob.sol_status))
+
     # Extract Optimization Solution Output
     results = {
         "status": status_str,
+        "proven_optimal": proven_optimal,
+        "solve_seconds": round(solve_seconds, 2),
         "total_xp": round(pulp.value(prob.objective), 2),
         "gameweeks": {}
     }
@@ -602,12 +631,14 @@ def solve_fpl_optimization(
             if s_val > 0.5:
                 vc_val = pulp.value(vc[pid, t]) or 0
                 
+                # As in `bench_weights_for_gameweek`: the forecast's figure for
+                # this gameweek, and the flags only when it has none.
                 p_play = xp_matrix.get(pid, {}).get(f"{t}_p_play")
                 if p_play is None:
                     chance_raw = player_dict[pid].get("chance_of_playing_next_round")
                     p_play = 1.0 if chance_raw is None else chance_raw / 100.0
-                if player_dict[pid].get("status") in ["i", "s", "u", "n"]:
-                    p_play = 0.0
+                    if player_dict[pid].get("status") in ["i", "s", "u", "n"]:
+                        p_play = 0.0
 
                 p_info = {
                     "id": pid,

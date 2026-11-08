@@ -884,3 +884,106 @@ def test_keepers_keep_the_positional_card_prior():
     from xp_model import price_adjusted_priors, POS_GKP
 
     assert price_adjusted_priors(POS_GKP, {"yc": 0.073}, 55) == {}
+
+
+# ----------------------------------------------- availability over a horizon
+#
+# FPL's flags describe the next round. Applied unchanged to all five weeks of a
+# plan, they zeroed a player for five weeks of a one-match ban, never read an
+# injured player's return date, and held a 25% knock at 25% a month later.
+
+
+def _gw_fixture(event, date):
+    return {"event": event, "team_h": 1, "team_a": 2, "finished": False,
+            "kickoff_time": f"{date}T15:00:00Z"}
+
+
+HORIZON = [(10, "2026-11-14"), (11, "2026-11-21"), (12, "2026-11-28"),
+           (13, "2026-12-05"), (14, "2026-12-12")]
+
+
+def _over_horizon(player, next_gw=10):
+    mc = MinutesClassifier()
+    return [mc._availability(player, _gw_fixture(ev, d), next_gw=next_gw)
+            for ev, d in HORIZON]
+
+
+def test_an_injured_player_is_back_after_the_date_in_the_news(player):
+    avail = _over_horizon({**player, "status": "i", "chance_of_playing_next_round": 0,
+                           "news": "Hamstring injury - Expected back 20 Nov"})
+    assert avail[0] == 0.0
+    # A return date is an estimate, so the day after it is better than even
+    # rather than certain, and a week later he is simply available.
+    assert 0.5 < avail[1] < 1.0
+    assert avail[2:] == [1.0, 1.0, 1.0]
+
+
+def test_a_suspension_is_over_once_its_date_has_passed(player):
+    avail = _over_horizon({**player, "status": "s", "chance_of_playing_next_round": 0,
+                           "news": "Suspended until 16 Nov"})
+    assert avail == [0.0, 1.0, 1.0, 1.0, 1.0]
+
+
+def test_a_ban_is_still_being_served_on_its_end_date(player):
+    mc = MinutesClassifier()
+    banned = {**player, "status": "s", "chance_of_playing_next_round": 0,
+              "news": "Suspended until 14 Nov"}
+    assert mc._availability(banned, _gw_fixture(10, "2026-11-14"), next_gw=10) == 0.0
+
+
+def test_an_absence_with_no_date_stands_across_the_horizon(player):
+    for status in ("i", "s", "u"):
+        avail = _over_horizon({**player, "status": status,
+                               "chance_of_playing_next_round": 0,
+                               "news": "Knee injury - Unknown return date"})
+        assert avail == [0.0] * 5, status
+
+
+def test_a_doubt_applies_to_the_next_round_and_fades_after_it(player):
+    avail = _over_horizon({**player, "status": "d", "chance_of_playing_next_round": 25,
+                           "news": "Knock - 25% chance of playing"})
+    assert avail[0] == pytest.approx(0.25)
+    assert avail[1] == pytest.approx(
+        1.0 - 0.75 * MinutesClassifier.DOUBT_PERSISTENCE_PER_GW)
+    assert avail == sorted(avail)
+    assert avail[-1] > 0.9
+
+
+def test_without_a_reference_gameweek_the_flag_applies_flat(player):
+    """Callers that do not say which week is next get the old behaviour."""
+    mc = MinutesClassifier()
+    doubtful = {**player, "status": "d", "chance_of_playing_next_round": 25}
+    assert [mc._availability(doubtful, _gw_fixture(ev, d)) for ev, d in HORIZON] \
+        == [pytest.approx(0.25)] * 5
+
+
+def test_a_return_date_after_new_year_lands_in_january(player):
+    """The year comes from the fixture, not the clock, so December reads right."""
+    mc = MinutesClassifier()
+    injured = {**player, "status": "i", "chance_of_playing_next_round": 0,
+               "news": "Ankle injury - Expected back 05 Jan"}
+    assert mc._availability(injured, _gw_fixture(18, "2026-12-28"), next_gw=18) == 0.0
+    assert mc._availability(injured, _gw_fixture(20, "2027-01-17"), next_gw=18) == 1.0
+
+
+def test_the_forecast_brings_a_returning_player_back_within_the_horizon(
+        player, history, teams):
+    """End to end through the path the weekly job runs."""
+    from xp_model import _forecast_gameweek
+
+    ens = _flat_ensemble(teams)
+    ens.normalise_team_minutes = False
+    injured = {**player, "status": "i", "chance_of_playing_next_round": 0,
+               "news": "Hamstring injury - Expected back 20 Nov"}
+    by_team = {1: [injured]}
+    hist = {injured["id"]: history}
+
+    this_week = _forecast_gameweek(ens, by_team, [_gw_fixture(10, "2026-11-14")],
+                                   hist, current_gw=10)
+    ens.clear_minutes_cache()
+    later = _forecast_gameweek(ens, by_team, [_gw_fixture(12, "2026-11-28")],
+                               hist, current_gw=10)
+
+    assert injured["id"] not in this_week
+    assert later[injured["id"]]["p_play"] > 0.5
+    assert later[injured["id"]]["raw"] > 0.0

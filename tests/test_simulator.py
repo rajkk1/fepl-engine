@@ -373,6 +373,39 @@ def test_a_free_hit_does_not_spend_the_free_transfer_bank(tiny_season, monkeypat
     assert by_gw[4]["hits"] == 0
 
 
+def test_the_week_after_a_chip_has_as_many_free_transfers_as_the_chip_week(
+        tiny_season, monkeypatch):
+    """
+    The chip uses up its week's own free transfer and keeps the banked ones, so
+    the count carries over unchanged - not plus one. A live history settles it:
+    a Wildcard in GW2 on one free transfer, then three transfers for -8 in GW3.
+    """
+    import chip_policy
+    import simulator
+
+    def force_free_hit(solve, horizon_gws, current_gw, available):
+        if current_gw == 3:
+            return {"chip": "fh", "gw": 3, "gain": 99.0, "res": solve("fh", 3)}
+        return {"chip": "", "gw": horizon_gws[0], "gain": 0.0, "res": solve(None, None)}
+
+    handed = {}
+    real_solve = simulator.solve_fpl_optimization
+
+    def recording_solve(bootstrap, xp_matrix, horizon_gws, **kw):
+        handed.setdefault(horizon_gws[0], kw.get("initial_ft"))
+        return real_solve(bootstrap, xp_matrix, horizon_gws, **kw)
+
+    monkeypatch.setattr(chip_policy, "choose_chip", force_free_hit)
+    monkeypatch.setattr(simulator, "solve_fpl_optimization", recording_solve)
+
+    simulator.run_season_simulation(
+        "2024-25", horizon=2, xp_source="ppg", from_gw=1, to_gw=4,
+        data=tiny_season, verbose=False)
+
+    assert handed[3] >= 1
+    assert handed[4] == handed[3]
+
+
 # --- pooling across seasons -------------------------------------------------
 #
 # The README quotes a pooled figure over 114 gameweeks, which is the one worth
