@@ -160,7 +160,12 @@ jobs:
           merge-multiple: true
 
       - name: Pool them and compare against the record
+        # A step with no `shell:` runs as `bash -e`, without pipefail, so a
+        # pipeline's status is its last command's. Piped into `tee`, a [FAIL]
+        # verdict exited 0 and the job passed: from the per-season split until
+        # this line, the gate printed failures it could not act on.
         run: |
+          set -o pipefail
           uv run python simulator.py \
             ${{ matrix.variant == 'no-chips' && '--no-chips' || '' }} \
             --gate --gate-blocks \

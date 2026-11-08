@@ -453,37 +453,41 @@ Chips off, which is what this table used to measure:
 
 | season | engine | `ppg` | `roll3` |
 |---|---|---|---|
-| 2023-24 | 2062 | 1964 | 1795 |
-| 2024-25 | 2297 | 2068 | 1709 |
-| 2025-26 | 2056 | 1954 | 1610 |
-| **pooled** | **6415** | 5986 | 5114 |
+| 2023-24 | 2088 | 1964 | 1795 |
+| 2024-25 | 2383 | 2068 | 1709 |
+| 2025-26 | 2014 | 1954 | 1610 |
+| **pooled** | **6485** | 5986 | 5114 |
 
 Chips played, which is what the engine actually does:
 
-> **These predate the chip-week free-transfer correction** (see *Free transfers
-> accrue to a cap of 5*, above) **and have not been re-measured.** Replaying
-> 2024-25 on one machine before and after the correction, with nothing else
-> different, `ppg` went from 2118 to 2096 (−22) and `roll3` from 1819 to 1738
-> (−81), partly from the missing transfer and partly from chip timing moving
-> with it; the engine arm was not replayed. The no-chips table above is
-> unaffected. `replay_baseline.json`'s chips entry needs re-recording from a CI
-> run before the weekly gate will pass again.
-
 | season | engine | `ppg` | `roll3` |
 |---|---|---|---|
-| 2023-24 | 2161 | 1995 | 1894 |
-| 2024-25 | 2368 | 2117 | 1819 |
-| 2025-26 | 2164 | 2130 | 1690 |
-| **pooled** | **6693** | 6242 | 5403 |
+| 2023-24 | 2025 | 1968 | 1906 |
+| 2024-25 | 2283 | 2099 | 1742 |
+| 2025-26 | 2069 | 2112 | 1706 |
+| **pooled** | **6377** | 6179 | 5354 |
+
+> **Both tables were re-recorded on 2026-11-08**, from CI (replay-gate run
+> 42519168601 at `3f829fe`), after two changes that move them.
+>
+> - **The chip-week free-transfer correction** (see *Free transfers accrue to a
+>   cap of 5*, above). A Wildcard or Free Hit no longer hands back an extra
+>   transfer. With chips played, that moves `ppg` by −18 to −27 points a season
+>   and `roll3` by −77 to +16, partly from the missing transfer and partly from
+>   chip timing shifting with it. Neither arm touches the forecast, so that is
+>   the whole of their move, and with chips off they are unchanged.
+> - **Opponent-adjusted team ratings.** These change the forecast, so they move
+>   the engine in both tables. That comes on top of the engine's CPU
+>   dependence (below), which on its own moves a season by tens of points.
 
 Pooled over all three clean seasons — **114 gameweeks**, paired by gameweek:
 
 | | baseline | mean | 95% CI | 3-season total | win rate | |
 |---|---|---|---|---|---|---|
-| chips off | `ppg` | **+3.76** | [+0.71, +6.76] | **+429** | 0.588 | **significant** |
-| | `roll3` | **+11.41** | [+7.90, +14.87] | **+1301** | 0.781 | significant |
-| chips played | `ppg` | +3.96 | [+0.53, +7.30] | +451 | 0.561 | *unstable — see below* |
-| | `roll3` | **+11.32** | [+7.55, +14.96] | **+1290** | 0.737 | significant |
+| chips off | `ppg` | **+4.38** | [+1.06, +7.57] | **+499** | 0.640 | **significant** |
+| | `roll3` | **+12.03** | [+8.42, +15.58] | **+1371** | 0.763 | significant |
+| chips played | `ppg` | +1.74 | [−1.56, +4.97] | +198 | 0.553 | noise |
+| | `roll3` | **+8.97** | [+5.03, +12.81] | **+1023** | 0.684 | significant |
 
 **The edge over points-per-game does not clear zero, and an earlier version of
 this file said it did, on numbers that did not reproduce.** It reported +4.09
@@ -498,23 +502,23 @@ exactly the failure the `gate_baseline.json` ratchet now exists to prevent for
 the forecast metrics, and which nothing yet prevents for this table.
 
 So: **beating trailing points-per-game end to end is established with chips off,
-and with them played it is not yet measurable.** Chips off, the margin is +3.76
-[+0.71, +6.76] and that arm is bit-identical between repeated CI runs, so the
-interval means what it says.
+and with them played it is not.** Chips off, the margin is +4.38
+[+1.06, +7.57]. That arm is CPU-dependent too (below), but the CPU-driven moves
+measured on it so far are under 60 points pooled, about 0.5 a gameweek, so the
+interval stays above zero.
 
-Chips played it reads +3.96 [+0.53, +7.30], and that interval is narrower than
-the truth because it only counts one of the two sources of uncertainty. The
-bootstrap resamples gameweeks; it cannot see that **re-running the identical
-job gives a different total**. Across four CI runs the chips engine came back
-6593, 6693, 6693, 6693 — a spread of 100 points, about **±0.9 a gameweek** of
-pure harness noise sitting underneath a measured margin of +3.96. The lower
-value alone puts the interval across zero, so the verdict is decided by which
-run you happen to read.
+Chips played, the margin is now +1.74 [−1.56, +4.97], which contains zero even
+before harness noise is counted. It used to read +3.96 [+0.53, +7.30]. That
+interval was narrower than the truth, because it counted only one of the two
+sources of uncertainty. The bootstrap resamples gameweeks; it cannot see that
+**re-running the identical job gives a different total**. Across four CI runs
+the chips engine came back 6593, 6693, 6693, 6693: a spread of 100 points, or
+about **±0.9 a gameweek** of pure harness noise. The lower value alone put that
+interval across zero.
 
-So that cell is not reported as a result. The honest version is that the chips
-margin is somewhere around +3 to +4 a gameweek with an interval wide enough to
-contain zero once the harness is accounted for, and nothing more precise is
-available until the engine arm reproduces.
+So the new figure confirms the old verdict rather than overturning it. With
+chips played, the margin over `ppg` is small and its interval contains zero.
+Nothing more precise is available until the engine arm reproduces.
 
 **Why it does not, now established rather than suspected.** Splitting the replay
 into one job per season turned the weekly run into a natural experiment: six
@@ -567,26 +571,42 @@ chips off:
 
 | vs | squad | armband | hits | = net |
 |---|---|---|---|---|
-| `ppg` | **+479** | +102 | **−152** | +429 |
-| `roll3` | +505 | +188 | **+608** | +1301 |
+| `ppg` | **+511** | +140 | **−152** | +499 |
+| `roll3` | +537 | +226 | **+608** | +1371 |
 
-So the forecast does buy a better squad — +479, about +4.2 a gameweek, comfortably
-the size of the forecast edge measured above. It is not captaincy: the
-armband is +78 in the engine's favour, which is worth saying because the gate's
-advisory line reports FEPL's captain regret as *no better* than `ppg`'s, and the
-obvious reading of that — the engine cannot pick a captain — is wrong.
+So the forecast does buy a better squad: +511, about +4.5 a gameweek, comfortably
+the size of the forecast edge measured above. It is not captaincy. The armband
+is +140 in the engine's favour, which is worth saying because the gate's
+advisory line reports FEPL's captain regret as *no better* than `ppg`'s. The
+obvious reading of that, that the engine cannot pick a captain, is wrong.
 
 What costs it is the churn. 64 hits against `ppg`'s 26 is 152 points of penalty
-against a +581 gross advantage: **roughly a quarter of the edge is handed back
+against a +651 gross advantage: **roughly a quarter of the edge is handed back
 at the transfer window**. The same discipline is what wins against `roll3`, which
-takes 215 hits and gives back 608.
+takes 216 hits and gives back 608.
 
-Playing chips does not change the diagnosis, which is worth checking rather than
-assuming: the squad advantage is +487, the armband +140, and the hit differential
-−176.
+**Playing chips used to leave that diagnosis unchanged, and it no longer
+does.**
+- Before the re-record, with chips played, the squad advantage was +487, the
+  armband +140, and the hit differential −176.
+- On the re-recorded run the squad advantage over `ppg` falls to +235. The
+  armband is +147 and hits −184.
 
-Note the trap in reading that −144 as 144 points lying on the table. It is not:
-part of the +368 exists *because* of those extra transfers, so the penalty
+The chips are where it goes. In the same run, playing chips adds +193 to
+`ppg`'s chips-off total and +240 to `roll3`'s, but takes 108 off the engine's
+(6377 against 6485). One run is one draw of a CPU-dependent arm: on the
+2026-11-02 run, on the old code, the same comparison gave the engine +38. But
+neither draw comes close to what the baselines get from the same chip policy.
+
+Between those two runs the engine's chip weeks moved:
+- In 2023-24, its second Bench Boost went from GW32 to GW21.
+- In 2024-25, it left a Free Hit unplayed.
+
+The ten-gameweek blocks those changes fell in lost 92 and 88 points. Chip
+timing, not the forecast, is now the least stable part of the end-to-end result.
+
+Note the trap in reading that −152 as 152 points lying on the table. It is not:
+part of the +651 exists *because* of those extra transfers, so the penalty
 cannot be subtracted while the gain is kept. The only way to ask what the
 transfers were worth is to replay the seasons at a different price for a hit,
 holding the alternative use of the roster slot and the budget fixed — which is
@@ -692,6 +712,14 @@ per-gameweek rows anyway. It runs weekly rather than on pull requests
 (`.github/workflows/replay_gate.yml`) because a replay takes tens of minutes
 against the accuracy gate's ~45 seconds, and a check that slow on every push is
 one people learn to skip.
+
+**For two and a half weeks it could not fail.** When the replay was split into
+one job per season, the gate step started piping its verdict into `tee`. GitHub
+runs a step with no `shell:` as `bash -e`, without `pipefail`, so the step
+exited with `tee`'s status: the gate printed `[FAIL]` and the job went green.
+The first run where that mattered was the one that re-recorded the tables
+above. It showed `ppg` with chips played 1.01% under its record and passed. The
+step now sets `pipefail`.
 
 > **It reports; it does not block, and that is a retreat.** As first written it
 > failed every weekly run for a month on a commit that never changed, which is
