@@ -6,10 +6,11 @@ prices, which are a far better fixture signal than FPL's own FDR.
 
 Changes over the original implementation:
   * team names resolve through `team_mapping` (one-to-one, alias-seeded)
-  * ratings are time-decayed and split home/away, with early-season shrinkage
-    toward the league mean instead of an unweighted season average
-  * home advantage is fitted from the data rather than a hardcoded 1.10/0.90
-    applied on top of ratings that already contain home matches
+  * ratings are a time-decayed, opponent-adjusted log-linear fit with ridge
+    shrinkage toward the league mean, instead of each club's average over its
+    own fixtures - which rated a club by its schedule as much as its strength
+  * one attack and one defence per club plus a fitted league-wide home
+    advantage, applied exactly once (see `get_match_lambdas`)
   * missing/thin odds no longer degrade silently to a flat 1.4/1.4 for every
     club - a fallback chain runs and `status` records which source was used
   * multiple bookmakers are tried, with the consensus columns as backstop
@@ -36,8 +37,22 @@ LEAGUE_MEAN_GOALS = 1.40
 # Half-life in matches for the exponential time decay on team ratings.
 RATING_HALF_LIFE = 10.0
 # Pseudo-matches of league-average prior. Keeps GW1-4 ratings sane instead of
-# letting two fixtures define a team.
+# letting two fixtures define a team. In the log-linear fit this is a ridge
+# penalty on every team parameter, scaled to add this many matches' worth of
+# league-average evidence (see `fit_log_linear_ratings`).
 RATING_PRIOR_STRENGTH = 4.0
+# One attack and one defence per team plus a league-wide home advantage (False),
+# or separate home and away attack and defence for every team (True).
+#
+# Measured, not assumed. Fitting on every matchweek's history and pricing the
+# next matchweek, across all five cached seasons (1,850 matches), the pooled
+# rating misses the market's own implied goals by 0.145 log-RMSE against 0.192
+# split - and by 0.191 against 0.245 in the first ~100 matches of a season. It
+# wins at every prior strength tried (1 to 16). Splitting halves the evidence
+# behind every parameter, and the market's home edge is close enough to
+# uniform across clubs that the extra freedom buys nothing back. Kept as a flag
+# so the decision stays re-measurable.
+RATING_VENUE_SPLIT = False
 
 # Bookmaker column groups, in preference order. Each entry is
 # (home, draw, away, over2.5, under2.5).
@@ -55,6 +70,128 @@ def _devig(*probs: float) -> List[float]:
     if total <= 0:
         return [0.0] * len(probs)
     return [p / total for p in probs]
+
+
+def fit_log_linear_ratings(
+    home: List[Any], away: List[Any], mu_h, mu_a, weights,
+    prior_strength: Optional[float] = None, venue_split: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """
+    Opponent-adjusted team ratings from per-match expected goals.
+
+    A weighted ridge regression of the market's implied goals on
+
+        log mu_home = c + h + attack[home] - defence[away]
+        log mu_away = c     + attack[away] - defence[home]
+
+    so a team's attack is what it scores against an *average* defence, not
+    against whichever defences it happened to meet. With `venue_split` each team
+    gets separate home and away attack and defence terms instead, and the home
+    edge lives in two intercepts.
+
+    The ridge is `RATING_PRIOR_STRENGTH` in the role it had in the averaging fit:
+    k pseudo-matches of league-average evidence on every team term. For a team
+    whose opponents were average this is exactly the old shrinkage, on log
+    goals: its term is (sum of w * log-goals above the league) / (n_eff + k).
+    The intercepts are not penalised, so teams are pulled toward the league and
+    the league toward nothing.
+
+    Least squares on log goals rather than a Poisson likelihood, because the
+    targets are bookmaker means, not counts. A Poisson fit weights each match by
+    its expected goals, so a side that met strong defences carries less
+    information and is shrunk harder - two identical teams with different
+    schedules then come apart through the prior even though the fit itself is
+    opponent-adjusted.
+
+    Every observation has exactly one attacker and one defender, so at the
+    optimum each block of team terms sums to zero; the fit is solved in that
+    subspace, which also keeps it well-posed with no ridge at all. The "average
+    opponent" is therefore the unweighted average of the teams in the fit.
+
+    Returns {"teams": {id: {att_home, att_away, def_home, def_away, n_eff}},
+             "home_base", "away_base"}: each rating is expected goals against an
+    average opponent at that venue, and the bases are the average team's.
+    """
+    if prior_strength is None:
+        prior_strength = RATING_PRIOR_STRENGTH
+    if venue_split is None:
+        venue_split = RATING_VENUE_SPLIT
+
+    teams = sorted(set(home) | set(away))
+    idx = {t: i for i, t in enumerate(teams)}
+    T, n = len(teams), len(home)
+    hi = np.array([idx[t] for t in home], dtype=int)
+    ai = np.array([idx[t] for t in away], dtype=int)
+    rows = np.arange(n)
+
+    # Columns: two unpenalised intercepts, then the penalised team blocks.
+    #   pooled: [c, h | attack, defence]
+    #   split:  [c_home, c_away | att_home, att_away, def_home, def_away]
+    blocks = 4 if venue_split else 2
+    p = 2 + blocks * T
+    Xh = np.zeros((n, p))
+    Xa = np.zeros((n, p))
+    start = [2 + k * T for k in range(blocks)]
+    if venue_split:
+        att_h, att_a, def_h, def_a = start
+        Xh[:, 0] = 1.0
+        Xh[rows, att_h + hi] = 1.0
+        Xh[rows, def_a + ai] = -1.0      # the visitors, defending away
+        Xa[:, 1] = 1.0
+        Xa[rows, att_a + ai] = 1.0
+        Xa[rows, def_h + hi] = -1.0      # the hosts, defending at home
+    else:
+        att, dfn = start
+        Xh[:, 0] = Xh[:, 1] = 1.0
+        Xh[rows, att + hi] = 1.0
+        Xh[rows, dfn + ai] = -1.0
+        Xa[:, 0] = 1.0
+        Xa[rows, att + ai] = 1.0
+        Xa[rows, dfn + hi] = -1.0
+    X = np.vstack([Xh, Xa])
+    y = np.log(np.concatenate([np.asarray(mu_h, float), np.asarray(mu_a, float)]))
+    w = np.concatenate([np.asarray(weights, float)] * 2)
+
+    # Each team block lives in the sum-to-zero subspace: B maps the reduced
+    # coefficients to the full ones. Z has orthonormal columns, so the ridge on
+    # the full team terms is the same ridge on the reduced ones.
+    Z = np.linalg.qr((np.eye(T) - 1.0 / T)[:, :T - 1])[0] if T > 1 else np.zeros((1, 0))
+    B = np.zeros((p, 2 + blocks * Z.shape[1]))
+    B[0, 0] = B[1, 1] = 1.0
+    for k, s in enumerate(start):
+        B[s:s + T, 2 + k * Z.shape[1]:2 + (k + 1) * Z.shape[1]] = Z
+    Xr = X @ B
+    pen = np.r_[0.0, 0.0, np.full(B.shape[1] - 2, float(prior_strength))]
+    theta = B @ np.linalg.solve((Xr.T * w) @ Xr + np.diag(pen), Xr.T @ (w * y))
+
+    n_eff = (np.bincount(hi, weights=w[:n], minlength=T)
+             + np.bincount(ai, weights=w[:n], minlength=T))
+    out: Dict[Any, Dict[str, float]] = {}
+    if venue_split:
+        c_h, c_a = theta[0], theta[1]
+        home_base, away_base = math.exp(c_h), math.exp(c_a)
+        for t, i in idx.items():
+            out[t] = {
+                "att_home": math.exp(c_h + theta[att_h + i]),
+                "att_away": math.exp(c_a + theta[att_a + i]),
+                # Conceded at home is the visitors' scoring: the away intercept.
+                "def_home": math.exp(c_a - theta[def_h + i]),
+                "def_away": math.exp(c_h - theta[def_a + i]),
+                "n_eff": float(n_eff[i]),
+            }
+    else:
+        c, h = theta[0], theta[1]
+        home_base, away_base = math.exp(c + h), math.exp(c)
+        for t, i in idx.items():
+            a_t, d_t = theta[att + i], theta[dfn + i]
+            out[t] = {
+                "att_home": math.exp(c + h + a_t),
+                "att_away": math.exp(c + a_t),
+                "def_home": math.exp(c - d_t),
+                "def_away": math.exp(c + h - d_t),
+                "n_eff": float(n_eff[i]),
+            }
+    return {"teams": out, "home_base": home_base, "away_base": away_base}
 
 
 # football-data.co.uk answers a transient outage with a 503 and a `retry-after`
@@ -281,9 +418,13 @@ class MarketOddsModel:
         self.season_str: Optional[str] = None
         self.FPL_TO_FD: Dict[int, str] = {}
         self.FD_TO_FPL: Dict[str, int] = {}
-        self.home_advantage: float = 1.10
+        # Informational: the average team's home goals over its all-venue mean.
+        self.home_advantage: float = 1.0
         # Which source the current ratings came from, and how trustworthy.
         self.status: Dict[str, Any] = {"source": "uninitialised", "n_matches": 0}
+        # The average team's home and away goals; see `_set_venue_bases`.
+        self._home_base: float = LEAGUE_MEAN_GOALS
+        self._away_base: float = LEAGUE_MEAN_GOALS
         self._league_mean: float = LEAGUE_MEAN_GOALS
 
     # ------------------------------------------------------------------ odds
@@ -495,14 +636,39 @@ class MarketOddsModel:
         else:
             self.status = {"source": "market_odds", "n_matches": used}
 
-        self._league_mean = float(
-            np.mean([r["att_home"] + r["att_away"] for r in self.team_ratings.values()]) / 2.0
-        ) if self.team_ratings else LEAGUE_MEAN_GOALS
-        if not np.isfinite(self._league_mean) or self._league_mean <= 0:
-            self._league_mean = LEAGUE_MEAN_GOALS
-
+        self._set_venue_bases()
         self.status["n_teams_rated"] = len(self.team_ratings)
         return self.status
+
+    def _set_venue_bases(self):
+        """
+        The average team's home and away goals, which `get_match_lambdas`
+        divides out.
+
+        It has to be one base per venue. A home attack rating and an away
+        defence rating both already carry the home edge, so dividing their
+        product by a single all-venue mean applied that edge twice: fitted to a
+        league where every club is identical and scores 1.6 at home and 1.2 away,
+        the old normaliser predicted 1.83 and 1.03.
+
+        Geometric means, so that for the log-linear fit - whose team terms sum
+        to zero - these are exactly its intercepts; for the fallbacks they are
+        the same quantity estimated from whatever ratings they produced.
+        """
+        def gmean(key):
+            vals = [r.get(key) for r in self.team_ratings.values()]
+            vals = [v for v in vals if v is not None and np.isfinite(v) and v > 0]
+            return float(np.exp(np.mean(np.log(vals)))) if vals else LEAGUE_MEAN_GOALS
+
+        home = math.sqrt(gmean("att_home") * gmean("def_away"))
+        away = math.sqrt(gmean("att_away") * gmean("def_home"))
+        if not (np.isfinite(home) and home > 0):
+            home = LEAGUE_MEAN_GOALS
+        if not (np.isfinite(away) and away > 0):
+            away = LEAGUE_MEAN_GOALS
+        self._home_base, self._away_base = home, away
+        self._league_mean = (home + away) / 2.0
+        self.home_advantage = home / self._league_mean
 
     def _fit_from_odds(self, current_gw_date) -> int:
         df = self.odds_df
@@ -514,9 +680,7 @@ class MarketOddsModel:
             return 0
 
         latest = df["Date"].max()
-        acc: Dict[int, Dict[str, list]] = {}
-        used = 0
-        ha_home, ha_away = [], []
+        home_ids, away_ids, goals_h, goals_a, weights = [], [], [], [], []
 
         for row in df.itertuples(index=False):
             h_id = self.FD_TO_FPL.get(row.HomeTeam)
@@ -536,64 +700,35 @@ class MarketOddsModel:
                 if not all(np.isfinite([p_h, p_d, p_a, p_over])):
                     continue
                 mu_h, mu_a = self.split_goals(self.implied_total_goals(p_over), p_h, p_a)
+            if not (mu_h > 0 and mu_a > 0):
+                continue    # the fit is on log goals
 
             # Exponential decay by match age, in matches-equivalent days.
             age_days = (latest - row.Date).days if pd.notna(row.Date) else 0
             w = 0.5 ** ((age_days / 7.0) / RATING_HALF_LIFE)
 
-            for tid, key_s, key_c, scored, conceded in (
-                (h_id, "att_home", "def_home", mu_h, mu_a),
-                (a_id, "att_away", "def_away", mu_a, mu_h),
-            ):
-                d = acc.setdefault(tid, {k: [] for k in
-                                         ("att_home", "def_home", "att_away", "def_away")})
-                d[key_s].append((scored, w))
-                d[key_c].append((conceded, w))
+            home_ids.append(h_id)
+            away_ids.append(a_id)
+            goals_h.append(float(mu_h))
+            goals_a.append(float(mu_a))
+            weights.append(w)
 
-            ha_home.append((mu_h, w))
-            ha_away.append((mu_a, w))
-            used += 1
-
-        if used == 0:
+        if not home_ids:
             return 0
 
-        # Fitted home advantage: the league-wide home/away goal ratio.
-        def _wmean(pairs, default):
-            if not pairs:
-                return default
-            num = sum(v * w for v, w in pairs)
-            den = sum(w for _, w in pairs)
-            return num / den if den > 0 else default
-
-        mean_home = _wmean(ha_home, LEAGUE_MEAN_GOALS)
-        mean_away = _wmean(ha_away, LEAGUE_MEAN_GOALS)
-        league_mean = (mean_home + mean_away) / 2.0
-        self.home_advantage = (
-            mean_home / league_mean if league_mean > 0 else 1.10
-        )
-
-        # Shrink each team toward the league mean by effective sample size.
-        for tid in self.FPL_TO_FD:
-            d = acc.get(tid)
-            if not d:
-                continue
-            rating = {}
-            for key, default in (
-                ("att_home", mean_home), ("def_home", mean_away),
-                ("att_away", mean_away), ("def_away", mean_home),
-            ):
-                pairs = d[key]
-                n_eff = sum(w for _, w in pairs)
-                raw = _wmean(pairs, default)
-                k = RATING_PRIOR_STRENGTH
-                rating[key] = (raw * n_eff + default * k) / (n_eff + k)
+        # Opponent-adjusted. This used to average each team's implied goals
+        # over its own fixtures and then combine those averages as if they were
+        # opponent-neutral, which they are not: a side that opened against the
+        # strong clubs came out with too little attack and too much conceded,
+        # and every opponent it met was skewed the other way.
+        fit = fit_log_linear_ratings(home_ids, away_ids, goals_h, goals_a, weights)
+        for tid, rating in fit["teams"].items():
             # Convenience aggregates used by the rest of the engine.
             rating["scored"] = (rating["att_home"] + rating["att_away"]) / 2.0
             rating["conceded"] = (rating["def_home"] + rating["def_away"]) / 2.0
-            rating["n_eff"] = sum(w for _, w in d["att_home"]) + sum(w for _, w in d["att_away"])
             self.team_ratings[tid] = rating
 
-        return used
+        return len(home_ids)
 
     def _seed_from_prior(self, prior: Dict[int, Dict[str, float]], fpl_teams):
         """Carry last season's ratings forward, regressed 50% to the mean."""
@@ -667,18 +802,22 @@ class MarketOddsModel:
         """
         Expected goals for (home, away).
 
-        Home advantage lives in the home/away-split ratings themselves, so it is
-        not re-applied here - the original implementation multiplied by a fixed
-        1.10/0.90 on top of ratings that already averaged over home fixtures.
+        Each rating is expected goals against an average opponent at that venue,
+        so a home attack times an away defence counts the home edge twice; it is
+        divided out once, by the average team's goals at that venue. The
+        original implementation multiplied by a fixed 1.10/0.90 on top of
+        ratings that already contained it, and its replacement divided both
+        venues by one all-venue mean, which squared it.
         """
-        L = self._league_mean if self._league_mean > 0 else LEAGUE_MEAN_GOALS
+        L_home = self._home_base if self._home_base > 0 else LEAGUE_MEAN_GOALS
+        L_away = self._away_base if self._away_base > 0 else LEAGUE_MEAN_GOALS
         h = self.team_ratings.get(home_id)
         a = self.team_ratings.get(away_id)
         if not h or not a:
-            return LEAGUE_MEAN_GOALS * self.home_advantage, LEAGUE_MEAN_GOALS / self.home_advantage
+            return L_home, L_away
 
-        mu_home = h["att_home"] * a["def_away"] / L
-        mu_away = a["att_away"] * h["def_home"] / L
+        mu_home = h["att_home"] * a["def_away"] / L_home
+        mu_away = a["att_away"] * h["def_home"] / L_away
         return max(0.05, mu_home), max(0.05, mu_away)
 
     def team_attack_baseline(self, team_id: int) -> float:
