@@ -156,6 +156,18 @@ def get_manager_transfers(team_id: int, use_cache: bool = True) -> List[Dict[str
     return out if isinstance(out, list) else []
 
 
+def get_event_live(event_id: int) -> Dict[str, Any]:
+    """
+    Every player's stats for one gameweek: `elements[].stats.total_points` and
+    `minutes`, summed over a double gameweek's fixtures.
+
+    Only reachable during the season it belongs to - FPL resets the API each
+    summer - which is why `forecast_archive` saves what it reads from here.
+    """
+    url = f"{BASE_URL}event/{int(event_id)}/live/"
+    return fetch_json(url, use_cache=False)
+
+
 def get_my_team(team_id: int, cookie: str) -> Dict[str, Any]:
     """Fetch the authenticated team state to retrieve exact selling prices."""
     url = f"{BASE_URL}my-team/{team_id}/"

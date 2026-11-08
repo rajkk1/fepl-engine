@@ -7,7 +7,16 @@ on:
   workflow_dispatch:
 
 permissions:
+  # Write, for two pushes: the plan to `gh-pages`, and the forecast archive
+  # (data/forecast_archive) to `main`.
   contents: write
+
+# Two runs at once would both try to push the forecast archive, and the second
+# would be rejected. Queue rather than cancel: a cancelled run before a deadline
+# can be the one that held the last pre-deadline snapshot.
+concurrency:
+  group: weekly-optimizer
+  cancel-in-progress: false
 
 jobs:
   optimize:
@@ -51,7 +60,9 @@ jobs:
         env:
           FPL_TEAM_ID: ${{ secrets.FPL_TEAM_ID }}
           FPL_COOKIE: ${{ secrets.FPL_COOKIE }}
-        run: uv run python weekly_manager.py --export-json public/weekly_plan.json
+        run: |
+          uv run python weekly_manager.py --export-json public/weekly_plan.json \
+            --archive-dir data/forecast_archive
 
       - name: Should this replace the published plan?
         id: quality
@@ -83,3 +94,43 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./public
+
+      - name: Archive the pre-deadline forecast
+        # The forecast for every player, FPL's own `ep_next`, and the outcomes
+        # of finished gameweeks, committed to `main` under data/forecast_archive.
+        # Neither the forecast nor `ep_next` can be recovered once the deadline
+        # passes, and the live API forgets a season each summer, so the Actions
+        # cache - evictable - is the wrong home for it. forecast_archive.py
+        # decides what may be written; this step only commits it.
+        #
+        # Last, so a failed push cannot stop the plan publishing, and
+        # `!cancelled()` so it still runs when a later step failed: the snapshot
+        # is written before the optimiser runs. A failure here fails the run,
+        # visibly, because a week not archived is lost.
+        #
+        # A push made with GITHUB_TOKEN triggers no workflows, so these commits
+        # do not set off the test suite on `main`.
+        #
+        # Only the archive is committed. A successful odds fetch rewrites the
+        # tracked data/odds files in the working tree, which is why the rebase
+        # needs --autostash; those changes are never committed from here.
+        if: ${{ !cancelled() }}
+        run: |
+          mkdir -p data/forecast_archive
+          git add data/forecast_archive
+          if git diff --cached --quiet; then
+            echo "::warning::No forecast snapshot was written this run - see 'Run FEPL Weekly Manager'."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -q -m "archive: forecast snapshot $(date -u +%Y-%m-%dT%H:%MZ)"
+          for attempt in 1 2 3; do
+            if git pull -q --rebase --autostash origin main && git push -q origin HEAD:main; then
+              git log -1 --stat --format='%h %s'
+              exit 0
+            fi
+            sleep $((attempt * 15))
+          done
+          echo "::error::Could not push the forecast archive to main after 3 attempts."
+          exit 1

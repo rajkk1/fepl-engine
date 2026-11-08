@@ -271,6 +271,47 @@ def _score_percentiles(point_draws, gw, starters, captain):
         logging.debug("Could not compute a score range: %s", e)
         return None
 
+def _archive_forecast(args, bootstrap, xp_matrix, horizon_gws, forecast_at,
+                      minutes_detail, history, degraded, fit_status, lineups):
+    """
+    Keep this gameweek's pre-deadline forecast, before anything else can fail.
+
+    Done straight after the forecast rather than after the optimiser, so a solver
+    failure cannot cost the week's record - a week not archived is gone for good.
+    Equally, nothing here may cost the week's plan, so it never raises.
+    """
+    import forecast_archive
+
+    if args.risk_aversion:
+        # The matrix then holds rank-adjusted values, not expected points, and
+        # the archive is a record of expected points.
+        logging.warning("Not archiving: --risk-aversion %.3g means the forecast "
+                        "is not expected points.", args.risk_aversion)
+        return
+    try:
+        written, why, recorded = forecast_archive.archive_forecast(
+            args.archive_dir, bootstrap=bootstrap, xp_matrix=xp_matrix,
+            horizon_gws=horizon_gws, forecast_at=forecast_at,
+            minutes=minutes_detail, history=history, degraded=degraded,
+            fixture_model=fit_status.get("source"),
+            config={"calibrate": bool(args.calibrate),
+                    "lineup_overrides": len(lineups or {}),
+                    "horizon": len(horizon_gws)},
+            fetch_live=fpl_api.get_event_live)
+    except Exception as e:
+        logging.error("Could not archive the GW%d forecast (%s: %s). This "
+                      "gameweek's pre-deadline record will be missing unless a "
+                      "later run before the deadline succeeds.",
+                      horizon_gws[0], type(e).__name__, e)
+        return
+    if written:
+        print(f"🗄️  Forecast archived: {why}")
+    else:
+        print(f"🗄️  Forecast not archived: {why}")
+    if recorded:
+        print(f"🗄️  Outcomes archived for GW{', GW'.join(map(str, recorded))}")
+
+
 def main():
     load_dotenv()
     parser = argparse.ArgumentParser(description="FEPL Weekly Action Plan CLI")
@@ -302,6 +343,12 @@ def main():
     parser.add_argument("--calibrate", action="store_true",
                         help="Enable per-position recalibration (off by default; "
                              "see calibration.py for why).")
+    parser.add_argument("--archive-dir", type=str, default="",
+                        help="Record this gameweek's pre-deadline forecast for "
+                             "every player under this directory (the weekly job "
+                             "uses data/forecast_archive), plus the outcomes of "
+                             "archived gameweeks FPL has since finished. See "
+                             "forecast_archive.py.")
     args = parser.parse_args()
 
     team_id = os.getenv("FPL_TEAM_ID") or args.team
@@ -387,12 +434,21 @@ def main():
     # used to read it, so a forecast with no fixture signal was published as if
     # it were sound.
     fit_status: dict = {}
+    minutes_detail: dict = {}
+    history: dict = {}
     xp_matrix = generate_merv_matrix(
         horizon_gws, bootstrap=bootstrap, fixtures=fixtures,
         risk_aversion=args.risk_aversion, calibrate=args.calibrate,
         lineup_overrides=lineups, draws_out=point_draws,
-        status_out=fit_status)
+        status_out=fit_status, minutes_out=minutes_detail,
+        history_out=history)
+    # Every input has been fetched by now, so this is the moment the forecast
+    # existed - what the archive's deadline rule is judged against.
+    forecast_at = datetime.datetime.now(datetime.timezone.utc)
     degraded = bool(fit_status.get("degraded"))
+    if args.archive_dir:
+        _archive_forecast(args, bootstrap, xp_matrix, horizon_gws, forecast_at,
+                          minutes_detail, history, degraded, fit_status, lineups)
     if degraded:
         print()
         print("=" * 70)
