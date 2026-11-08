@@ -618,11 +618,12 @@ def load_replay_baseline(path: str = REPLAY_BASELINE_PATH) -> Dict[str, Any]:
 # was built for.
 #
 # The engine additionally runs a gradient-boosted forecast through numpy and
-# scipy, which are not bit-identical between arm64 and x86_64 - 0.85% across
-# machines, and up to 1.5% between identical CI runs on the chips arm, which is
-# still unexplained. Gating that means failing at random; dropping the whole
-# check because one arm of it is noisy means catching nothing. So each arm is
-# judged on whether it is reproducible, and the report says which is which.
+# scipy, and is CPU-dependent rather than random: replaying one season per job
+# showed every repeat on the same CPU model returning an identical total, and
+# three of four CPU changes moving it. Hosted runners draw different hardware
+# per job, so gating that means failing whenever the fleet reshuffles; dropping
+# the whole check because one arm of it moves means catching nothing. So each
+# arm is judged on whether it reproduces, and the report says which is which.
 GATEABLE_SOURCES = ("ppg", "roll3")
 
 
