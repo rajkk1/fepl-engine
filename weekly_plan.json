@@ -181,7 +181,7 @@
             "element_type": 3,
             "team": 20,
             "cost": 5.7,
-            "xp": 5.29,
+            "xp": 5.61,
             "p_play": 0.98019343446007,
             "is_captain": false,
             "is_vice_captain": false,
@@ -243,9 +243,9 @@
             "status": "d"
         }
     ],
-    "expected_score": 60.97,
+    "expected_score": 61.29,
     "remaining_bank": 4.6,
     "degraded": false,
     "fixture_model": "market_odds",
-    "generated_at": "2026-11-12T19:34:55+00:00"
+    "generated_at": "2026-11-13T19:15:14+00:00"
 }
