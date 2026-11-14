@@ -5,6 +5,7 @@ This is the only thing in the repo that measures the objective the engine exists
 to serve - points on the board - so its own correctness matters more than the
 model's, exactly as with the backtest harness.
 """
+import json
 import pathlib
 
 import pytest
@@ -367,6 +368,10 @@ def test_a_free_hit_does_not_spend_the_free_transfer_bank(tiny_season, monkeypat
         data=tiny_season, verbose=False)
 
     by_gw = {h["gw"]: h for h in res["history"]}
+    # What the search chose is recorded every week it ran, played or not, so a
+    # replay artifact can say which chip it was holding and for when.
+    assert by_gw[3]["chip_plan"] == {"chip": "fh", "gw": 3, "gain": 99.0}
+    assert by_gw[4]["chip_plan"]["chip"] == ""
     # A free hit week makes many transfers but none of them are charged, and
     # none of them come out of the bank.
     assert by_gw[3]["hits"] == 0
@@ -788,3 +793,58 @@ def test_the_same_season_cannot_be_pooled_twice(tmp_path):
     out = _run_sim(["--no-chips", "--gate", "--from-json", a, a])
     assert out.returncode != 0
     assert "already loaded" in out.stderr + out.stdout
+
+
+# --- what the chips are worth -------------------------------------------------
+#
+# Chips on minus chips off measures the chips only if both runs saw the same
+# forecast. Run as separate CI jobs, the engine's two variants landed on
+# different CPUs in every season pair examined, so the difference measured the
+# hardware as much as the chips.
+
+def _replay(nets, chips=()):
+    return {"history": [{"gw": g, "net": v} for g, v in enumerate(nets, start=1)],
+            "chips_played": [{"chip": c, "gw": g} for c, g in chips]}
+
+
+def test_chips_gain_splits_chip_weeks_from_the_rest():
+    from simulator import chips_gain
+
+    on = {"engine": _replay([50, 70, 40, 60], chips=[("bb", 2)])}
+    off = {"engine": _replay([50, 55, 45, 60])}
+    g = chips_gain(on, off)["engine"]
+    assert g["gain"] == 10.0
+    assert g["chip_weeks"] == 15.0
+    assert g["other_weeks"] == -5.0
+    assert g["chip_weeks"] + g["other_weeks"] == g["gain"]
+
+
+def test_paired_replays_share_one_forecast(monkeypatch, tmp_path):
+    """
+    Both variants must be handed the same forecast cache: that is the whole
+    point of pairing them, and the second variant reuses the first's forecast
+    rather than recomputing it.
+    """
+    import simulator
+
+    caches = []
+
+    def fake_compare(season, play_chips=True, xp_cache=None, **kw):
+        caches.append(xp_cache)
+        xp_cache.setdefault("seen", 0)
+        xp_cache["seen"] += 1
+        return {"engine": _replay([60, 60] if play_chips else [50, 50],
+                                  chips=[("tc", 1)] if play_chips else [])}
+
+    monkeypatch.setattr(simulator, "compare_sources", fake_compare)
+    out = tmp_path / "replay_{variant}_x.json"
+    pair = simulator.run_paired("2024-25", json_out=str(out))
+
+    assert len(caches) == 2 and caches[0] is caches[1]
+    assert caches[0]["seen"] == 2
+    for variant in ("chips", "no-chips"):
+        written = json.loads((tmp_path / f"replay_{variant}_x.json").read_text())
+        assert written == pair[variant]
+    # What the gate's --from-json reads back is the same shape as before.
+    assert pair["chips"]["engine"]["chips_played"]
+    assert not pair["no-chips"]["engine"]["chips_played"]

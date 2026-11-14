@@ -27,6 +27,20 @@ name: Season Replay Gate
 # different questions: `no-chips` is the like-for-like history of this table,
 # `chips` is what the engine actually does.
 #
+# They run in ONE job per season, in one process sharing one forecast
+# (`simulator.py --paired`), because their difference is a number the README
+# quotes - what playing chips is worth - and for the engine it is only a
+# measurement of the chips if both variants saw the same forecast. Run as
+# separate jobs they did not: the fleet put a season's two variants on
+# different CPUs in all six season pairs of the 2026-11-02 and 2026-11-08 runs,
+# and the engine's forecast is CPU-dependent (below). "Playing chips takes 108
+# points off the engine" compared a chips run on one forecast with a no-chips
+# run on another; on one machine and one forecast the same comparison was +103
+# (and +456 and +202 on the same forecast perturbed by 1%).
+# Sharing the forecast also means computing it once, so the paired job costs
+# little more than the chips job alone - the no-chips variant is one solve a
+# gameweek instead of 21.
+#
 # IT BLOCKS ON SOME ARMS AND REPORTS ON OTHERS, which is the shape the evidence
 # ended up supporting. As first written it failed every weekly run for a month
 # on a commit that never changed: the baselines had been recorded on a laptop
@@ -65,16 +79,15 @@ on:
 
 jobs:
   replay:
-    name: replay ${{ matrix.variant }} ${{ matrix.season }}
+    name: replay ${{ matrix.season }}
     runs-on: ubuntu-latest
     timeout-minutes: 90
     strategy:
-      # Every combination always runs: a failure in one is worth seeing even
-      # when another has already failed.
+      # Every season always runs: a failure in one is worth seeing even when
+      # another has already failed.
       fail-fast: false
       matrix:
         season: ['2023-24', '2024-25', '2025-26']
-        variant: [chips, no-chips]
 
     steps:
       - uses: actions/checkout@v4
@@ -93,7 +106,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: data/odds
-          key: odds-${{ github.run_id }}-${{ matrix.season }}-${{ matrix.variant }}
+          key: odds-${{ github.run_id }}-${{ matrix.season }}
           restore-keys: |
             odds-
 
@@ -115,19 +128,27 @@ jobs:
           echo
           nproc
 
-      - name: Replay one season
+      - name: Replay one season, with chips and without, on one forecast
+        # Prints what playing chips added per forecast, split into chip weeks
+        # and every other week, with both variants on the same forecast.
         run: |
           uv run python simulator.py \
-            --season ${{ matrix.season }} \
-            ${{ matrix.variant == 'no-chips' && '--no-chips' || '' }} \
-            --json-out replay_${{ matrix.variant }}_${{ matrix.season }}.json
+            --season ${{ matrix.season }} --paired \
+            --json-out 'replay_{variant}_${{ matrix.season }}.json'
 
-      - name: Upload the season
+      - name: Upload the season with chips
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: replay-${{ matrix.variant }}-${{ matrix.season }}
-          path: replay_${{ matrix.variant }}_${{ matrix.season }}.json
+          name: replay-chips-${{ matrix.season }}
+          path: replay_chips_${{ matrix.season }}.json
+
+      - name: Upload the season without chips
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: replay-no-chips-${{ matrix.season }}
+          path: replay_no-chips_${{ matrix.season }}.json
 
   gate:
     # Pooling is the part that has to see every season at once, and it is cheap:
