@@ -265,6 +265,11 @@ def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
             return res
 
         chip_now = None
+        # What the search wanted this week, played or held. A replay that only
+        # records the chips it played cannot say which ones it was waiting on,
+        # or for which gameweek - and diagnosing the chip policy from CI
+        # artifacts needed exactly that.
+        chip_plan: Optional[Dict[str, Any]] = None
         try:
             # A chip is searched across the horizon and played only if the
             # policy picks *this* gameweek for it; picked for a later one, the
@@ -275,6 +280,8 @@ def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
                     _solve, horizon_gws, gw,
                     chip_policy.available_chips(used_chips, gw))
                 res = best["res"]
+                chip_plan = {"chip": best.get("chip") or "", "gw": best.get("gw"),
+                             "gain": round(float(best.get("gain") or 0.0), 2)}
                 if best["chip"] and best["gw"] == gw:
                     chip_now = best["chip"]
             else:
@@ -337,7 +344,7 @@ def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
 
         history.append({
             "gw": gw, "points": scored["points"], "hits": hits, "net": net,
-            "chip": chip_now,
+            "chip": chip_now, "chip_plan": chip_plan,
             "squad_points": scored["squad_points"],
             "armband_points": scored["armband_points"],
             "cumulative": total_points, "transfers": len(transfers_in),
@@ -401,16 +408,63 @@ def run_season_simulation(season_str: str = "2024-25", horizon: int = 5,
 def compare_sources(season_str: str = "2024-25", horizon: int = 5,
                     sources=XP_SOURCES, from_gw: int = 1,
                     to_gw: Optional[int] = None,
-                    play_chips: bool = True) -> Dict[str, Any]:
+                    play_chips: bool = True,
+                    xp_cache: Optional[Dict[Any, Any]] = None) -> Dict[str, Any]:
     """Drive the same optimiser with each forecast and report the difference."""
     data = fetch_data(season_str)
     out = {}
     for src in sources:
         out[src] = run_season_simulation(
             season_str, horizon=horizon, xp_source=src,
-            from_gw=from_gw, to_gw=to_gw, data=data, play_chips=play_chips)
+            from_gw=from_gw, to_gw=to_gw, data=data, play_chips=play_chips,
+            xp_cache=xp_cache)
     _print_comparison(out)
     return out
+
+
+# --- what the chips are worth -------------------------------------------------
+#
+# "Chips on minus chips off" is only a measurement of the chips if both runs see
+# the same forecast. The engine's does not reproduce across CPUs, and the weekly
+# replay ran the two variants as separate jobs, which the runner fleet placed on
+# different CPUs in all six season pairs of both runs examined. The README's
+# "playing chips takes 108 points off the engine" compared a chips run on one
+# forecast with a no-chips run on another. Run in one process with a shared
+# forecast cache, the same comparison on one machine is +103 - and +456 and +202
+# with that forecast perturbed by 1%, which is how little one draw says.
+
+def chips_gain(chips: Dict[str, Any], no_chips: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
+    """
+    Per forecast, what playing chips added over not playing them, split into the
+    weeks a chip was played and every other week.
+
+    The split is the diagnosis: a chip week's own gain is what the policy is
+    pricing, and the other weeks are where a different squad - bought around a
+    chip, or by a wildcard - pays off or does not.
+    """
+    out: Dict[str, Dict[str, float]] = {}
+    for src in sorted(set(chips) & set(no_chips)):
+        on = {h["gw"]: h["net"] for h in chips[src]["history"]}
+        off = {h["gw"]: h["net"] for h in no_chips[src]["history"]}
+        weeks = sorted(set(on) & set(off))
+        chip_gws = {c["gw"] for c in chips[src].get("chips_played") or []}
+        diff = {g: float(on[g] - off[g]) for g in weeks}
+        out[src] = {
+            "gain": sum(diff.values()),
+            "chip_weeks": sum(d for g, d in diff.items() if g in chip_gws),
+            "other_weeks": sum(d for g, d in diff.items() if g not in chip_gws),
+            "chips_played": float(len(chip_gws)),
+        }
+    return out
+
+
+def _print_chips_gain(season: str, gains: Dict[str, Dict[str, float]]):
+    print()
+    print(f" what playing chips added in {season}, both variants on one forecast:")
+    print(f"   {'forecast':<10}{'gain':>8}{'chip weeks':>12}{'other weeks':>13}")
+    for src, g in gains.items():
+        print(f"   {src:<10}{g['gain']:>+8.0f}{g['chip_weeks']:>+12.0f}"
+              f"{g['other_weeks']:>+13.0f}")
 
 
 def _print_comparison(results: Dict[str, Any]):
@@ -784,6 +838,31 @@ def _print_pooled(per_season: Dict[str, Dict[str, Any]]):
     print("=" * 74)
 
 
+def run_paired(season: str, horizon: int = 5, sources=XP_SOURCES,
+               from_gw: int = 1, to_gw: Optional[int] = None,
+               json_out: str = "") -> Dict[str, Dict[str, Any]]:
+    """
+    One season with chips and without, sharing one forecast cache.
+
+    The forecast depends only on (season, gameweek, horizon), so the second
+    variant reuses the first's rather than recomputing it - which both saves the
+    time and guarantees the two differ only in the chips.
+    """
+    cache: Dict[Any, Any] = {}
+    pair: Dict[str, Dict[str, Any]] = {}
+    for variant, play in (("chips", True), ("no-chips", False)):
+        pair[variant] = compare_sources(season, horizon=horizon, sources=sources,
+                                        from_gw=from_gw, to_gw=to_gw,
+                                        play_chips=play, xp_cache=cache)
+        if json_out:
+            path = json_out.replace("{variant}", variant)
+            with open(path, "w") as f:
+                json.dump(pair[variant], f, indent=2, default=float)
+            print(f"\nWrote {path}")
+    _print_chips_gain(season, chips_gain(pair["chips"], pair["no-chips"]))
+    return pair
+
+
 def main():
     # A replay runs for tens of minutes and prints a table per season. Piped to
     # a file or a CI log, stdout is block-buffered, so none of those tables
@@ -833,7 +912,27 @@ def main():
     ap.add_argument("--update-baseline", action="store_true",
                     help="Record this run as the bar to hold, and exit. "
                          "Commit the file, and update the README table with it.")
+    ap.add_argument("--paired", action="store_true",
+                    help="Replay one --season with chips and without, in one "
+                         "process on one forecast, and write each to --json-out "
+                         "with {variant} replaced by 'chips' or 'no-chips'. Run "
+                         "apart, the engine's two variants can land on different "
+                         "CPUs and so different forecasts, and their difference "
+                         "then measures the CPUs as much as the chips.")
     args = ap.parse_args()
+
+    if args.paired:
+        if args.seasons or args.from_json or args.no_chips or args.gate \
+                or args.update_baseline:
+            raise SystemExit(
+                "--paired replays one --season both ways and writes the two "
+                "replays; pool and gate them afterwards with --from-json")
+        if args.json_out and "{variant}" not in args.json_out:
+            raise SystemExit("--paired writes two replays: put {variant} in "
+                             "--json-out, e.g. replay_{variant}_2024-25.json")
+        run_paired(args.season, horizon=args.horizon, sources=args.sources,
+                   from_gw=args.from_gw, to_gw=args.to_gw, json_out=args.json_out)
+        raise SystemExit(0)
 
     if args.from_json:
         # Already replayed; just pool and judge. Each file is either a

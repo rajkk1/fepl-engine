@@ -197,6 +197,8 @@ plays the first-half free hit at all. The thresholds in `chip_policy` were
 written to be reasonable, not fitted — the bar for a wildcard at GW2 is
 `20 × 17/19 ≈ 17.9` xP, which a squad built blind in GW1 clears without trying.
 Now that a policy change shows up in points, that is a cheap question to ask.
+It has since been asked, and the bars held up better than their derivation —
+see *What playing chips is worth to the engine*, further down.
 
 The whole end-to-end table further down has been re-run against this commit for
 both variants, and it did not come back saying what it used to — see *Does any
@@ -479,6 +481,12 @@ Chips played, which is what the engine actually does:
 > - **Opponent-adjusted team ratings.** These change the forecast, so they move
 >   the engine in both tables. That comes on top of the engine's CPU
 >   dependence (below), which on its own moves a season by tens of points.
+>
+> **Read the engine's two tables as two forecasts, not one.** Each season's
+> chips and no-chips replays ran as separate jobs, on different CPUs every time,
+> so the engine's difference between them is partly a difference between CPUs.
+> They now run in one job on one forecast; the engine columns change on the next
+> CI replay. `ppg` and `roll3` do not.
 
 Pooled over all three clean seasons — **114 gameweeks**, paired by gameweek:
 
@@ -546,6 +554,11 @@ repeated four times on one machine is identical to six decimals, so there is
 nothing wrong with the code. Note this is not confined to the chips arm, which
 is where it was first noticed — `no-chips` moved on two of three seasons too.
 
+A season's two variants now share one job and one forecast, so the difference
+between them is no longer a difference between CPUs; each total still moves
+with the CPU its job draws, run to run. See *What playing chips is worth to the
+engine*, below, for what the unpaired comparison had been reporting.
+
 `ppg` and `roll3` never touch the forecast and have been bit-identical in every
 CI run regardless of hardware, which is exactly why they are the arms the gate
 blocks on.
@@ -585,25 +598,113 @@ against a +651 gross advantage: **roughly a quarter of the edge is handed back
 at the transfer window**. The same discipline is what wins against `roll3`, which
 takes 216 hits and gives back 608.
 
-**Playing chips used to leave that diagnosis unchanged, and it no longer
-does.**
+**Playing chips used to leave that diagnosis unchanged, and on the re-recorded
+run it no longer did — but that was the measurement, not the chips.**
 - Before the re-record, with chips played, the squad advantage was +487, the
   armband +140, and the hit differential −176.
 - On the re-recorded run the squad advantage over `ppg` falls to +235. The
   armband is +147 and hits −184.
 
-The chips are where it goes. In the same run, playing chips adds +193 to
-`ppg`'s chips-off total and +240 to `roll3`'s, but takes 108 off the engine's
-(6377 against 6485). One run is one draw of a CPU-dependent arm: on the
-2026-11-02 run, on the old code, the same comparison gave the engine +38. But
-neither draw comes close to what the baselines get from the same chip policy.
+That run had playing chips add +193 to `ppg` and +240 to `roll3`, and take 108
+off the engine (6377 against 6485); the run before it gave the engine +38.
+**Neither number measures the chips.** Each season's chips and no-chips replays
+were separate CI jobs, and the fleet put the two on different CPUs in all six
+season pairs of both runs — 2023-24 on 2026-11-08, for one, ran chips on an EPYC
+7763 and no-chips on a 9V45. The engine's forecast is CPU-dependent (below), so
+each comparison set a chips run on one forecast against a no-chips run on
+another. `ppg` and `roll3` never touch the forecast, which is why theirs held
+still.
 
-Between those two runs the engine's chip weeks moved:
-- In 2023-24, its second Bench Boost went from GW32 to GW21.
-- In 2024-25, it left a Free Hit unplayed.
+**What playing chips is worth to the engine**, replayed on one machine with
+both variants on one cached forecast, and again on the same forecast perturbed
+by 1% (per player-gameweek, uniform, seeded) to see how far one draw can be
+trusted:
 
-The ten-gameweek blocks those changes fell in lost 92 and 88 points. Chip
-timing, not the forecast, is now the least stable part of the end-to-end result.
+| draw | 2023-24 | 2024-25 | 2025-26 | pooled |
+|---|---|---|---|---|
+| as forecast | −118 | +82 | +139 | **+103** |
+| perturbed, seed 3 | +64 | +210 | +182 | **+456** |
+| perturbed, seed 4 | +77 | +48 | +77 | **+202** |
+
+Positive in every pooled draw, and the spread is the point: a 1% perturbation,
+smaller than anything the forecast can resolve, moves one season's chips gain by
+up to 182. One draw of "chips on minus chips off" cannot tell a chip policy from
+a coin toss, which is also why the 2023-24 and 2024-25 blocks that moved between
+the two CI runs (−92 and −88) say nothing about the chips that moved with them.
+
+The chip weeks themselves pay in every draw, +53 to +144 a season against the
+same weeks without chips. What swings, from −173 to +129 a season, is every
+other week, where the two runs hold different squads.
+
+**The gap to the baselines is mostly theirs.** Their forecast is zero for every
+player before any football has been played, so their GW1 squad is picked blind —
+it scores 26–32 against the engine's 33–68 — and the GW2 wildcard repairs it.
+Played alone, that one chip is **+130 of `ppg`'s +183** and **+105 of `roll3`'s
++241** on the same machine. The engine has nothing to repair: its GW2 wildcard
+is priced at 28–34 xP, theirs at 109–137.
+
+What else was checked, on the artifacts of both CI runs and the local replays:
+- **Chips too early.** On the squads the replay actually held, the engine's
+  bench boosts scored 16.6 against 9.4 for the median week of the same half,
+  and its triple captains 7.8 against 7.4. The 2023-24 bench boost that moved
+  from GW32 to GW21 scored +17 and then +15.
+- **Chips left unplayed.** The first-half free hit went unplayed in six of nine
+  season-draws. Its first-half estimates run 1–8 xP, which is inside the
+  forecast's noise, and when a variant below did play it, it realised −2 on
+  average. Leaving it was right.
+- **Wildcard and free hit squads.** A free hit beat the squad it borrowed from
+  in 7 of 9, by +12 on average. A wildcard returned about +13 inside its
+  horizon, and in the 5th to 14th weeks after it chips-on trailed chips-off for
+  16 of 18 engine wildcards, by 3.3 a gameweek. That looked like the answer and
+  was not (below).
+- **Free transfers around a chip.** The optimiser and the replay agree: the
+  chip spends its week's transfer and keeps the bank, as the real history that
+  settled the rule says.
+- **The bars against the engine's xP scale.** Opponent-adjusted ratings did not
+  inflate it. The engine's top fifteen score 0.88–0.98 of their xP in the week
+  forecast, `ppg`'s 0.74–0.80, so if anything the bars are easier for `ppg`.
+- **One chip per solve, and plans built around a chip held for later.** In two
+  seasons' chip-search logs, 13 of 74 weeks planned around a chip held for a
+  later week, and in 4 one chip's best week lost to another's.
+
+**The policy is unchanged, because nothing tried beat it.** Each candidate on
+the same cached forecast, paired chips gain pooled over the three seasons:
+
+| change | as forecast | seed 3 | seed 4 |
+|---|---|---|---|
+| shipped | +103 | +456 | +202 |
+| a chip held for later does not shape this week's plan | +80 | | |
+| no wildcard | +14 | | |
+| wildcard charged 3.3 a gameweek for the weeks it outlives its horizon | 2025-26 only: +4, against +139 | | |
+| every chip's bar scaled against its own half | +102 | +269 | +209 |
+
+The last is worth its line, because it corrects something that looks plainly
+wrong. Every chip comes in two sets, but only the wildcard's bar runs down to
+the end of its own half; the other three run to the end of the season, so a
+first-half free hit still needs 7.9 xP at GW18, and the second set's bench boost
+and triple captain bars are already halved when they unlock at GW20 — which is
+why every forecast spends them at GW20–22. Scaled against their own half, all
+eight chips are played every season, and the result is worse: −20 a season
+(standard error 16) over nine paired season-draws, and its chip weeks earn 8 a
+season less. The first-half free hit it now plays is worth nothing, and the
+bench boost it holds back lands in weeks that score less than GW20–22 did —
+those realised 22 on average across the three draws, about what the best week
+of a half scored in hindsight. It helps `roll3` (+80) and barely moves `ppg` (+11), one draw each.
+The bars as written are the better policy, for reasons nobody designed, so they
+stay until something beats them on more than one draw.
+
+**CI now measures it paired.** Each season is one job that replays both variants
+in one process on one forecast (`simulator.py --paired`), prints what chips
+added split into chip weeks and the rest, and uploads the same two artifacts the
+gate pools — so the chips and no-chips engine totals in the tables above, once
+re-recorded, come from the same forecast. The replay also records each week what
+the chip search wanted, played or held (`chip_plan`), which is what this
+diagnosis had to reconstruct.
+
+Still open: a chip is searched one at a time over a five-week horizon, so a
+wildcard-then-bench-boost sequence cannot be planned and a double gameweek six
+weeks out is invisible. Chip decisions as binary variables in the one ILP, with
+the value of holding each chip estimated from the replay, is the larger fix.
 
 Note the trap in reading that −152 as 152 points lying on the table. It is not:
 part of the +651 exists *because* of those extra transfers, so the penalty
